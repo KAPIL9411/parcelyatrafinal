@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+apps/web/dist/
+
+# Local database (PGlite data directory) and uploads
+data/
+apps/api/data/
+
+# Environment: never commit a filled-in copy
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Logs and editor noise
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Smoke-test token cache (local only)
+.smoke-tokens.json

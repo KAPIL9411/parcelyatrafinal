@@ -1,0 +1,2575 @@
+openapi: 3.1.0
+info:
+  title: Parcel Yatra API
+  version: 0.1.0
+  summary: Inter-city parcel marketplace — pilot contract (sandbox payments only)
+  description: |
+    Contract for the Parcel Yatra modular-monolith API.
+
+    **Status: DRAFT.** This contract is authoritative for implementation, but the product it
+    describes is not approved for production use. Payments are sandbox-only until the launch
+    gates in `legal/LEGAL_REGULATORY_MATRIX.md` §8 are cleared.
+
+    ## Conventions
+
+    - All money is an **integer number of paise** (`amount_paise`). No floats, ever.
+    - All timestamps are RFC 3339 UTC (`2026-10-24T09:44:03Z`).
+    - Enum wire values are lowercase snake_case and match the database enum values exactly.
+      `docs/BOOKING_STATE_MACHINE.md` writes them in uppercase for readability; the mapping
+      is case-only.
+    - Clients never send a price, a booking status, a payment state or a payout state.
+    - All state-changing POSTs require `Idempotency-Key`.
+    - Errors always use the `ErrorEnvelope` shape defined in `api/ERROR_CATALOG.md`.
+    - Resource-level authorisation is enforced server-side on every request. A valid token
+      for user A can never read user B's resources.
+
+    ## Versioning
+
+    The major version is in the path (`/v1`). Additive changes are non-breaking; removals and
+    semantic changes require `/v2`.
+  contact:
+    name: Parcel Yatra Engineering
+    url: https://example.com/contact
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: https://api.sandbox.parcelyatra.example/v1
+    description: Sandbox (mock payments, synthetic data)
+  - url: http://127.0.0.1:3000/v1
+    description: Local development
+tags:
+  - name: Health
+    description: Liveness and readiness
+  - name: Auth
+    description: Phone OTP, Google sign-in, sessions
+  - name: Me
+    description: Current user profile, privacy rights
+  - name: Verification
+    description: Traveller identity verification
+  - name: Parcels
+    description: Parcel creation, eligibility, pricing, matching
+  - name: Trips
+    description: Traveller trips and capacity
+  - name: Bookings
+    description: Booking lifecycle and state transitions
+  - name: Handover
+    description: Pickup and delivery confirmation
+  - name: Payments
+    description: Sandbox payment intents and refunds
+  - name: Disputes
+    description: Disputes and evidence
+  - name: Reviews
+    description: Ratings after delivery
+  - name: Notifications
+    description: Notification history
+  - name: Files
+    description: Private upload URLs
+  - name: Admin
+    description: Protected operations console
+  - name: Webhooks
+    description: Provider callbacks
+
+security:
+  - BearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Liveness and dependency readiness
+      security: []
+      responses:
+        '200':
+          description: Service status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '503':
+          description: A dependency is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /auth/otp/request:
+    post:
+      tags: [Auth]
+      operationId: requestOtp
+      summary: Request a login OTP
+      description: |
+        Response is identical whether or not the number belongs to an existing account
+        (enumeration resistance). The OTP is sent only to the number on file for existing
+        accounts; for new numbers it creates a pending account on first successful verify.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [phone, purpose]
+              properties:
+                phone:
+                  type: string
+                  pattern: '^\+91[6-9][0-9]{9}$'
+                  examples: ['+919000000001']
+                purpose:
+                  type: string
+                  enum: [login]
+      responses:
+        '202':
+          description: OTP dispatch accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [challenge_id, expires_in_seconds]
+                properties:
+                  challenge_id:
+                    type: string
+                    format: uuid
+                  expires_in_seconds:
+                    type: integer
+                    minimum: 1
+                  resend_after_seconds:
+                    type: integer
+                    minimum: 1
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /auth/otp/verify:
+    post:
+      tags: [Auth]
+      operationId: verifyOtp
+      summary: Verify an OTP and create a session
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [challenge_id, code]
+              properties:
+                challenge_id:
+                  type: string
+                  format: uuid
+                code:
+                  type: string
+                  pattern: '^[0-9]{6}$'
+                device_id:
+                  type: string
+                  maxLength: 128
+      responses:
+        '200':
+          description: Session issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+        '400':
+          description: OTP_EXPIRED, OTP_INVALID or OTP_ALREADY_USED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /auth/google:
+    post:
+      tags: [Auth]
+      operationId: signInWithGoogle
+      summary: Exchange a Google ID token for a Parcel Yatra session
+      description: |
+        The server verifies signature, `iss`, `aud`, `exp`, `nbf` and `email_verified`.
+        Client-supplied name/email claims are never trusted without verification.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [id_token]
+              properties:
+                id_token:
+                  type: string
+                  minLength: 32
+                device_id:
+                  type: string
+                  maxLength: 128
+      responses:
+        '200':
+          description: Session issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+        '401':
+          description: AUTH_TOKEN_INVALID or AUTH_TOKEN_EXPIRED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refreshSession
+      summary: Rotate a refresh token
+      description: Refresh tokens rotate on every use. Reuse of a rotated token revokes the
+        whole session family and returns `AUTH_REFRESH_REUSE`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+                  minLength: 32
+      responses:
+        '200':
+          description: New session credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Revoke the current session
+      responses:
+        '204':
+          description: Session revoked
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /me:
+    get:
+      tags: [Me]
+      operationId: getMe
+      summary: Current profile
+      responses:
+        '200':
+          description: Profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    patch:
+      tags: [Me]
+      operationId: updateMe
+      summary: Update editable profile fields
+      description: Only `name`, `email`, `locale` and notification preferences are editable.
+        Identity-verified fields require the verification flow.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 80
+                email:
+                  type: string
+                  format: email
+                  maxLength: 254
+                locale:
+                  type: string
+                  enum: [en-IN, hi-IN]
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /me/export:
+    post:
+      tags: [Me]
+      operationId: requestDataExport
+      summary: Request a copy of my personal data
+      description: Asynchronous. Returns a job reference; the download link is delivered by
+        email and expires in 24 hours.
+      responses:
+        '202':
+          description: Export queued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [request_id, status]
+                properties:
+                  request_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [queued, processing, ready, failed]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /me/deletion-request:
+    post:
+      tags: [Me]
+      operationId: requestDeletion
+      summary: Request account deletion
+      description: Starts the soft-delete → anonymise → hard-delete sequence. Records that legal
+        and financial retention obligations survive the request.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [confirm]
+              properties:
+                confirm:
+                  type: boolean
+                  const: true
+                reason:
+                  type: string
+                  maxLength: 500
+      responses:
+        '202':
+          description: Deletion scheduled
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [request_id, hard_delete_after]
+                properties:
+                  request_id:
+                    type: string
+                    format: uuid
+                  hard_delete_after:
+                    type: string
+                    format: date-time
+                  retained_categories:
+                    type: array
+                    items:
+                      type: string
+        '409':
+          description: Open booking, dispute or legal hold blocks deletion
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /verifications:
+    post:
+      tags: [Verification]
+      operationId: submitVerification
+      summary: Submit traveller identity verification
+      description: |
+        `id_type` excludes Aadhaar by policy. Document images must be uploaded through
+        `/files/upload-url` first and referenced by object key. Submitting replaces any prior
+        rejected attempt (maximum 3 attempts before manual contact).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [id_type, id_front_key, selfie_key]
+              properties:
+                id_type:
+                  type: string
+                  enum: [driving_licence, voter_id, passport]
+                id_front_key:
+                  type: string
+                  maxLength: 256
+                id_back_key:
+                  type: string
+                  maxLength: 256
+                selfie_key:
+                  type: string
+                  maxLength: 256
+                consent_version:
+                  type: string
+                  maxLength: 32
+      responses:
+        '201':
+          description: Verification submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Verification'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: VERIFICATION_ALREADY_PENDING or VERIFICATION_ATTEMPTS_EXCEEDED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /verifications/me:
+    get:
+      tags: [Verification]
+      operationId: getMyVerification
+      summary: My verification status
+      responses:
+        '200':
+          description: Verification state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Verification'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /parcels:
+    post:
+      tags: [Parcels]
+      operationId: createParcel
+      summary: Create a parcel and check eligibility
+      description: |
+        Eligibility rules E1–E10 (`docs/BUSINESS_LOGIC.md` §2) are evaluated server-side. A
+        prohibited category returns `422 ITEM_PROHIBITED`; a restricted category returns
+        `202` with `status = review_required`. Declared value and weight caps are pilot limits.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateParcelRequest'
+      responses:
+        '201':
+          description: Parcel accepted for posting
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Parcel'
+        '202':
+          description: Parcel queued for human review of a restricted category
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Parcel'
+        '422':
+          description: ITEM_PROHIBITED, PARCEL_TOO_LARGE, VALUE_ABOVE_PILOT_LIMIT, WINDOW_INVALID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /parcels/{parcelId}:
+    parameters:
+      - $ref: '#/components/parameters/ParcelId'
+    get:
+      tags: [Parcels]
+      operationId: getParcel
+      summary: Get my parcel
+      responses:
+        '200':
+          description: Parcel
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Parcel'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      tags: [Parcels]
+      operationId: cancelParcel
+      summary: Withdraw a parcel that has no active booking
+      responses:
+        '204':
+          description: Parcel closed
+        '409':
+          description: PARCEL_HAS_ACTIVE_BOOKING
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /parcels/{parcelId}/quote:
+    parameters:
+      - $ref: '#/components/parameters/ParcelId'
+    post:
+      tags: [Parcels]
+      operationId: createQuote
+      summary: Generate an itemised price quote
+      description: |
+        Server-computed only. If no eligible trip exists the response is `409 NO_MATCH` with
+        no price — the platform never invents a price for an impossible booking. Quotes expire
+        in 15 minutes and are immutable; an expired quote must be re-requested.
+      responses:
+        '201':
+          description: Quote created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+        '409':
+          description: NO_MATCH, QUOTE_EXISTS_VALID or PARCEL_NOT_POSTED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /parcels/{parcelId}/matches:
+    parameters:
+      - $ref: '#/components/parameters/ParcelId'
+    get:
+      tags: [Parcels]
+      operationId: listMatches
+      summary: Ranked candidate trips for a parcel
+      description: |
+        Returns candidate trips with a match band and closed-set reason codes. Exact addresses,
+        phone numbers and live location are never returned. A `200` with an empty `matches`
+        array is a valid "no match yet" result and must not be rendered as an error.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+            default: 10
+      responses:
+        '200':
+          description: Ranked matches
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchList'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /trips:
+    post:
+      tags: [Trips]
+      operationId: createTrip
+      summary: Publish a planned trip
+      description: Requires a verified traveller. The mode must be enabled by feature flag;
+        publishing a disabled mode returns `422 MODE_DISABLED`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTripRequest'
+      responses:
+        '201':
+          description: Trip published
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Trip'
+        '403':
+          description: VERIFICATION_REQUIRED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: MODE_DISABLED or TRIP_WINDOW_INVALID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    get:
+      tags: [Trips]
+      operationId: listMyTrips
+      summary: List my published trips
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/TripStatus'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: cursor
+          in: query
+          schema:
+            type: string
+            maxLength: 128
+      responses:
+        '200':
+          description: Trip page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Trip'
+                  next_cursor:
+                    type: [string, 'null']
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /trips/{tripId}:
+    parameters:
+      - $ref: '#/components/parameters/TripId'
+    get:
+      tags: [Trips]
+      operationId: getTrip
+      summary: Get a trip I own
+      responses:
+        '200':
+          description: Trip
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Trip'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      tags: [Trips]
+      operationId: cancelTrip
+      summary: Cancel a trip with no accepted bookings
+      responses:
+        '204':
+          description: Trip cancelled
+        '409':
+          description: TRIP_HAS_ACCEPTED_BOOKING — use the booking cancellation flow
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /bookings:
+    post:
+      tags: [Bookings]
+      operationId: createBooking
+      summary: Request a booking against a trip and quote
+      description: |
+        Capacity is reserved inside the same transaction as booking creation using a
+        conditional update; a lost race returns `409 CAPACITY_UNAVAILABLE`. A second active
+        booking for the same parcel is prevented by a partial unique index and returns
+        `409 BOOKING_ALREADY_ACTIVE`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [parcel_id, trip_id, quote_id]
+              properties:
+                parcel_id:
+                  type: string
+                  format: uuid
+                trip_id:
+                  type: string
+                  format: uuid
+                quote_id:
+                  type: string
+                  format: uuid
+      responses:
+        '201':
+          description: Booking created, awaiting traveller acceptance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+        '409':
+          description: CAPACITY_UNAVAILABLE, BOOKING_ALREADY_ACTIVE, QUOTE_EXPIRED or QUOTE_MISMATCH
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Eligibility re-check failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    get:
+      tags: [Bookings]
+      operationId: listBookings
+      summary: List my bookings
+      parameters:
+        - name: role
+          in: query
+          schema:
+            type: string
+            enum: [sender, traveller]
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/BookingStatus'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: cursor
+          in: query
+          schema:
+            type: string
+            maxLength: 128
+      responses:
+        '200':
+          description: Booking page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/BookingSummary'
+                  next_cursor:
+                    type: [string, 'null']
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /bookings/{bookingId}:
+    parameters:
+      - $ref: '#/components/parameters/BookingId'
+    get:
+      tags: [Bookings]
+      operationId: getBooking
+      summary: Get a booking I am party to
+      description: Returns `404` for bookings the caller is not party to, to avoid disclosing
+        existence of other users' resources.
+      responses:
+        '200':
+          description: Booking
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /bookings/{bookingId}/transitions:
+    parameters:
+      - $ref: '#/components/parameters/BookingId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Bookings]
+      operationId: transitionBooking
+      summary: Apply a booking state transition
+      description: |
+        The only way any client changes booking state. The server validates that the
+        (from_state, command, actor, guards) tuple exists in
+        `docs/BOOKING_STATE_MACHINE.md` §3. System-only and admin-only commands are rejected
+        for user tokens with `403 TRANSITION_NOT_PERMITTED`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [command]
+              properties:
+                command:
+                  type: string
+                  enum:
+                    - submit
+                    - accept
+                    - decline
+                    - cancel
+                    - confirm_pickup
+                    - start_transit
+                    - arrive
+                    - confirm_delivery
+                    - receiver_unavailable
+                    - raise_dispute
+                    - report_incident
+                reason_code:
+                  type: string
+                  maxLength: 64
+                note:
+                  type: string
+                  maxLength: 500
+      responses:
+        '200':
+          description: New booking state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+        '409':
+          description: INVALID_TRANSITION or TRANSITION_CONFLICT (concurrent update)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: TRANSITION_NOT_PERMITTED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /bookings/{bookingId}/otp/regenerate:
+    parameters:
+      - $ref: '#/components/parameters/BookingId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Handover]
+      operationId: regenerateHandoverOtp
+      summary: Re-issue a pickup or delivery OTP to the correct party
+      description: The new code is delivered directly to the sender (pickup) or receiver
+        (delivery). It is never returned in the API response and never sent to a number
+        supplied at handover time.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [phase]
+              properties:
+                phase:
+                  type: string
+                  enum: [pickup, delivery]
+      responses:
+        '202':
+          description: OTP re-issued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [phase, expires_at, attempts_remaining]
+                properties:
+                  phase:
+                    type: string
+                    enum: [pickup, delivery]
+                  expires_at:
+                    type: string
+                    format: date-time
+                  attempts_remaining:
+                    type: integer
+                    minimum: 0
+        '409':
+          description: OTP_NOT_APPLICABLE or BOOKING_LOCKED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /bookings/{bookingId}/handover/pickup:
+    parameters:
+      - $ref: '#/components/parameters/BookingId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Handover]
+      operationId: confirmPickup
+      summary: Traveller confirms pickup with OTP and photo
+      description: On success the pickup OTP is consumed permanently and the booking moves to
+        `picked_up`. Five failed attempts lock the booking for review.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [otp, photo_key]
+              properties:
+                otp:
+                  type: string
+                  pattern: '^[0-9]{6}$'
+                photo_key:
+                  type: string
+                  maxLength: 256
+                checklist:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    seal_intact:
+                      type: boolean
+                    weight_matches_declaration:
+                      type: boolean
+      responses:
+        '200':
+          description: Pickup confirmed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+        '400':
+          description: OTP_INVALID or OTP_EXPIRED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '423':
+          description: Booking locked after repeated OTP failures
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: HANDOVER_NOT_ALLOWED_IN_STATE
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /bookings/{bookingId}/handover/delivery:
+    parameters:
+      - $ref: '#/components/parameters/BookingId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Handover]
+      operationId: confirmDelivery
+      summary: Traveller confirms delivery with receiver OTP and photo
+      description: Starts the dispute window and makes the payout eligible only after the
+        window closes with no open dispute.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [otp, photo_key]
+              properties:
+                otp:
+                  type: string
+                  pattern: '^[0-9]{6}$'
+                photo_key:
+                  type: string
+                  maxLength: 256
+                receiver_name_confirmed:
+                  type: boolean
+      responses:
+        '200':
+          description: Delivery confirmed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+        '400':
+          description: OTP_INVALID or OTP_EXPIRED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '423':
+          description: Booking locked after repeated OTP failures
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: HANDOVER_NOT_ALLOWED_IN_STATE
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /bookings/{bookingId}/payment-intent:
+    parameters:
+      - $ref: '#/components/parameters/BookingId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Payments]
+      operationId: createPaymentIntent
+      summary: Create a sandbox payment intent
+      description: |
+        **Sandbox only.** The amount is taken from the stored quote, never from the request.
+        Returns `501 PAYMENTS_NOT_ENABLED` when `PAYMENTS_LIVE` is false and the mock adapter
+        is not selected, which is the expected production configuration until the launch gates
+        are cleared.
+      responses:
+        '201':
+          description: Intent created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentIntent'
+        '409':
+          description: PAYMENT_ALREADY_EXISTS or BOOKING_NOT_PAYABLE
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '501':
+          description: PAYMENTS_NOT_ENABLED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /bookings/{bookingId}/review:
+    parameters:
+      - $ref: '#/components/parameters/BookingId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Reviews]
+      operationId: createReview
+      summary: Rate the counterparty after delivery
+      description: Allowed only after `delivered` and within 7 days. One review per booking
+        per author, enforced by a unique constraint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [stars]
+              properties:
+                stars:
+                  type: integer
+                  minimum: 1
+                  maximum: 5
+                tags:
+                  type: array
+                  maxItems: 5
+                  items:
+                    type: string
+                    enum:
+                      - on_time
+                      - careful_handling
+                      - clear_communication
+                      - late
+                      - poor_packaging
+                      - unresponsive
+      responses:
+        '201':
+          description: Review recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Review'
+        '409':
+          description: REVIEW_ALREADY_SUBMITTED or REVIEW_WINDOW_CLOSED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /disputes:
+    post:
+      tags: [Disputes]
+      operationId: createDispute
+      summary: Raise a dispute and freeze payout
+      description: |
+        Allowed up to 72 hours after delivery or 7 days after expected delivery, whichever is
+        later. Raising a dispute immediately moves the payout to `frozen`. Only one dispute may
+        be open per booking.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [booking_id, category, description]
+              properties:
+                booking_id:
+                  type: string
+                  format: uuid
+                category:
+                  type: string
+                  enum: [not_received, damaged, wrong_item, late_delivery, prohibited_item, safety, other]
+                description:
+                  type: string
+                  minLength: 10
+                  maxLength: 2000
+      responses:
+        '201':
+          description: Dispute opened
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Dispute'
+        '409':
+          description: DISPUTE_WINDOW_CLOSED or DISPUTE_ALREADY_OPEN
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /disputes/{disputeId}:
+    parameters:
+      - name: disputeId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Disputes]
+      operationId: getDispute
+      summary: Get a dispute I am party to
+      responses:
+        '200':
+          description: Dispute
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Dispute'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /disputes/{disputeId}/evidence:
+    parameters:
+      - name: disputeId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Disputes]
+      operationId: addDisputeEvidence
+      summary: Attach evidence to a dispute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [note]
+              properties:
+                note:
+                  type: string
+                  minLength: 1
+                  maxLength: 1000
+                object_key:
+                  type: string
+                  maxLength: 256
+      responses:
+        '201':
+          description: Evidence added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DisputeEvidence'
+        '409':
+          description: DISPUTE_CLOSED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /notifications:
+    get:
+      tags: [Notifications]
+      operationId: listNotifications
+      summary: My notification history
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 30
+        - name: cursor
+          in: query
+          schema:
+            type: string
+            maxLength: 128
+      responses:
+        '200':
+          description: Notification page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Notification'
+                  next_cursor:
+                    type: [string, 'null']
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /files/upload-url:
+    post:
+      tags: [Files]
+      operationId: createUploadUrl
+      summary: Get a short-lived upload URL for a private object
+      description: |
+        Returns a presigned PUT URL valid for 5 minutes. Allowed content types are restricted
+        per purpose. The caller must then reference the returned `object_key` in the relevant
+        endpoint. Files are re-encoded and EXIF-stripped server-side after upload confirmation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [purpose, content_type, byte_size]
+              properties:
+                purpose:
+                  type: string
+                  enum: [kyc_id, kyc_selfie, parcel_sealed, parcel_delivery, dispute_evidence]
+                content_type:
+                  type: string
+                  enum: [image/jpeg, image/png]
+                byte_size:
+                  type: integer
+                  minimum: 1
+                  maximum: 10485760
+      responses:
+        '201':
+          description: Upload authorised
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [object_key, upload_url, expires_at]
+                properties:
+                  object_key:
+                    type: string
+                  upload_url:
+                    type: string
+                    format: uri
+                  expires_at:
+                    type: string
+                    format: date-time
+        '400':
+          description: UPLOAD_INVALID_TYPE or UPLOAD_TOO_LARGE
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /admin/verifications:
+    get:
+      tags: [Admin]
+      operationId: adminListVerifications
+      summary: Verification review queue
+      description: Requires the `verification_reviewer` role. Every document view is audited.
+      parameters:
+        - name: state
+          in: query
+          schema:
+            $ref: '#/components/schemas/VerificationState'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        '200':
+          description: Queue page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Verification'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /admin/verifications/{verificationId}/decision:
+    parameters:
+      - name: verificationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Admin]
+      operationId: adminDecideVerification
+      summary: Approve, reject or request more information
+      description: A reason code is mandatory. The decision and any before/after state are
+        written to the immutable audit log.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [decision, reason_code]
+              properties:
+                decision:
+                  type: string
+                  enum: [approve, reject, request_more]
+                reason_code:
+                  type: string
+                  enum:
+                    - id_clear
+                    - id_unreadable
+                    - id_expired
+                    - id_mismatch
+                    - selfie_mismatch
+                    - suspected_forgery
+                    - incomplete_document
+      responses:
+        '200':
+          description: Decision recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Verification'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /admin/bookings:
+    get:
+      tags: [Admin]
+      operationId: adminSearchBookings
+      summary: Search bookings for operations
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/BookingStatus'
+        - name: phone_hash
+          in: query
+          description: HMAC of the phone number; raw phone numbers are never accepted or logged.
+          schema:
+            type: string
+            maxLength: 128
+        - name: created_from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        '200':
+          description: Booking page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/BookingSummary'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /admin/payouts/{bookingId}/release:
+    parameters:
+      - $ref: '#/components/parameters/BookingId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Admin]
+      operationId: adminReleasePayout
+      summary: Instruct payout release
+      description: |
+        Requires the `finance` role. Rejected with `409 PAYOUT_NOT_ELIGIBLE` if a dispute is
+        open, the dispute window has not elapsed, or the traveller is suspended. Amounts above
+        ₹1,000 require a second approver (`approval_id` from a separate maker request).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason_code]
+              properties:
+                reason_code:
+                  type: string
+                  maxLength: 64
+                approval_id:
+                  type: string
+                  format: uuid
+      responses:
+        '202':
+          description: Payout instruction accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payout'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: PAYOUT_NOT_ELIGIBLE or APPROVAL_REQUIRED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /admin/refunds:
+    post:
+      tags: [Admin]
+      operationId: adminCreateRefund
+      summary: Create a refund request
+      description: Above ₹1,000 the request is created in `pending_approval` and must be
+        approved by a different staff user. Self-approval is rejected.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [booking_id, amount_paise, reason_code]
+              properties:
+                booking_id:
+                  type: string
+                  format: uuid
+                amount_paise:
+                  type: integer
+                  minimum: 1
+                reason_code:
+                  type: string
+                  enum:
+                    - cancel_before_accept
+                    - cancel_gt_2h
+                    - cancel_lt_2h
+                    - ineligible_after_booking
+                    - dispute_sender_favour
+                    - goodwill
+                note:
+                  type: string
+                  maxLength: 500
+      responses:
+        '201':
+          description: Refund recorded (or pending approval)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Refund'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: REFUND_EXCEEDS_CAPTURED_AMOUNT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /admin/audit-log:
+    get:
+      tags: [Admin]
+      operationId: adminReadAuditLog
+      summary: Read the audit log
+      description: Requires `admin_readonly` or above. Exports are themselves audited.
+      parameters:
+        - name: resource
+          in: query
+          schema:
+            type: string
+            maxLength: 64
+        - name: resource_id
+          in: query
+          schema:
+            type: string
+            maxLength: 64
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      responses:
+        '200':
+          description: Audit entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditEntry'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /webhooks/payments/{provider}:
+    parameters:
+      - name: provider
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [mock, sandbox_provider]
+    post:
+      tags: [Webhooks]
+      operationId: paymentWebhook
+      summary: Provider payment and payout callbacks
+      description: |
+        Signature-verified, timestamp-checked and replay-protected. Duplicate events are a
+        no-op returning `200`. Unsigned or invalidly signed requests return `401` and raise an
+        alert. This endpoint never trusts the payload body for amounts or identity.
+      security: []
+      parameters:
+        - name: X-Provider-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+            maxLength: 512
+        - name: X-Provider-Timestamp
+          in: header
+          required: true
+          schema:
+            type: string
+            maxLength: 32
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, type, data]
+              properties:
+                id:
+                  type: string
+                  maxLength: 128
+                type:
+                  type: string
+                  enum:
+                    - payment.authorised
+                    - payment.captured
+                    - payment.failed
+                    - payment.refunded
+                    - payout.succeeded
+                    - payout.failed
+                data:
+                  type: object
+                  additionalProperties: true
+      responses:
+        '200':
+          description: Event accepted or already processed
+        '400':
+          description: Malformed payload
+        '401':
+          description: WEBHOOK_SIGNATURE_INVALID or WEBHOOK_TIMESTAMP_INVALID
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Short-lived access token (≤ 30 minutes) issued by `/auth/*`.
+
+  parameters:
+    ParcelId:
+      name: parcelId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    TripId:
+      name: tripId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    BookingId:
+      name: bookingId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Client-generated UUIDv4. Replaying the same key with the same body returns the original
+        response and status code. Replaying the same key with a different body returns
+        `409 IDEMPOTENCY_KEY_REUSED`. Keys expire after 24 hours.
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+
+  responses:
+    BadRequest:
+      description: Validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Unauthorized:
+      description: Missing, invalid or expired credentials
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Forbidden:
+      description: Authenticated but not permitted
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotFound:
+      description: Resource not found, or not visible to the caller
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    RateLimited:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds until the next attempt is permitted
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+  schemas:
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              pattern: '^[A-Z][A-Z0-9_]{2,63}$'
+              description: Stable machine-readable code from `api/ERROR_CATALOG.md`.
+              examples: [CAPACITY_UNAVAILABLE]
+            message:
+              type: string
+              maxLength: 300
+              description: Safe, user-presentable message. Never contains stack traces or internals.
+            request_id:
+              type: string
+              maxLength: 64
+            details:
+              type: object
+              additionalProperties: true
+              description: Optional structured field errors. Must not echo sensitive input.
+
+    HealthStatus:
+      type: object
+      additionalProperties: false
+      required: [status, version, checks]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, down]
+        version:
+          type: string
+        checks:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, status]
+            properties:
+              name:
+                type: string
+                enum: [database, storage, queue]
+              status:
+                type: string
+                enum: [ok, degraded, down]
+              latency_ms:
+                type: integer
+                minimum: 0
+
+    AuthSession:
+      type: object
+      additionalProperties: false
+      required: [access_token, refresh_token, expires_in, user]
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        expires_in:
+          type: integer
+          minimum: 1
+          maximum: 3600
+        user:
+          $ref: '#/components/schemas/UserProfile'
+
+    UserProfile:
+      type: object
+      additionalProperties: false
+      required: [id, phone_last4, status, risk_tier, locale, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: [string, 'null']
+          maxLength: 80
+        email:
+          type: [string, 'null']
+          format: email
+        phone_last4:
+          type: string
+          pattern: '^[0-9]{4}$'
+        status:
+          type: string
+          enum: [active, suspended, deleted]
+        risk_tier:
+          type: integer
+          minimum: 0
+          maximum: 3
+        locale:
+          type: string
+          enum: [en-IN, hi-IN]
+        verification_state:
+          $ref: '#/components/schemas/VerificationState'
+        created_at:
+          type: string
+          format: date-time
+
+    VerificationState:
+      type: string
+      enum: [not_started, pending, verified, rejected, expired]
+
+    Verification:
+      type: object
+      additionalProperties: false
+      required: [id, state, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        state:
+          $ref: '#/components/schemas/VerificationState'
+        id_type:
+          type: [string, 'null']
+          enum: [driving_licence, voter_id, passport, null]
+        reason_code:
+          type: [string, 'null']
+          maxLength: 64
+          description: Catalogue code only. Reviewer free text is never exposed.
+        attempts:
+          type: integer
+          minimum: 0
+          maximum: 3
+        decided_at:
+          type: [string, 'null']
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    Category:
+      type: string
+      enum:
+        - documents
+        - educational_certificates
+        - business_samples
+        - spare_parts_dry
+        - cosmetics_sealed
+        - printed_material
+        - religious_items
+        - keys
+        - electronics_accessories_low_value
+
+    ParcelStatus:
+      type: string
+      enum: [draft, posted, matched, ineligible, cancelled, closed]
+
+    CreateParcelRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - origin_city_id
+        - dest_city_id
+        - origin_area
+        - dest_area
+        - category
+        - description
+        - weight_kg
+        - dims_cm
+        - declared_value_paise
+        - window_start
+        - window_end
+        - receiver_name
+        - receiver_phone
+        - sealed_photo_key
+        - declaration_accepted
+      properties:
+        origin_city_id:
+          type: string
+          format: uuid
+        dest_city_id:
+          type: string
+          format: uuid
+        origin_area:
+          type: string
+          minLength: 2
+          maxLength: 80
+          description: Coarse area (locality), never a full street address.
+        dest_area:
+          type: string
+          minLength: 2
+          maxLength: 80
+        category:
+          $ref: '#/components/schemas/Category'
+        description:
+          type: string
+          minLength: 5
+          maxLength: 300
+        weight_kg:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 5
+        dims_cm:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items:
+            type: integer
+            minimum: 1
+            maximum: 45
+        declared_value_paise:
+          type: integer
+          minimum: 100
+          maximum: 500000
+          description: Pilot cap is ₹5,000 = 500000 paise.
+        window_start:
+          type: string
+          format: date-time
+        window_end:
+          type: string
+          format: date-time
+        receiver_name:
+          type: string
+          minLength: 2
+          maxLength: 80
+        receiver_phone:
+          type: string
+          pattern: '^\+91[6-9][0-9]{9}$'
+        sealed_photo_key:
+          type: string
+          maxLength: 256
+        declaration_accepted:
+          type: boolean
+          const: true
+        declaration_version:
+          type: string
+          maxLength: 32
+
+    Parcel:
+      type: object
+      additionalProperties: false
+      required: [id, status, origin_city_id, dest_city_id, category, weight_kg, declared_value_paise, window_start, window_end, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/ParcelStatus'
+        origin_city_id:
+          type: string
+          format: uuid
+        dest_city_id:
+          type: string
+          format: uuid
+        origin_area:
+          type: string
+        dest_area:
+          type: string
+        category:
+          $ref: '#/components/schemas/Category'
+        description:
+          type: string
+        weight_kg:
+          type: number
+        dims_cm:
+          type: array
+          items:
+            type: integer
+        declared_value_paise:
+          type: integer
+        window_start:
+          type: string
+          format: date-time
+        window_end:
+          type: string
+          format: date-time
+        review_required:
+          type: boolean
+        review_reason:
+          type: [string, 'null']
+          maxLength: 120
+        created_at:
+          type: string
+          format: date-time
+
+    Quote:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - formula_version
+        - subtotal_paise
+        - platform_fee_paise
+        - tax_paise
+        - total_paise
+        - traveller_paise
+        - expires_at
+        - breakdown
+      properties:
+        id:
+          type: string
+          format: uuid
+        formula_version:
+          type: string
+          maxLength: 32
+        subtotal_paise:
+          type: integer
+          minimum: 0
+        platform_fee_paise:
+          type: integer
+          minimum: 0
+        tax_paise:
+          type: integer
+          minimum: 0
+        total_paise:
+          type: integer
+          minimum: 0
+        traveller_paise:
+          type: integer
+          minimum: 0
+        expires_at:
+          type: string
+          format: date-time
+        breakdown:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [label, amount_paise]
+            properties:
+              label:
+                type: string
+                maxLength: 60
+              amount_paise:
+                type: integer
+              note:
+                type: string
+                maxLength: 120
+
+    MatchReasonCode:
+      type: string
+      enum:
+        - ON_ROUTE
+        - ARRIVES_IN_WINDOW
+        - SMALL_DETOUR
+        - HIGH_RELIABILITY
+        - CAPACITY_OK
+        - VERIFIED_ID
+        - DELAYED_ARRIVAL
+
+    MatchBand:
+      type: string
+      enum: [excellent, good, fair]
+
+    Match:
+      type: object
+      additionalProperties: false
+      required: [trip_id, score, band, reasons]
+      properties:
+        trip_id:
+          type: string
+          format: uuid
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+        band:
+          $ref: '#/components/schemas/MatchBand'
+        reasons:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchReasonCode'
+        traveller_first_name:
+          type: string
+          maxLength: 40
+        traveller_initial:
+          type: string
+          maxLength: 2
+        verification_state:
+          $ref: '#/components/schemas/VerificationState'
+        reliability_band:
+          type: string
+          enum: [new, building, reliable, highly_reliable]
+        mode:
+          $ref: '#/components/schemas/TransportMode'
+        departure_at:
+          type: string
+          format: date-time
+        arrival_estimate_at:
+          type: string
+          format: date-time
+        capacity_kg_remaining:
+          type: number
+        pickup_distance_band_km:
+          type: string
+          enum: ['<1', '1-3', '3-5', '5-10']
+        indicative_price_paise:
+          type: integer
+          minimum: 0
+
+    MatchList:
+      type: object
+      additionalProperties: false
+      required: [matches]
+      properties:
+        matches:
+          type: array
+          items:
+            $ref: '#/components/schemas/Match'
+        low_confidence:
+          type: boolean
+        no_match_reasons:
+          type: array
+          items:
+            type: string
+            enum:
+              - NO_TRIP_ON_DATE
+              - NO_CAPACITY
+              - WINDOW_TOO_TIGHT
+              - ORIGIN_NOT_SERVED
+              - DESTINATION_NOT_SERVED
+              - MODE_DISABLED
+
+    TransportMode:
+      type: string
+      enum: [car, bike, bus, train, air]
+
+    TripStatus:
+      type: string
+      enum: [published, partially_booked, full, in_progress, completed, cancelled, expired]
+
+    CreateTripRequest:
+      type: object
+      additionalProperties: false
+      required: [origin_city_id, dest_city_id, mode, departure_at, arrival_estimate_at, capacity_kg]
+      properties:
+        origin_city_id:
+          type: string
+          format: uuid
+        dest_city_id:
+          type: string
+          format: uuid
+        origin_area:
+          type: string
+          maxLength: 80
+        mode:
+          $ref: '#/components/schemas/TransportMode'
+        departure_at:
+          type: string
+          format: date-time
+        arrival_estimate_at:
+          type: string
+          format: date-time
+        capacity_kg:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 20
+        accepts_documents_only:
+          type: boolean
+
+    Trip:
+      type: object
+      additionalProperties: false
+      required: [id, mode, origin_city_id, dest_city_id, departure_at, arrival_estimate_at, capacity_kg, capacity_kg_remaining, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        mode:
+          $ref: '#/components/schemas/TransportMode'
+        origin_city_id:
+          type: string
+          format: uuid
+        dest_city_id:
+          type: string
+          format: uuid
+        origin_area:
+          type: [string, 'null']
+        departure_at:
+          type: string
+          format: date-time
+        arrival_estimate_at:
+          type: string
+          format: date-time
+        capacity_kg:
+          type: number
+        capacity_kg_remaining:
+          type: number
+        accepts_documents_only:
+          type: boolean
+        status:
+          $ref: '#/components/schemas/TripStatus'
+        created_at:
+          type: string
+          format: date-time
+
+    BookingStatus:
+      type: string
+      enum:
+        - draft
+        - pending_traveller_acceptance
+        - payment_pending
+        - confirmed
+        - pickup_ready
+        - picked_up
+        - in_transit
+        - arrived
+        - delivered
+        - payout_eligible
+        - paid_out
+        - cancelled_by_sender
+        - cancelled_by_traveller
+        - cancelled_ineligible
+        - cancelled_safety
+        - expired
+        - disputed
+        - refunded
+        - locked_for_review
+        - incident_open
+        - delivery_attempt_failed
+
+    PayoutState:
+      type: string
+      enum: [not_eligible, eligible, frozen, released, void]
+
+    BookingSummary:
+      type: object
+      additionalProperties: false
+      required: [id, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/BookingStatus'
+        role:
+          type: string
+          enum: [sender, traveller]
+        mode:
+          $ref: '#/components/schemas/TransportMode'
+        agreed_total_paise:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Booking:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - parcel_id
+        - trip_id
+        - status
+        - agreed_total_paise
+        - traveller_share_paise
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        parcel_id:
+          type: string
+          format: uuid
+        trip_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/BookingStatus'
+        agreed_total_paise:
+          type: integer
+        traveller_share_paise:
+          type: integer
+        accept_by:
+          type: [string, 'null']
+          format: date-time
+        counterparty:
+          type: object
+          additionalProperties: false
+          properties:
+            first_name:
+              type: string
+              maxLength: 40
+            phone_masked:
+              type: string
+              pattern: '^\+91[0-9]{2}\*{6}[0-9]{2}$'
+            verification_state:
+              $ref: '#/components/schemas/VerificationState'
+        pickup_area:
+          type: [string, 'null']
+        drop_area:
+          type: [string, 'null']
+        dispute_deadline:
+          type: [string, 'null']
+          format: date-time
+        payout_state:
+          $ref: '#/components/schemas/PayoutState'
+        allowed_commands:
+          type: array
+          items:
+            type: string
+          description: Server-computed list of transitions the caller may apply right now.
+        timeline:
+          type: array
+          items:
+            $ref: '#/components/schemas/BookingEvent'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    BookingEvent:
+      type: object
+      additionalProperties: false
+      required: [to_state, occurred_at]
+      properties:
+        from_state:
+          type: [string, 'null']
+        to_state:
+          $ref: '#/components/schemas/BookingStatus'
+        actor_kind:
+          type: string
+          enum: [user, system, support]
+        reason_code:
+          type: [string, 'null']
+        occurred_at:
+          type: string
+          format: date-time
+
+    PaymentState:
+      type: string
+      enum: [created, authorised, captured, failed, refunded, partially_refunded, unknown]
+
+    PaymentIntent:
+      type: object
+      additionalProperties: false
+      required: [id, state, amount_paise, currency, provider, sandbox]
+      properties:
+        id:
+          type: string
+          format: uuid
+        state:
+          $ref: '#/components/schemas/PaymentState'
+        amount_paise:
+          type: integer
+          minimum: 1
+        currency:
+          type: string
+          const: INR
+        provider:
+          type: string
+          enum: [mock, sandbox_provider]
+        sandbox:
+          type: boolean
+          description: True for every pilot payment. Must be shown in the UI as "test mode".
+        client_secret:
+          type: [string, 'null']
+        provider_ref:
+          type: [string, 'null']
+        created_at:
+          type: string
+          format: date-time
+
+    Refund:
+      type: object
+      additionalProperties: false
+      required: [id, amount_paise, state, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        amount_paise:
+          type: integer
+          minimum: 1
+        state:
+          type: string
+          enum: [pending_approval, pending, processed, failed]
+        reason_code:
+          type: string
+        approved_by:
+          type: [string, 'null']
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+
+    Payout:
+      type: object
+      additionalProperties: false
+      required: [state, amount_paise]
+      properties:
+        booking_id:
+          type: string
+          format: uuid
+        state:
+          $ref: '#/components/schemas/PayoutState'
+        amount_paise:
+          type: integer
+          minimum: 0
+        provider_ref:
+          type: [string, 'null']
+        released_at:
+          type: [string, 'null']
+          format: date-time
+        frozen_reason:
+          type: [string, 'null']
+          maxLength: 120
+
+    DisputeState:
+      type: string
+      enum: [open, evidence_requested, under_review, resolved, closed, appealed]
+
+    Dispute:
+      type: object
+      additionalProperties: false
+      required: [id, booking_id, category, state, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        booking_id:
+          type: string
+          format: uuid
+        category:
+          type: string
+          enum: [not_received, damaged, wrong_item, late_delivery, prohibited_item, safety, other]
+        state:
+          $ref: '#/components/schemas/DisputeState'
+        outcome_code:
+          type: [string, 'null']
+          maxLength: 64
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/DisputeEvidence'
+        created_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: [string, 'null']
+          format: date-time
+
+    DisputeEvidence:
+      type: object
+      additionalProperties: false
+      required: [id, note, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        note:
+          type: string
+          maxLength: 1000
+        object_key:
+          type: [string, 'null']
+        created_at:
+          type: string
+          format: date-time
+
+    Review:
+      type: object
+      additionalProperties: false
+      required: [id, booking_id, stars, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        booking_id:
+          type: string
+          format: uuid
+        stars:
+          type: integer
+          minimum: 1
+          maximum: 5
+        tags:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+
+    Notification:
+      type: object
+      additionalProperties: false
+      required: [id, channel, template_id, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        channel:
+          type: string
+          enum: [sms, whatsapp, email, push, in_app]
+        template_id:
+          type: string
+          maxLength: 64
+        status:
+          type: string
+          enum: [queued, sent, delivered, failed]
+        booking_id:
+          type: [string, 'null']
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+
+    AuditEntry:
+      type: object
+      additionalProperties: false
+      required: [id, actor_kind, action, resource, created_at]
+      properties:
+        id:
+          type: integer
+        actor_id:
+          type: [string, 'null']
+          format: uuid
+        actor_kind:
+          type: string
+          enum: [user, system, support]
+        action:
+          type: string
+          maxLength: 64
+        resource:
+          type: string
+          maxLength: 64
+        resource_id:
+          type: [string, 'null']
+        reason_code:
+          type: [string, 'null']
+        created_at:
+          type: string
+          format: date-time

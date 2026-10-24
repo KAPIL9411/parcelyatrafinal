@@ -1,0 +1,28 @@
+{
+  "name": "parcel-yatra",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Parcel Yatra — inter-city parcel marketplace (pilot build, sandbox payments only)",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm run dev -w @py/api",
+    "dev:web": "npm run dev -w @py/web",
+    "build": "npm run build -w @py/api && npm run build -w @py/web",
+    "typecheck": "npm run typecheck -w @py/domain && npm run typecheck -w @py/api && npm run typecheck -w @py/web",
+    "test": "npm run test -w @py/domain",
+    "db:migrate": "npm run db:migrate -w @py/api",
+    "db:seed": "npm run db:seed -w @py/api",
+    "db:reset": "npm run db:reset -w @py/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
+  }
+}
