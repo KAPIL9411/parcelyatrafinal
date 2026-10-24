@@ -35,8 +35,8 @@ const schema = z.object({
   PORT: int(3000, 1, 65535),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   PUBLIC_API_URL: z.string().default('http://127.0.0.1:3000/v1'),
-  PUBLIC_WEB_URL: z.string().default(process.env.NODE_ENV === 'production' ? 'https://parcelyatra.vercel.app' : 'http://127.0.0.1:5173'),
-  ADMIN_WEB_URL: z.string().default(process.env.NODE_ENV === 'production' ? 'https://admin-parcelyatra.vercel.app' : 'http://127.0.0.1:5174'),
+  PUBLIC_WEB_URL: z.string().default(process.env.NODE_ENV === 'production' ? 'https://parcelyatrafinal.vercel.app' : 'http://127.0.0.1:5173'),
+  ADMIN_WEB_URL: z.string().default(process.env.NODE_ENV === 'production' ? 'https://admin-parcelyatrafinal.vercel.app' : 'http://127.0.0.1:5174'),
 
   // Database. PGlite is the zero-install development driver; `pg` is used when DATABASE_URL is set.
   DATABASE_URL: z.string().optional(),
