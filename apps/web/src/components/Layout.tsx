@@ -15,27 +15,12 @@ import {
 
 function Wordmark({ dark = false }: { dark?: boolean }) {
   return (
-    <span className="inline-flex items-center gap-2">
-      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true">
-        <rect
-          x="3.2"
-          y="3.2"
-          width="21.6"
-          height="21.6"
-          rx="6.4"
-          stroke={dark ? '#FEDF00' : '#0A57FF'}
-          strokeWidth="2"
-        />
-        <path
-          d="M8.6 18.4c2.6 0 2.6-3.4 5.2-3.4s2.6 3.4 5.2 3.4"
-          stroke={dark ? '#FFFFFF' : '#001366'}
-          strokeWidth="2"
-          strokeLinecap="round"
-        />
-      </svg>
-      <span className={cn('text-[17px] font-bold tracking-tight', dark ? 'text-white' : 'text-ink-900')}>
-        Parcel Yatra
-      </span>
+    <span className="inline-flex items-center">
+      <img
+        src="/logo.png"
+        alt="Parcel Yatra"
+        className="h-9 w-auto max-w-[180px] object-contain select-none"
+      />
     </span>
   );
 }
