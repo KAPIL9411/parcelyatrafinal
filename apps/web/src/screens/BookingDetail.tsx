@@ -13,7 +13,7 @@ import {
 import { api, type Booking, type BookingSummary, type Dispute, type PaymentIntent } from '../lib/api';
 import { errorCopy } from '../lib/copy';
 import { countdown, formatDateTime, formatWindow, inr } from '../lib/format';
-import { useCountdown, useDevCode, useDocumentTitle } from '../lib/hooks';
+import { useCountdown, useDevCode, useDocumentTitle, useHandoverCode } from '../lib/hooks';
 import { useSession } from '../lib/session';
 import { sampleImage, uploadPhoto } from '../lib/upload';
 import {
@@ -357,7 +357,7 @@ function ActionPanel({
 
       {booking.status === 'pickup_ready' ? (
         role === 'sender' ? (
-          <SenderCodePanel booking={booking} onChanged={onChanged} />
+          <SenderCodePanel booking={booking} phase="pickup" onChanged={onChanged} />
         ) : (
           <HandoverPanel booking={booking} phase="pickup" onDone={onChanged} />
         )
