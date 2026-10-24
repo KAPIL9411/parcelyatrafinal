@@ -139,6 +139,13 @@ export async function buildApp(): Promise<FastifyInstance> {
     reply.code(404).send(errorEnvelope('NOT_FOUND', 'We could not find that.', String(req.id)));
   });
 
+  app.get('/', async () => ({
+    name: 'Parcel Yatra API',
+    status: 'ok',
+    version: '0.1.0',
+    health: '/v1/health',
+  }));
+
   const authenticate = makeAuthenticate(db);
 
   await app.register(healthRoutes, { prefix: '/v1' });
