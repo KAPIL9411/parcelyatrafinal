@@ -89,6 +89,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
   await app.register(cors, {
     origin: [config.PUBLIC_WEB_URL, config.ADMIN_WEB_URL, /\.vercel\.app$/],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     credentials: false,
     exposedHeaders: ['Retry-After', 'X-Request-Id'],
   });
