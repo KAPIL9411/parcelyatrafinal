@@ -4,12 +4,14 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { writeTokens } from '../lib/api';
 import { useDocumentTitle } from '../lib/hooks';
+import { useSession } from '../lib/session';
 import { Button } from '../components/ui';
 
 export function GoogleCallback() {
   useDocumentTitle('Google Sign-In');
   const [params] = useSearchParams();
   const navigate = useNavigate();
+  const { reload } = useSession();
   
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -33,10 +35,10 @@ export function GoogleCallback() {
         return;
       }
 
-      // Optional: Verify state parameter to prevent CSRF
+      // Verify state parameter to prevent CSRF
       const storedState = localStorage.getItem('google_oauth_state');
-      if (state && storedState && state !== storedState) {
-        setError('Invalid state parameter. Please try again.');
+      if (!state || !storedState || state !== storedState) {
+        setError('Invalid or missing state parameter. Security check failed.');
         setLoading(false);
         return;
       }
@@ -62,12 +64,16 @@ export function GoogleCallback() {
           refresh_token: response.refresh_token,
         });
 
+        // Also store user info in session context
+        localStorage.setItem('py.user.v1', JSON.stringify(response.user));
+        
+        // Reload session to update the session context
+        await reload();
+        
         setSuccess(true);
         
-        // Redirect to home page after short delay
-        setTimeout(() => {
-          navigate('/bookings', { replace: true });
-        }, 1500);
+        // Redirect to home page immediately
+        navigate('/bookings', { replace: true });
       } catch (err) {
         console.error('Google OAuth failed:', err);
         setError(err instanceof Error ? err.message : 'Authentication failed. Please try again.');
