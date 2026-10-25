@@ -1,13 +1,22 @@
 import dotenv from 'dotenv';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 
 // Load the repository-root .env first, then a package-local one if present. A variable already set
-// in the process environment always wins.
-dotenv.config({
-  path: [resolve(process.cwd(), '.env'), resolve(process.cwd(), '../../.env')],
-  quiet: true,
-});
+// in the process environment always wins. `dotenv.config` takes a single path, so try candidates
+// in order and stop at the first one that exists (the API boots from `apps/api`, tests from the
+// repo root — both must find the same root .env).
+function loadEnvironment(): void {
+  const candidates = [resolve(process.cwd(), '.env'), resolve(process.cwd(), '../../.env')];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      dotenv.config({ path: candidate, quiet: true });
+      return;
+    }
+  }
+}
+loadEnvironment();
 
 /**
  * Configuration with fail-fast validation and the pilot safety rails from
@@ -76,6 +85,12 @@ const schema = z.object({
   TWILIO_ACCOUNT_SID: z.string().optional(),
   TWILIO_AUTH_TOKEN: z.string().optional(),
   TWILIO_FROM: z.string().optional(),
+
+  // Google OAuth configuration
+  GOOGLE_OAUTH_ENABLED: bool(false),
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_REDIRECT_URI: z.string().optional(),
 
   // Kill switch: set to true to immediately disable all new OTP sends (e.g. under wallet abuse).
   // Requires process restart to take effect.
@@ -249,6 +264,11 @@ export function assertSafetyRails(c: Config): void {
   if (c.SMS_PROVIDER === 'twilio') {
     for (const key of ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_FROM'] as const) {
       if (!c[key]) problems.push(`SMS_PROVIDER=twilio requires ${key}.`);
+    }
+  }
+  if (c.GOOGLE_OAUTH_ENABLED) {
+    for (const key of ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI'] as const) {
+      if (!c[key]) problems.push(`GOOGLE_OAUTH_ENABLED=true requires ${key}.`);
     }
   }
   if (c.OTP_KILL_SWITCH) {

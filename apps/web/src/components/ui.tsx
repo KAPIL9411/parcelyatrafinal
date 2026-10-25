@@ -27,7 +27,7 @@ export function cn(...inputs: ClassValue[]): string {
 
 // ----------------------------------------------------------------------------- button
 
-type ButtonVariant = 'primary' | 'secondary' | 'tertiary' | 'danger';
+type ButtonVariant = 'primary' | 'secondary' | 'tertiary' | 'danger' | 'outline';
 type ButtonSize = 'sm' | 'md' | 'lg';
 
 const BUTTON_VARIANT: Record<ButtonVariant, string> = {
@@ -38,6 +38,8 @@ const BUTTON_VARIANT: Record<ButtonVariant, string> = {
   tertiary: 'text-brand-700 hover:underline underline-offset-4 disabled:text-ink-300 disabled:no-underline',
   danger:
     'bg-surface text-danger-600 border border-danger-600/40 hover:bg-danger-50 active:bg-danger-50 disabled:text-ink-300 disabled:border-line',
+  outline:
+    'bg-transparent border border-line hover:bg-canvas hover:border-ink-500 disabled:text-ink-300 disabled:border-line',
 };
 
 const BUTTON_SIZE: Record<ButtonSize, string> = {

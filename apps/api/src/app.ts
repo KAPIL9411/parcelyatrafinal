@@ -22,6 +22,7 @@ import { disputeRoutes } from './routes/disputes.ts';
 import { notificationRoutes } from './routes/notifications.ts';
 import { fileRoutes, filePublicRoutes } from './routes/files.ts';
 import { adminRoutes } from './routes/admin.ts';
+import { googleAuthRoutes } from './routes/google-auth.ts';
 import { webhookRoutes } from './routes/webhooks.ts';
 import { devRoutes } from './routes/dev.ts';
 
@@ -171,6 +172,11 @@ export async function buildApp(): Promise<FastifyInstance> {
     },
     { prefix: '/v1' },
   );
+
+  // Google OAuth endpoints are public: /auth/google/authorize is the sign-in entry point and
+  // /auth/google/callback is called from the browser after Google redirects, before any session
+  // exists — they must sit outside the authenticated scope.
+  await app.register(googleAuthRoutes, { prefix: '/v1' });
 
   await app.register(adminRoutes, { prefix: '/v1' });
 

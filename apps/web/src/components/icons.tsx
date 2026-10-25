@@ -272,3 +272,12 @@ export function MenuIcon(props: IconProps) {
     </Svg>
   );
 }
+
+export function GoogleIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M4.629 12c0 1.233.216 2.427.599 3.548l1.909-1.909c-.58-.862-.93-1.92-.93-3.06 0-2.757 2.243-5 5-5h3.431c1.843 0 3.506 1.156 4.131 2.944L14.5 15.172c-1.063-2.617-3.831-4.172-6.5-4.172-2.168 0-4.196 1.16-5.371 3Z" />
+    </Svg>
+  );
+}

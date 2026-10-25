@@ -17,6 +17,7 @@
     "build": "npm run build -w @py/api && npm run build -w @py/web",
     "typecheck": "npm run typecheck -w @py/domain && npm run typecheck -w @py/api && npm run typecheck -w @py/web",
     "test": "npm run test -w @py/domain",
+    "test:google": "node scripts/test-google-auth.js",
     "db:migrate": "npm run db:migrate -w @py/api",
     "db:seed": "npm run db:seed -w @py/api",
     "db:reset": "npm run db:reset -w @py/api"

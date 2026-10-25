@@ -8,7 +8,7 @@ import { useDocumentTitle } from '../lib/hooks';
 import { useSession } from '../lib/session';
 import { Banner, Button, Card, ErrorPanel, Field, TextInput } from '../components/ui';
 import { OtpInput } from '../components/OtpInput';
-import { LockIcon, PhoneIcon, ShieldCheckIcon } from '../components/icons';
+import { LockIcon, PhoneIcon, ShieldCheckIcon, GoogleIcon } from '../components/icons';
 
 const DEMO_NUMBERS = [
   { phone: '+919000000001', label: 'Aarti — sender' },
@@ -90,6 +90,31 @@ export function Login() {
     } finally {
       setBusy(false);
       verifying.current = false;
+    }
+  }
+
+  // Google Sign-In handler
+  async function handleGoogleSignIn() {
+    if (busy) return;
+    
+    setBusy(true);
+    setError(null);
+    
+    try {
+      // Get Google authorization URL from backend
+      const response = await api.get<{ authorization_url: string; state: string }>(
+        '/auth/google/authorize',
+        { auth: false }
+      );
+      
+      // Store state for CSRF protection
+      localStorage.setItem('google_oauth_state', response.state);
+      
+      // Redirect to Google OAuth page
+      window.location.href = response.authorization_url;
+    } catch (err) {
+      setError(err);
+      setBusy(false);
     }
   }
 
@@ -175,6 +200,28 @@ export function Login() {
 
             <Button type="submit" fullWidth size="lg" loading={busy} disabled={!phone}>
               Send code
+            </Button>
+
+            <div className="relative my-4">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-line"></div>
+              </div>
+              <div className="relative flex justify-center text-xs">
+                <span className="bg-canvas px-2 text-ink-500">Or continue with</span>
+              </div>
+            </div>
+
+            <Button
+              type="button"
+              variant="outline"
+              fullWidth
+              size="lg"
+              loading={busy}
+              onClick={handleGoogleSignIn}
+              className="border-2"
+            >
+              <GoogleIcon size={20} className="mr-2" />
+              Sign in with Google
             </Button>
 
             <p className="text-xs leading-relaxed text-ink-500">

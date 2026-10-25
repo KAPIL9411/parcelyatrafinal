@@ -17,6 +17,7 @@ import { Verification } from './screens/Verification';
 import { Profile } from './screens/Profile';
 import { Admin } from './screens/Admin';
 import { NotFound } from './screens/NotFound';
+import { GoogleCallback } from './screens/GoogleCallback';
 import {
   Grievance,
   Help,
@@ -79,6 +80,7 @@ export function App() {
         <Route element={<Layout />}>
           <Route index element={<Landing />} />
           <Route path="login" element={<Login />} />
+          <Route path="auth/google/callback" element={<GoogleCallback />} />
 
           <Route
             path="send"

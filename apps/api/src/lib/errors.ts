@@ -16,6 +16,10 @@ export type ErrorCode =
   | 'OTP_ATTEMPTS_EXCEEDED'
   | 'OTP_RATE_LIMITED'
   | 'OTP_CHALLENGE_NOT_FOUND'
+  | 'GOOGLE_OAUTH_DISABLED'
+  | 'GOOGLE_AUTH_FAILED'
+  | 'INVALID_STATE'
+  | 'EMAIL_ALREADY_REGISTERED'
   | 'FORBIDDEN'
   | 'ROLE_REQUIRED'
   | 'ACCOUNT_SUSPENDED'
@@ -104,6 +108,10 @@ export const ERROR_TABLE: Record<ErrorCode, Spec> = {
   OTP_EXPIRED: { status: 400, message: 'That code has expired. Send a new one.' },
   OTP_ALREADY_USED: { status: 400, message: 'That code has already been used.' },
   OTP_ATTEMPTS_EXCEEDED: { status: 429, message: 'Too many attempts. Try again later.' },
+  GOOGLE_OAUTH_DISABLED: { status: 400, message: 'Google Sign-In is not enabled.' },
+  GOOGLE_AUTH_FAILED: { status: 400, message: 'Google authentication failed.' },
+  INVALID_STATE: { status: 400, message: 'Invalid sign-in request. Please try again.' },
+  EMAIL_ALREADY_REGISTERED: { status: 409, message: 'This email is already registered with a different account.' },
   OTP_RATE_LIMITED: { status: 429, message: 'Please wait before requesting another code.' },
   OTP_CHALLENGE_NOT_FOUND: { status: 400, message: 'Start again.' },
   FORBIDDEN: { status: 403, message: 'You cannot do that.' },
