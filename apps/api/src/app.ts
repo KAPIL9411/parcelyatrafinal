@@ -185,8 +185,11 @@ export async function buildApp(): Promise<FastifyInstance> {
   if (config.JOBS_ENABLED) {
     const pruneOtpCounters = async (): Promise<void> => {
       try {
-        const result = await db.query<{ count: string }>(
-          `DELETE FROM otp_sms_counters WHERE window_end < now() - interval '1 hour' RETURNING count(*) OVER () AS count`,
+        // Note: no RETURNING here — PostgreSQL rejects window functions in RETURNING
+        // ("window functions are not allowed in RETURNING"). rowCount already carries the
+        // number of deleted rows, so the extra column was never needed.
+        const result = await db.query(
+          `DELETE FROM otp_sms_counters WHERE window_end < now() - interval '1 hour'`,
         );
         const pruned = result.rowCount ?? 0;
         if (pruned > 0) {
