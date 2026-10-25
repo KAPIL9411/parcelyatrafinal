@@ -9,7 +9,8 @@ import { getDb, type Db } from './db/client.ts';
 import { AppError, errorEnvelope } from './lib/errors.ts';
 import { makeAuthenticate } from './lib/auth.ts';
 
-import { healthRoutes } from './routes/health.ts';import { authRoutes } from './routes/auth.ts';
+import { healthRoutes } from './routes/health.ts';
+import { authRoutes } from './routes/auth.ts';
 import { meRoutes } from './routes/me.ts';
 import { catalogueRoutes } from './routes/catalogue.ts';
 import { verificationRoutes } from './routes/verification.ts';
@@ -175,6 +176,32 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   if (config.ENABLE_DEV_ENDPOINTS) {
     await app.register(devRoutes, { prefix: '/v1' });
+  }
+
+  // ---- Background maintenance: prune expired OTP rate-limit counters ----------
+  // Stale rows in otp_sms_counters are harmless (they reset on next access) but accumulate
+  // over time. We delete them once a day, immediately after boot and then on a daily interval.
+  // setInterval is unref'd so it does not prevent graceful shutdown.
+  if (config.JOBS_ENABLED) {
+    const pruneOtpCounters = async (): Promise<void> => {
+      try {
+        const result = await db.query<{ count: string }>(
+          `DELETE FROM otp_sms_counters WHERE window_end < now() - interval '1 hour' RETURNING count(*) OVER () AS count`,
+        );
+        const pruned = result.rowCount ?? 0;
+        if (pruned > 0) {
+          app.log.info({ pruned }, 'pruned expired otp_sms_counters rows');
+        }
+      } catch (err) {
+        app.log.warn({ err }, 'otp_sms_counters pruning failed (non-fatal)');
+      }
+    };
+
+    app.addHook('onReady', async () => {
+      void pruneOtpCounters();
+      const interval = setInterval(() => void pruneOtpCounters(), 24 * 60 * 60 * 1000);
+      interval.unref();
+    });
   }
 
   return app;

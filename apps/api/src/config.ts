@@ -65,10 +65,29 @@ const schema = z.object({
 
   // OTP delivery. `log` is the zero-cost pilot path: the code is written to the operator log and
   // relayed out of band. It is never returned to the client.
-  SMS_PROVIDER: z.enum(['log', 'twilio', 'none']).default('log'),
+  // `two_factor` is the production path: 2Factor.in REST API (Indian DLT-compliant).
+  // `twilio` is retained for staged rollback only.
+  SMS_PROVIDER: z.enum(['log', 'two_factor', 'twilio', 'none']).default('log'),
+  // 2Factor.in API key. MUST be kept server-side. Never exposed to the frontend or logs.
+  TWO_FACTOR_API_KEY: z.string().optional(),
+  // Twilio credentials — kept for backward compatibility and staged rollback only.
   TWILIO_ACCOUNT_SID: z.string().optional(),
   TWILIO_AUTH_TOKEN: z.string().optional(),
   TWILIO_FROM: z.string().optional(),
+
+  // Kill switch: set to true to immediately disable all new OTP sends (e.g. under wallet abuse).
+  // Requires process restart to take effect.
+  OTP_KILL_SWITCH: bool(false),
+
+  // Minimum seconds a user must wait before requesting a new OTP for the same phone number.
+  OTP_RESEND_COOLDOWN_SECONDS: int(60, 10, 600),
+
+  // Additional per-phone rate limits (the original RATE_LIMIT_OTP_PER_HOUR_PER_NUMBER still applies).
+  RATE_LIMIT_OTP_PER_15MIN_PER_NUMBER: int(3, 1, 20),
+  RATE_LIMIT_OTP_PER_24H_PER_NUMBER: int(10, 1, 100),
+
+  // Per-IP OTP send limit. Requires TRUST_PROXY=true and correct proxy configuration in production.
+  RATE_LIMIT_OTP_PER_15MIN_PER_IP: int(10, 1, 100),
 
   // Uploads. Local disk is the zero-cost pilot path; Cloudinary is the production path.
   STORAGE_PROVIDER: z.enum(['local', 'cloudinary']).default('local'),
@@ -213,10 +232,20 @@ export function assertSafetyRails(c: Config): void {
       );
     }
   }
+  if (c.SMS_PROVIDER === 'two_factor') {
+    if (!c.TWO_FACTOR_API_KEY) problems.push('SMS_PROVIDER=two_factor requires TWO_FACTOR_API_KEY.');
+    if (c.TWO_FACTOR_API_KEY?.startsWith('dev_only_') || c.TWO_FACTOR_API_KEY === 'CHANGE_ME') {
+      problems.push('TWO_FACTOR_API_KEY appears to be a placeholder. Set a real API key.');
+    }
+  }
   if (c.SMS_PROVIDER === 'twilio') {
     for (const key of ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_FROM'] as const) {
       if (!c[key]) problems.push(`SMS_PROVIDER=twilio requires ${key}.`);
     }
+  }
+  if (c.OTP_KILL_SWITCH) {
+    // Not a hard failure — operators may legitimately enable this during an incident.
+    console.warn('[warn] OTP_KILL_SWITCH=true — all new OTP sends are blocked.');
   }
   if (c.LOG_REQUEST_BODIES) {
     problems.push('LOG_REQUEST_BODIES must stay false: request bodies contain personal data.');

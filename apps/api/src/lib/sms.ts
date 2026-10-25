@@ -3,18 +3,24 @@ import type { FastifyBaseLogger } from 'fastify';
 import { config } from '../config.ts';
 
 /**
- * OTP delivery.
+ * OTP delivery provider abstraction.
  *
- * The pilot's zero-cost path is `log`: the code is written once to the operator log and relayed to
- * the person out of band (a phone call or a WhatsApp message from the operator). It is never
- * returned to the client and never stored in plaintext.
+ * Providers
+ * ---------
+ *  log          Zero-cost pilot path: OTP goes to the structured operator log and is relayed out
+ *               of band. Access to the log is equivalent to access to the account.
+ *  two_factor   2Factor.in REST API (production). The API key is exclusive to the server.
+ *               Indian DLT registration (sender + template) is required for production delivery.
+ *  twilio       Legacy; kept for backward compatibility and staged rollback. Not the active path.
+ *  none         Delivery disabled; useful in automated tests only.
  *
- * `twilio` is implemented but off by default. Indian transactional SMS also needs DLT registration
- * for the sender and template, which is a commercial/regulatory step this repository cannot do.
- * `none` disables delivery entirely and is only useful for automated tests.
- *
- * Treat delivery as best-effort: the API has already committed the challenge by the time this runs,
- * so a provider outage must not turn a successful request into a 500.
+ * Security notes
+ * --------------
+ *  - Delivery is best-effort. The challenge is already committed by the time this runs, so a
+ *    provider outage must not turn a committed challenge into a 500.
+ *  - OTP values are NEVER logged in plaintext except by the intentional operator-log path.
+ *  - No automatic silent failover between providers — ambiguous sends duplicate messages.
+ *  - Provider session IDs are stored as metadata only; primary verification is our HMAC.
  */
 
 export type OtpPurpose = 'login' | 'pickup' | 'delivery';
@@ -29,16 +35,110 @@ export interface OtpMessage {
 
 export type DeliveryOutcome = 'sent' | 'logged' | 'disabled' | 'failed';
 
-export async function deliverOtp(log: FastifyBaseLogger, message: OtpMessage): Promise<DeliveryOutcome> {
+export interface DeliveryResult {
+  outcome: DeliveryOutcome;
+  /** Provider-specific session ID, stored for audit and optional re-verification. */
+  providerSessionId?: string;
+}
+
+/**
+ * 2Factor.in send-OTP.
+ *
+ * API endpoint (documented at https://2factor.in):
+ *   GET https://2factor.in/API/V1/{api_key}/SMS/{phone}/{otp_value}[/{template_name}]
+ *
+ * Success: { "Status": "Success", "Details": "<session_id>" }
+ * Failure: { "Status": "Error",   "Details": "<error_message>" }
+ *
+ * Design choices:
+ *  - We generate the OTP on our side (not AUTOGEN), so we can store our HMAC for verification.
+ *  - The returned session_id is stored as providerSessionId for supplementary audit metadata.
+ *  - The phone number is passed in E.164 form (+91XXXXXXXXXX). 2Factor accepts this format.
+ *  - We use a 10-second timeout. On timeout we return 'failed' — the challenge was already
+ *    committed, so the user can retry via resend.
+ */
+async function sendWith2Factor(
+  log: FastifyBaseLogger,
+  message: OtpMessage,
+): Promise<DeliveryResult> {
+  const apiKey = config.TWO_FACTOR_API_KEY!;
+  // Encode the phone number for URL safety (+ → %2B). E.164 is the documented format.
+  const phone = encodeURIComponent(message.phone);
+  const url = `https://2factor.in/API/V1/${encodeURIComponent(apiKey)}/SMS/${phone}/${encodeURIComponent(message.code)}`;
+
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    const body = await res.json() as { Status?: string; Details?: string };
+
+    if (body.Status !== 'Success') {
+      // Log the provider's error category but never the API key or phone number.
+      log.error(
+        {
+          purpose: message.purpose,
+          reference: message.reference,
+          provider_status: body.Status ?? 'unknown',
+          // Details may contain a useful error code (not a secret) but we redact free-form text.
+          provider_code: typeof body.Details === 'string' && body.Details.length < 80
+            ? body.Details
+            : '[redacted]',
+        },
+        'SMS provider rejected the message',
+      );
+      return { outcome: 'failed' };
+    }
+
+    return {
+      outcome: 'sent',
+      providerSessionId: typeof body.Details === 'string' ? body.Details : undefined,
+    };
+  } catch (err) {
+    const isTimeout =
+      err instanceof DOMException && err.name === 'AbortError';
+    log.error(
+      { err: isTimeout ? 'timeout' : err, purpose: message.purpose, reference: message.reference },
+      isTimeout ? 'SMS provider timed out' : 'SMS provider unreachable',
+    );
+    return { outcome: 'failed' };
+  }
+}
+
+/**
+ * Send an OTP via the configured provider.
+ *
+ * Returns a DeliveryResult. Never throws — a delivery failure is logged and surfaced as 'failed'.
+ * The caller must not treat a 'failed' outcome as a reason to silently fall back to another
+ * provider or to send the OTP via a second channel simultaneously.
+ */
+export async function deliverOtp(
+  log: FastifyBaseLogger,
+  message: OtpMessage,
+): Promise<DeliveryResult> {
+  // Kill switch: if an operator needs to stop all OTP sends immediately (e.g. wallet abuse),
+  // they can set OTP_KILL_SWITCH=true and restart the process.
+  if (config.OTP_KILL_SWITCH) {
+    log.warn(
+      { purpose: message.purpose, reference: message.reference },
+      'OTP send blocked: OTP_KILL_SWITCH is active',
+    );
+    return { outcome: 'disabled' };
+  }
+
   if (config.SMS_PROVIDER === 'none') {
-    log.warn({ purpose: message.purpose, reference: message.reference }, 'OTP delivery disabled (SMS_PROVIDER=none)');
-    return 'disabled';
+    log.warn(
+      { purpose: message.purpose, reference: message.reference },
+      'OTP delivery disabled (SMS_PROVIDER=none)',
+    );
+    return { outcome: 'disabled' };
   }
 
   if (config.SMS_PROVIDER === 'log') {
-    // A single structured line. The `otp` field is redacted from request logs elsewhere; this line
-    // is written on purpose so an operator can relay the code. Access to the log is equivalent to
-    // access to the account, which is why it is called out in docs/DEPLOY_ZERO_COST.md.
+    // A single structured line written on purpose so an operator can relay the code out of band.
+    // Access to the log is equivalent to access to the account — document this in ops runbooks.
     log.warn(
       {
         otp: message.code,
@@ -48,38 +148,57 @@ export async function deliverOtp(log: FastifyBaseLogger, message: OtpMessage): P
       },
       'OTP issued — relay this code out of band',
     );
-    return 'logged';
+    return { outcome: 'logged' };
   }
 
-  try {
-    const sid = config.TWILIO_ACCOUNT_SID!;
-    const token = config.TWILIO_AUTH_TOKEN!;
-    const body = new URLSearchParams({
-      To: message.phone,
-      From: config.TWILIO_FROM!,
-      Body: `Parcel Yatra code: ${message.code}. It expires in ${Math.round(config.OTP_TTL_SECONDS / 60)} minutes. Never share it with anyone who is not completing this step.`,
-    });
+  if (config.SMS_PROVIDER === 'two_factor') {
+    return sendWith2Factor(log, message);
+  }
 
-    const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`, {
-      method: 'POST',
-      headers: {
-        authorization: `Basic ${Buffer.from(`${sid}:${token}`).toString('base64')}`,
-        'content-type': 'application/x-www-form-urlencoded',
-      },
-      body,
-      signal: AbortSignal.timeout(10_000),
-    });
+  if (config.SMS_PROVIDER === 'twilio') {
+    try {
+      const sid = config.TWILIO_ACCOUNT_SID!;
+      const token = config.TWILIO_AUTH_TOKEN!;
+      const body = new URLSearchParams({
+        To: message.phone,
+        From: config.TWILIO_FROM!,
+        Body:
+          `Parcel Yatra code: ${message.code}. ` +
+          `It expires in ${Math.round(config.OTP_TTL_SECONDS / 60)} minutes. ` +
+          `Never share it with anyone who is not completing this step.`,
+      });
 
-    if (!res.ok) {
-      log.error(
-        { status: res.status, purpose: message.purpose, reference: message.reference },
-        'SMS provider rejected the message',
+      const res = await fetch(
+        `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`,
+        {
+          method: 'POST',
+          headers: {
+            authorization: `Basic ${Buffer.from(`${sid}:${token}`).toString('base64')}`,
+            'content-type': 'application/x-www-form-urlencoded',
+          },
+          body,
+          signal: AbortSignal.timeout(10_000),
+        },
       );
-      return 'failed';
+
+      if (!res.ok) {
+        log.error(
+          { status: res.status, purpose: message.purpose, reference: message.reference },
+          'SMS provider rejected the message',
+        );
+        return { outcome: 'failed' };
+      }
+      return { outcome: 'sent' };
+    } catch (err) {
+      log.error(
+        { err, purpose: message.purpose, reference: message.reference },
+        'SMS provider unreachable',
+      );
+      return { outcome: 'failed' };
     }
-    return 'sent';
-  } catch (err) {
-    log.error({ err, purpose: message.purpose, reference: message.reference }, 'SMS provider unreachable');
-    return 'failed';
   }
+
+  // Unreachable: the config schema validates SMS_PROVIDER.
+  log.error({ purpose: message.purpose }, 'unknown SMS_PROVIDER — OTP not sent');
+  return { outcome: 'failed' };
 }

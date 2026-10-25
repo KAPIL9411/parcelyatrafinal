@@ -13,6 +13,7 @@ import { rememberCode } from '../lib/dev-store.ts';
 import { deliverOtp } from '../lib/sms.ts';
 import { userProfile } from '../lib/serialize.ts';
 import { audit } from '../services/audit.ts';
+import type { Db } from '../db/client.ts';
 
 const phoneSchema = z.string().regex(/^\+91[6-9][0-9]{9}$/, 'Enter a valid Indian mobile number');
 
@@ -33,57 +34,200 @@ const verifyOtpSchema = z
 
 const refreshSchema = z.object({ refresh_token: z.string().min(32) }).strict();
 
+// ---------------------------------------------------------------------------
+// OTP rate-limit helpers (DB-based sliding-window counters).
+//
+// Each counter is stored in otp_sms_counters with a window_end timestamp.
+// On a new window, the old row is replaced (ON CONFLICT DO UPDATE resets count when
+// window_end has passed). Within a window, count is incremented atomically.
+//
+// This is safe for single- and multi-instance deployments that share PostgreSQL.
+// It is NOT safe for multi-instance with PGlite (each instance has its own embedded DB).
+// PGlite is development-only; production always uses PostgreSQL via DATABASE_URL.
+// ---------------------------------------------------------------------------
+
+async function incrementOtpCounter(
+  db: Db,
+  key: string,
+  scope: 'phone_15m' | 'phone_1h' | 'phone_24h' | 'ip_15m',
+  windowMs: number,
+): Promise<number> {
+  const windowEnd = new Date(Date.now() + windowMs);
+
+  // UPSERT: if the row exists and the window is still valid, increment.
+  // If the window has expired, reset count to 1 and update window_end.
+  const result = await db.query<{ count: number }>(
+    `INSERT INTO otp_sms_counters (key, scope, count, window_end)
+     VALUES ($1, $2, 1, $3)
+     ON CONFLICT (key, scope) DO UPDATE
+       SET count = CASE
+             WHEN otp_sms_counters.window_end > now() THEN otp_sms_counters.count + 1
+             ELSE 1
+           END,
+           window_end = CASE
+             WHEN otp_sms_counters.window_end > now() THEN otp_sms_counters.window_end
+             ELSE $3
+           END
+     RETURNING count`,
+    [key, scope, windowEnd],
+  );
+  return result.rows[0]?.count ?? 1;
+}
+
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
+
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   const db = app.db;
   const authenticate = makeAuthenticate(db);
 
-  app.post('/auth/otp/request', { config: { rateLimit: { max: 20, timeWindow: '1 hour' } } }, async (req, reply) => {
-    const body = requestOtpSchema.parse(req.body);
-    const hash = phoneHash(body.phone);
+  // POST /auth/otp/request
+  // Normalise phone, enforce rate limits and resend cooldown, generate OTP, commit challenge,
+  // deliver via configured SMS provider.
+  app.post(
+    '/auth/otp/request',
+    { config: { rateLimit: { max: 20, timeWindow: '1 hour' } } },
+    async (req, reply) => {
+      // ── Kill switch ──────────────────────────────────────────────────────
+      if (config.OTP_KILL_SWITCH) {
+        // Return a generic 429 — do not reveal that the kill switch is on.
+        reply.header('Retry-After', '3600');
+        throw new AppError('OTP_RATE_LIMITED', { retry_after_seconds: 3600 });
+      }
 
-    // Per-number throttle. The response is identical either way, so throttling is not an
-    // account-enumeration oracle.
-    //
-    // Development note: a demo needs to sign the same three people in repeatedly, so when the dev
-    // endpoints are on the ceiling is raised. The documented pilot limit (3 per number per hour)
-    // applies in every other configuration.
-    const otpLimit = config.ENABLE_DEV_ENDPOINTS
-      ? Math.max(config.RATE_LIMIT_OTP_PER_HOUR_PER_NUMBER, 100)
-      : config.RATE_LIMIT_OTP_PER_HOUR_PER_NUMBER;
-    const recent = await db.query<{ count: string }>(
-      `SELECT count(*)::text AS count FROM otp_challenges
-       WHERE phone_hash = $1 AND purpose = 'login' AND created_at > now() - interval '1 hour'`,
-      [hash],
-    );
-    if (Number(recent.rows[0]?.count ?? 0) >= otpLimit) {
-      throw new AppError('OTP_RATE_LIMITED', { retry_after_seconds: 600 });
-    }
+      const body = requestOtpSchema.parse(req.body);
+      const hash = phoneHash(body.phone);
 
-    const code = generateOtp();
-    const expiresAt = new Date(Date.now() + config.OTP_TTL_SECONDS * 1000);
-    const inserted = await db.query<{ id: string }>(
-      `INSERT INTO otp_challenges (phone_hash, phone_last4, phone_masked, purpose, code_hash, max_attempts, expires_at)
-       VALUES ($1, $2, $3, 'login', $4, $5, $6) RETURNING id`,
-      [hash, phoneLast4(body.phone), maskPhone(body.phone), hashCode(code), config.OTP_MAX_ATTEMPTS, expiresAt],
-    );
+      // ── Per-number rate limits ───────────────────────────────────────────
+      // Development mode raises the per-hour limit so a demo can be driven repeatedly.
+      const hourLimit = config.ENABLE_DEV_ENDPOINTS
+        ? Math.max(config.RATE_LIMIT_OTP_PER_HOUR_PER_NUMBER, 100)
+        : config.RATE_LIMIT_OTP_PER_HOUR_PER_NUMBER;
 
-    // Delivery is best-effort and never echoed to the client. With SMS_PROVIDER=log the code goes
-    // to the operator log, which is the zero-cost pilot path.
-    void deliverOtp(req.log, {
-      phone: body.phone,
-      code,
-      purpose: 'login',
-      reference: inserted.rows[0]!.id,
-    });
-    if (config.ENABLE_DEV_ENDPOINTS) rememberCode(inserted.rows[0]!.id, code, 'login');
+      // Read the three per-number windows from the DB (not counters — we use the
+      // otp_challenges table for the original 1h limit to preserve backward compat,
+      // and otp_sms_counters for the additional 15m and 24h windows).
+      const recentHour = await db.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM otp_challenges
+         WHERE phone_hash = $1 AND purpose = 'login' AND created_at > now() - interval '1 hour'`,
+        [hash],
+      );
+      if (Number(recentHour.rows[0]?.count ?? 0) >= hourLimit) {
+        reply.header('Retry-After', '3600');
+        throw new AppError('OTP_RATE_LIMITED', { retry_after_seconds: 3600 });
+      }
 
-    return reply.code(202).send({
-      challenge_id: inserted.rows[0]!.id,
-      expires_in_seconds: config.OTP_TTL_SECONDS,
-      resend_after_seconds: 30,
-    });
-  });
+      // 15-minute window
+      if (!config.ENABLE_DEV_ENDPOINTS) {
+        const count15m = await incrementOtpCounter(db, hash, 'phone_15m', 15 * 60 * 1000);
+        // We already incremented; check against the limit.
+        if (count15m > config.RATE_LIMIT_OTP_PER_15MIN_PER_NUMBER) {
+          reply.header('Retry-After', '900');
+          throw new AppError('OTP_RATE_LIMITED', { retry_after_seconds: 900 });
+        }
 
+        // 24-hour window
+        const count24h = await incrementOtpCounter(db, hash, 'phone_24h', 24 * 60 * 60 * 1000);
+        if (count24h > config.RATE_LIMIT_OTP_PER_24H_PER_NUMBER) {
+          reply.header('Retry-After', '86400');
+          throw new AppError('OTP_RATE_LIMITED', { retry_after_seconds: 86400 });
+        }
+      }
+
+      // ── Per-IP rate limit ────────────────────────────────────────────────
+      // Only enforce when TRUST_PROXY is configured and an IP is available.
+      // Never trust client-supplied X-Forwarded-For without TRUST_PROXY=true.
+      const clientIp = config.TRUST_PROXY ? (req.ip ?? null) : null;
+      if (clientIp && !config.ENABLE_DEV_ENDPOINTS) {
+        const ipKey = `ip:${sha256(clientIp)}`; // hash to avoid storing raw IPs
+        const countIp = await incrementOtpCounter(db, ipKey, 'ip_15m', 15 * 60 * 1000);
+        if (countIp > config.RATE_LIMIT_OTP_PER_15MIN_PER_IP) {
+          reply.header('Retry-After', '900');
+          throw new AppError('OTP_RATE_LIMITED', { retry_after_seconds: 900 });
+        }
+      }
+
+      // ── Resend cooldown ──────────────────────────────────────────────────
+      // Find the most recent unconsumed challenge for this phone+purpose and check resend_after.
+      const recentChallenge = await db.query<{ resend_after: Date | null }>(
+        `SELECT resend_after FROM otp_challenges
+         WHERE phone_hash = $1 AND purpose = 'login' AND consumed_at IS NULL
+           AND expires_at > now()
+         ORDER BY created_at DESC LIMIT 1`,
+        [hash],
+      );
+      const resendAfter = recentChallenge.rows[0]?.resend_after;
+      if (resendAfter && new Date(resendAfter).getTime() > Date.now()) {
+        const secondsLeft = Math.ceil((new Date(resendAfter).getTime() - Date.now()) / 1000);
+        reply.header('Retry-After', String(secondsLeft));
+        throw new AppError('OTP_RATE_LIMITED', { retry_after_seconds: secondsLeft });
+      }
+
+      // ── Generate and commit challenge ────────────────────────────────────
+      const code = generateOtp();
+      const expiresAt = new Date(Date.now() + config.OTP_TTL_SECONDS * 1000);
+      const resendAt = new Date(Date.now() + config.OTP_RESEND_COOLDOWN_SECONDS * 1000);
+
+      const inserted = await db.query<{ id: string }>(
+        `INSERT INTO otp_challenges
+           (phone_hash, phone_last4, phone_masked, purpose, code_hash, max_attempts, expires_at, resend_after)
+         VALUES ($1, $2, $3, 'login', $4, $5, $6, $7)
+         RETURNING id`,
+        [
+          hash,
+          phoneLast4(body.phone),
+          maskPhone(body.phone),
+          hashCode(code),
+          config.OTP_MAX_ATTEMPTS,
+          expiresAt,
+          resendAt,
+        ],
+      );
+      const challengeId = inserted.rows[0]!.id;
+
+      // ── Deliver OTP ──────────────────────────────────────────────────────
+      // Delivery is fire-and-forget. The challenge is already committed; a provider outage
+      // must not turn a committed challenge into a 500.
+      //
+      // If the provider returns a session ID, store it for supplementary audit metadata.
+      void (async () => {
+        const result = await deliverOtp(req.log, {
+          phone: body.phone,
+          code,
+          purpose: 'login',
+          reference: challengeId,
+        });
+
+        if (result.providerSessionId) {
+          await db
+            .query(
+              `UPDATE otp_challenges SET provider_session_id = $2 WHERE id = $1`,
+              [challengeId, result.providerSessionId],
+            )
+            .catch((err) => {
+              req.log.error({ err, reference: challengeId }, 'failed to store provider_session_id');
+            });
+        }
+
+        if (result.outcome === 'failed') {
+          req.log.warn({ reference: challengeId }, 'OTP delivery failed — user may retry via resend');
+        }
+      })();
+
+      // The development store keeps the plaintext code in memory so the /dev/otp endpoint can
+      // reveal it without database access. Never used in production.
+      if (config.ENABLE_DEV_ENDPOINTS) rememberCode(challengeId, code, 'login');
+
+      return reply.code(202).send({
+        challenge_id: challengeId,
+        expires_in_seconds: config.OTP_TTL_SECONDS,
+        resend_after_seconds: config.OTP_RESEND_COOLDOWN_SECONDS,
+      });
+    },
+  );
+
+  // POST /auth/otp/verify
   app.post('/auth/otp/verify', async (req, reply) => {
     const body = verifyOtpSchema.parse(req.body);
 
@@ -115,7 +259,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       throw new AppError('OTP_INVALID', { attempts_remaining: row.max_attempts - row.attempts });
     }
 
-    // Consume exactly once, even under a race.
+    // Atomically consume — prevents replay under concurrent requests.
     const consumed = await db.query(
       `UPDATE otp_challenges SET consumed_at = now() WHERE id = $1 AND consumed_at IS NULL`,
       [challenge.id],
@@ -123,7 +267,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     if (consumed.rowCount === 0) throw new AppError('OTP_ALREADY_USED');
 
     const user = await db.transaction(async (tx) => {
-      const existing = await tx.query<{ id: string }>(`SELECT id FROM users WHERE phone_hash = $1`, [challenge.phone_hash]);
+      const existing = await tx.query<{ id: string }>(`SELECT id FROM users WHERE phone_hash = $1`, [
+        challenge.phone_hash,
+      ]);
       let userId = existing.rows[0]?.id;
       if (!userId) {
         const created = await tx.query<{ id: string }>(
@@ -164,6 +310,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
+  // POST /auth/refresh
   app.post('/auth/refresh', async (req, reply) => {
     const body = refreshSchema.parse(req.body);
     const hash = sha256(body.refresh_token);
@@ -181,8 +328,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     if (!session) throw new AppError('AUTH_REFRESH_INVALID');
 
     if (session.revoked_at) {
-      // A rotated token was replayed. Kill the whole family.
-      await db.query(`UPDATE sessions SET revoked_at = now() WHERE family_id = $1 AND revoked_at IS NULL`, [session.family_id]);
+      // A rotated token was replayed. Kill the whole family (reuse detection).
+      await db.query(`UPDATE sessions SET revoked_at = now() WHERE family_id = $1 AND revoked_at IS NULL`, [
+        session.family_id,
+      ]);
       await audit(db, {
         actorId: session.user_id,
         actorKind: 'system',
@@ -195,7 +344,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     }
     if (new Date(session.expires_at).getTime() < Date.now()) throw new AppError('AUTH_REFRESH_INVALID');
 
-    // Rotate: revoke the old row (keeping its hash for reuse detection), issue a new one in the family.
+    // Rotate: revoke the old row (keeping its hash for reuse detection), issue a new one.
     await db.query(`UPDATE sessions SET revoked_at = now(), last_used_at = now() WHERE id = $1`, [session.id]);
     const next = await createSession(db, session.user_id, {
       deviceId: session.device_id,
@@ -212,6 +361,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
+  // POST /auth/logout
   app.post('/auth/logout', { preHandler: authenticate }, async (req, reply) => {
     const auth = requireAuth(req);
     await db.query(`UPDATE sessions SET revoked_at = now() WHERE id = $1`, [auth.sessionId]);

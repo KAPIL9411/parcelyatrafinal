@@ -65,6 +65,8 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
         payments_live: config.PAYMENTS_LIVE,
         payment_provider: config.PAYMENT_PROVIDER,
         payouts_enabled: config.PAYOUTS_ENABLED,
+        sms_provider: config.SMS_PROVIDER,
+        otp_kill_switch: config.OTP_KILL_SWITCH,
       },
       'health',
     );
