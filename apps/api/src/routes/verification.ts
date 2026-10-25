@@ -115,7 +115,10 @@ export async function verificationRoutes(app: FastifyInstance): Promise<void> {
       return row;
     });
 
-    await db.query(`INSERT INTO user_roles (user_id, role) VALUES ($1,'traveller') ON CONFLICT DO NOTHING`, [auth.userId]);
+    // NOTE: The 'traveller' role is intentionally NOT granted here.
+    // It is granted exclusively by an admin reviewer in POST /admin/verifications/:id/decision
+    // when decision=approve. Granting it on submission would allow unverified users to act
+    // as travellers before KYC approval.
     await audit(db, {
       actorId: auth.userId,
       actorKind: 'user',

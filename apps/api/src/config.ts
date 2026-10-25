@@ -67,7 +67,9 @@ const schema = z.object({
   // relayed out of band. It is never returned to the client.
   // `two_factor` is the production path: 2Factor.in REST API (Indian DLT-compliant).
   // `twilio` is retained for staged rollback only.
-  SMS_PROVIDER: z.enum(['log', 'two_factor', 'twilio', 'none']).default('log'),
+  SMS_PROVIDER: z.enum(['log', 'fast2sms', 'two_factor', 'twilio', 'none']).default('log'),
+  // Fast2SMS API key — get it from https://fast2sms.com/dashboard (no DLT/business reg needed).
+  FAST2SMS_API_KEY: z.string().optional(),
   // 2Factor.in API key. MUST be kept server-side. Never exposed to the frontend or logs.
   TWO_FACTOR_API_KEY: z.string().optional(),
   // Twilio credentials — kept for backward compatibility and staged rollback only.
@@ -230,6 +232,12 @@ export function assertSafetyRails(c: Config): void {
         '[warn] STORAGE_PROVIDER=local in production. Uploads are stored on the host disk.\n' +
         '       Set STORAGE_PROVIDER=cloudinary with Cloudinary credentials for durable object storage.',
       );
+    }
+  }
+  if (c.SMS_PROVIDER === 'fast2sms') {
+    if (!c.FAST2SMS_API_KEY) problems.push('SMS_PROVIDER=fast2sms requires FAST2SMS_API_KEY (get it from https://fast2sms.com/dashboard).');
+    if (c.FAST2SMS_API_KEY?.startsWith('dev_only_') || c.FAST2SMS_API_KEY === 'CHANGE_ME') {
+      problems.push('FAST2SMS_API_KEY appears to be a placeholder. Set a real API key from fast2sms.com.');
     }
   }
   if (c.SMS_PROVIDER === 'two_factor') {
