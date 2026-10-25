@@ -79,9 +79,14 @@ export async function fileRoutes(app: FastifyInstance): Promise<void> {
       after: { purpose: body.purpose, byte_size: body.byte_size },
     });
 
+    // Generate appropriate upload URL based on storage provider
+    const uploadUrl = config.STORAGE_PROVIDER === 'cloudinary'
+      ? `${config.PUBLIC_API_URL}/files/cloudinary-upload/${encodeURIComponent(objectKey)}`
+      : `${config.PUBLIC_API_URL}/files/local-upload/${encodeURIComponent(objectKey)}`;
+
     return reply.code(201).send({
       object_key: objectKey,
-      upload_url: `${config.PUBLIC_API_URL}/files/local-upload/${encodeURIComponent(objectKey)}`,
+      upload_url: uploadUrl,
       expires_at: toIso(expiresAt),
     });
   });
@@ -101,6 +106,29 @@ export async function fileRoutes(app: FastifyInstance): Promise<void> {
       if (!bytes) throw new AppError('UPLOAD_INVALID_TYPE');
       if (bytes.byteLength > MAX_BYTES) throw new AppError('UPLOAD_TOO_LARGE');
 
+      await putObject(key, bytes);
+
+      return reply.code(201).send({ object_key: key, byte_size: bytes.byteLength });
+    },
+  );
+
+  // Cloudinary upload endpoint
+  app.put<{ Params: { '*': string } }>(
+    '/files/cloudinary-upload/*',
+    { bodyLimit: MAX_BYTES, config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      const auth = requireAuth(req);
+      const key = decodeURIComponent(req.params['*'] ?? '');
+      if (!isValidKey(key)) throw new AppError('VALIDATION_FAILED', { reason: 'object_key' });
+      // A caller may only write under their own user id. Anything else is reported as absent.
+      if (!keyBelongsTo(key, auth.userId)) throw new AppError('NOT_FOUND');
+
+      const raw = req.body;
+      const bytes = raw instanceof Buffer ? raw : typeof raw === 'string' ? Buffer.from(raw) : null;
+      if (!bytes) throw new AppError('UPLOAD_INVALID_TYPE');
+      if (bytes.byteLength > MAX_BYTES) throw new AppError('UPLOAD_TOO_LARGE');
+
+      // Upload to Cloudinary via storage adapter
       await putObject(key, bytes);
 
       return reply.code(201).send({ object_key: key, byte_size: bytes.byteLength });
