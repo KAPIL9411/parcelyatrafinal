@@ -1,4 +1,4 @@
-@import 'tailwindcss';
+@import "tailwindcss";
 
 /*
  * Parcel Yatra theme.
@@ -16,7 +16,9 @@
  * Colour is never the only signal: every status also carries an icon and a word.
  */
 @theme {
-  --font-sans: 'Titillium Web', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-sans:
+    "Titillium Web", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    sans-serif;
 
   --color-ink-900: #151c28;
   --color-ink-700: #2c3444;
@@ -55,6 +57,7 @@
 
   --shadow-card: 0 1px 2px rgb(21 28 40 / 0.04);
   --shadow-bar: 0 -2px 12px rgb(21 28 40 / 0.08);
+  --shadow-float: 0 24px 50px -24px rgb(4 12 28 / 0.45);
 }
 
 @layer base {
@@ -105,7 +108,33 @@
   }
 
   .hero-gradient {
-    background-image: linear-gradient(160deg, #0d1e3a 0%, #0a1730 55%, #070f1e 100%);
+    background-image: linear-gradient(
+      160deg,
+      #0d1e3a 0%,
+      #0a1730 55%,
+      #070f1e 100%
+    );
+  }
+
+  /*
+   * The landing hero: the supplied cityscape exactly as it is — no scrim, no darkening — with a
+   * curved bottom edge so the light section below flows out of it. The curve is elliptical (`50vw`
+   * horizontal radius) so it stays shallow and smooth at every viewport width.
+   */
+  .hero-panel {
+    background-image: url("/hero-background.webp");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    border-bottom-left-radius: 50vw 2.5rem;
+    border-bottom-right-radius: 50vw 2.5rem;
+  }
+
+  @media (min-width: 40rem) {
+    .hero-panel {
+      border-bottom-left-radius: 50vw 5rem;
+      border-bottom-right-radius: 50vw 5rem;
+    }
   }
 
   .text-balance {

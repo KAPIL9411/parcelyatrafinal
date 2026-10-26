@@ -19,6 +19,7 @@ import { tripRoutes } from './routes/trips.ts';
 import { bookingRoutes } from './routes/bookings.ts';
 import { paymentRoutes } from './routes/payments.ts';
 import { disputeRoutes } from './routes/disputes.ts';
+import { messageRoutes } from './routes/messages.ts';
 import { notificationRoutes } from './routes/notifications.ts';
 import { fileRoutes, filePublicRoutes } from './routes/files.ts';
 import { adminRoutes } from './routes/admin.ts';
@@ -48,10 +49,16 @@ export async function buildApp(): Promise<FastifyInstance> {
           'req.headers.cookie',
           'req.headers["idempotency-key"]',
           'res.headers["set-cookie"]',
-          '*.phone',
-          '*.receiver_phone',
+          // The operator-log SMS sink writes the code as a top-level field, and `*.otp` only reaches
+          // one nesting level, so the bare key below is what keeps it out of the log. A bare `code`
+          // is deliberately not listed: the error handler logs the error code there.
+          'otp',
           '*.otp',
           '*.code',
+          '*.code_hash',
+          '*.code_sealed',
+          '*.phone',
+          '*.receiver_phone',
           '*.refresh_token',
           '*.access_token',
           '*.email',
@@ -107,8 +114,10 @@ export async function buildApp(): Promise<FastifyInstance> {
     global: config.RATE_LIMIT_ENABLED,
     max: config.RATE_LIMIT_READ_PER_MINUTE,
     timeWindow: '1 minute',
-    errorResponseBuilder: (req) =>
-      errorEnvelope('RATE_LIMITED', 'Too many requests. Please slow down.', String(req.id)),
+    // The plugin `throw`s whatever this returns, so it has to be an error the handler below reads a
+    // status from. Returning the bare envelope used to fall through to the 500 branch: every throttled
+    // request looked like a crash, and the `Retry-After` the plugin had already set was pointless.
+    errorResponseBuilder: () => new AppError('RATE_LIMITED'),
   });
 
   // Writes get a stricter budget than reads. The global limit above is read-shaped; this hook
@@ -125,11 +134,28 @@ export async function buildApp(): Promise<FastifyInstance> {
       const url = req.url.split('?')[0] ?? req.url;
       if (url.startsWith('/v1/health') || url.startsWith('/v1/readiness')) return;
       if (url.startsWith('/v1/webhooks/')) return;
+      // A route that declares `rateLimit: false` opts out of both limiters, not just the global one.
+      // `POST /dev/seed/reset` is the case that matters: it is throttled by nothing else, and when the
+      // write budget refused it there was no way to restore the demo data until the window rolled.
+      if ((req.routeOptions.config as { rateLimit?: unknown } | undefined)?.rateLimit === false) return;
+      // The manual limiter does not behave like the route limiter. It answers `{ isAllowed: true }`
+      // only for allow-listed keys; every ordinary request comes back `{ isAllowed: false, …}` with
+      // the real verdict in `isExceeded` (`current > max`). Reading `isAllowed` here meant that with
+      // rate limiting switched on, literally every write — OTP request, booking, PIN check, trip
+      // edit — was refused, and before the `reply.send` fix below, every write also still executed.
       const result = await writeBudget(req);
-      if (!result.isAllowed) {
-        reply.code(429);
-        return errorEnvelope('RATE_LIMITED', 'Too many requests. Please slow down.', String(req.id));
-      }
+      if (result.isAllowed || !result.isExceeded) return;
+      reply.header('retry-after', String(result.ttlInSeconds));
+      reply.header('x-ratelimit-limit', String(result.max));
+      reply.header('x-ratelimit-remaining', '0');
+      reply.header('x-ratelimit-reset', String(result.ttlInSeconds));
+      // `reply.send` is the only thing that stops Fastify from running the handler. Returning the
+      // envelope from a preHandler hook does not: the booking was created, the PIN attempt counted,
+      // the trip edited — while the caller was told to slow down, so the honest-looking retry was a
+      // second write.
+      return reply.code(429).send(
+        errorEnvelope('RATE_LIMITED', 'Too many requests. Please slow down.', String(req.id)),
+      );
     });
   }
 
@@ -203,6 +229,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       await scope.register(bookingRoutes);
       await scope.register(paymentRoutes);
       await scope.register(disputeRoutes);
+      await scope.register(messageRoutes);
       await scope.register(notificationRoutes);
       await scope.register(fileRoutes);
     },

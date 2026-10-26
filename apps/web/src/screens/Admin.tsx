@@ -9,12 +9,15 @@ import {
   ApiError,
   type AdminBookingRow,
   type AdminDispute,
+  type AdminIncident,
+  type AdminThreadMessage,
   type AdminVerification,
   type AuditEntry,
 } from '../lib/api';
 import { errorCopy, verificationReason } from '../lib/copy';
 import { formatDateTime, inr, shortId, timeAgo } from '../lib/format';
 import { useDocumentTitle } from '../lib/hooks';
+import { useSession } from '../lib/session';
 import {
   Banner,
   Button,
@@ -32,12 +35,13 @@ import {
 import { StatusChip, VerificationChip } from '../components/StatusChip';
 import { ShieldCheckIcon, AlertTriangleIcon, SearchIcon, DocIcon, LockIcon } from '../components/icons';
 
-type Tab = 'verifications' | 'bookings' | 'disputes' | 'audit';
+type Tab = 'verifications' | 'bookings' | 'disputes' | 'incidents' | 'audit';
 
 const TABS: Array<{ value: Tab; label: string }> = [
   { value: 'verifications', label: 'Verification queue' },
   { value: 'bookings', label: 'Bookings' },
   { value: 'disputes', label: 'Cases' },
+  { value: 'incidents', label: 'Incidents' },
   { value: 'audit', label: 'Audit log' },
 ];
 
@@ -78,6 +82,7 @@ export function Admin() {
       {tab === 'verifications' ? <VerificationQueue /> : null}
       {tab === 'bookings' ? <BookingSearch /> : null}
       {tab === 'disputes' ? <DisputeQueue /> : null}
+      {tab === 'incidents' ? <IncidentQueue /> : null}
       {tab === 'audit' ? <AuditLog /> : null}
     </div>
   );
@@ -623,6 +628,433 @@ function DisputeQueue() {
         {error ? <ErrorPanel error={error} /> : null}
       </Sheet>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------- incidents
+
+const INCIDENT_REASONS = [
+  'parcel_handed_over',
+  'delivered_late',
+  'address_dispute_resolved',
+  'traveller_confirmed_delivery',
+  'parcel_lost_in_transit',
+  'parcel_damaged',
+  'traveller_no_show',
+  'handover_failed',
+];
+
+const MESSAGE_REMOVAL_REASONS = [
+  'contact_details_shared',
+  'abusive_language',
+  'off_platform_payment',
+  'spam',
+  'other_policy_breach',
+];
+
+function IncidentQueue() {
+  const { user } = useSession();
+  const [state, setState] = useState<'incident_open' | 'locked_for_review'>('incident_open');
+  const [threadTarget, setThreadTarget] = useState<AdminIncident | null>(null);
+  const [resolveTarget, setResolveTarget] = useState<AdminIncident | null>(null);
+  const [cleared, setCleared] = useState<string | null>(null);
+
+  const roles = user?.roles ?? [];
+  const canResolve = roles.includes('support_agent') || roles.includes('trust_safety');
+  const canRemoveMessages = roles.includes('trust_safety');
+
+  const query = useQuery({
+    queryKey: ['admin', 'incidents', state],
+    queryFn: () => api.get<{ items: AdminIncident[] }>(`/admin/incidents?state=${state}&limit=100`),
+  });
+
+  const items = query.data?.items ?? [];
+
+  return (
+    <div className="space-y-4">
+      <SectionHeading
+        title="Incidents"
+        description="A booking held outside the normal flow: the parcel is not accounted for, so the payout is frozen until someone here decides."
+      />
+
+      {cleared ? <SuccessPanel title={cleared} /> : null}
+
+      {!canResolve ? (
+        <Banner tone="info" title="Read-only for your role">
+          Your role can see the queue and the threads. Resolving an incident needs support or trust &amp; safety;
+          removing a message needs trust &amp; safety. The server refuses either way — this console only tells you
+          before you try.
+        </Banner>
+      ) : null}
+
+      <Card>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="Held as" htmlFor="incident-state">
+            <Select
+              id="incident-state"
+              value={state}
+              onChange={(event) => setState(event.target.value as 'incident_open' | 'locked_for_review')}
+            >
+              <option value="incident_open">Incident open</option>
+              <option value="locked_for_review">Locked for review</option>
+            </Select>
+          </Field>
+          <div className="flex items-end sm:col-span-2">
+            <Button variant="secondary" fullWidth onClick={() => void query.refetch()}>
+              <SearchIcon size={17} />
+              Refresh the queue
+            </Button>
+          </div>
+        </div>
+      </Card>
+
+      {query.isLoading ? (
+        <Card>
+          <p className="text-sm text-ink-500">Loading the queue…</p>
+        </Card>
+      ) : query.isError ? (
+        <ErrorPanel error={query.error} onRetry={() => void query.refetch()} />
+      ) : items.length === 0 ? (
+        <EmptyState
+          title="Nothing held"
+          body={`No booking is currently in this state. New incidents appear here as soon as a traveller or sender reports one.`}
+          icon={<AlertTriangleIcon size={22} />}
+        />
+      ) : (
+        <div className="space-y-3">
+          {items.map((item) => (
+            <Card key={item.booking_id}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusChip status={item.status} />
+                    <span className="rounded-full border border-line bg-canvas px-2 py-0.5 text-xs font-semibold text-ink-700">
+                      payout {item.payout_state.replaceAll('_', ' ')}
+                    </span>
+                    {item.reason_code ? (
+                      <span className="text-xs font-semibold text-ink-500">{item.reason_code.replaceAll('_', ' ')}</span>
+                    ) : null}
+                  </div>
+                  <p className="mt-2 text-sm text-ink-900">
+                    {item.sender_name ?? 'Sender'} <span className="text-ink-500">to</span>{' '}
+                    {item.traveller_name ?? 'Traveller'}
+                  </p>
+                  <p className="tabular mt-1 text-xs text-ink-500">
+                    Booking {shortId(item.booking_id)} · {inr(item.agreed_total_paise)} agreed ·{' '}
+                    {inr(item.captured_paise)} captured ·{' '}
+                    {item.opened_at ? `opened ${timeAgo(item.opened_at)} by ${item.opened_by ?? 'unknown'}` : 'opening event not recorded'}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <Link
+                    to={`/bookings/${item.booking_id}`}
+                    className="text-xs font-semibold text-brand-700 underline"
+                  >
+                    Open booking
+                  </Link>
+                  <Button size="sm" variant="secondary" onClick={() => setThreadTarget(item)}>
+                    Read thread
+                  </Button>
+                  {canResolve ? (
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setResolveTarget(item);
+                        setCleared(null);
+                      }}
+                    >
+                      Resolve
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <BookingThreadSheet
+        incident={threadTarget}
+        canRemove={canRemoveMessages}
+        onClose={() => setThreadTarget(null)}
+      />
+
+      <IncidentResolveSheet
+        incident={resolveTarget}
+        onClose={() => setResolveTarget(null)}
+        onResolved={(message) => {
+          setResolveTarget(null);
+          setCleared(message);
+          void query.refetch();
+        }}
+      />
+    </div>
+  );
+}
+
+/**
+ * The thread only ever opens from here. `GET /bookings/:id/conversation` answers 404 for staff on
+ * purpose, so this route is the whole of a moderator's visibility — and every read of it is audited.
+ */
+function BookingThreadSheet({
+  incident,
+  canRemove,
+  onClose,
+}: {
+  incident: AdminIncident | null;
+  canRemove: boolean;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [pendingRemoval, setPendingRemoval] = useState<AdminThreadMessage | null>(null);
+  const [reason, setReason] = useState(MESSAGE_REMOVAL_REASONS[0]!);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+
+  const query = useQuery({
+    queryKey: ['admin', 'booking-messages', incident?.booking_id ?? ''],
+    queryFn: () => api.get<{ items: AdminThreadMessage[] }>(`/admin/bookings/${incident!.booking_id}/messages`),
+    enabled: Boolean(incident),
+  });
+
+  async function remove() {
+    if (!pendingRemoval) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post(`/admin/messages/${pendingRemoval.id}/remove`, { reason_code: reason });
+      setPendingRemoval(null);
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'booking-messages', incident?.booking_id ?? ''] });
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Sheet open={Boolean(incident)} onClose={onClose} title="Booking conversation">
+      <Banner tone="warn" title="This read is recorded" icon>
+        The audit log gets your account id, this booking and the number of messages you saw. Do not open
+        threads you have no reason to read.
+      </Banner>
+
+      {!canRemove ? (
+        <p className="text-xs text-ink-500">
+          Removing a message needs the trust &amp; safety role. Nothing here would change it even if you tried.
+        </p>
+      ) : null}
+
+      {query.isLoading ? (
+        <p className="text-sm text-ink-500">Loading the thread…</p>
+      ) : query.isError ? (
+        <ErrorPanel error={query.error} onRetry={() => void query.refetch()} />
+      ) : (query.data?.items.length ?? 0) === 0 ? (
+        <p className="text-sm text-ink-500">These two never messaged each other on this booking.</p>
+      ) : (
+        <ul className="space-y-2">
+          {query.data?.items.map((message) => (
+            <li
+              key={message.id}
+              className={cn(
+                'rounded-input border px-3 py-2 text-sm',
+                message.removed_at ? 'border-line bg-canvas' : 'border-line bg-surface',
+              )}
+            >
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <p className="text-xs font-semibold text-ink-900">
+                  {message.sender_name}
+                  {message.sender_role ? ` · ${message.sender_role}` : ''}
+                </p>
+                <p className="text-xs text-ink-500">{formatDateTime(message.created_at)}</p>
+              </div>
+              <p className={cn('mt-1', message.removed_at ? 'text-ink-500 line-through' : 'text-ink-700')}>
+                {message.body}
+              </p>
+              {message.removed_at ? (
+                <p className="mt-1 text-xs text-danger-600">
+                  Removed {formatDateTime(message.removed_at)}
+                  {message.removed_reason ? ` · ${message.removed_reason.replaceAll('_', ' ')}` : ''}
+                </p>
+              ) : canRemove && message.kind !== 'system' ? (
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    className="text-xs font-semibold text-ink-500 underline"
+                    onClick={() => {
+                      setPendingRemoval(message);
+                      setError(null);
+                    }}
+                  >
+                    Remove message
+                  </button>
+                </div>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {pendingRemoval ? (
+        <div className="mt-3 space-y-3 rounded-card border border-danger-600/30 bg-danger-50/60 p-3">
+          <p className="text-sm font-semibold text-ink-900">Remove this message?</p>
+          <p className="text-sm text-ink-700">{pendingRemoval.body}</p>
+          <Field label="Reason code" htmlFor="message-reason" hint="Shown in the audit record, never edited away.">
+            <Select id="message-reason" value={reason} onChange={(event) => setReason(event.target.value)}>
+              {MESSAGE_REMOVAL_REASONS.map((value) => (
+                <option key={value} value={value}>
+                  {value.replaceAll('_', ' ')}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setPendingRemoval(null);
+                setError(null);
+              }}
+            >
+              Keep it
+            </Button>
+            <Button variant="danger" size="sm" loading={busy} onClick={() => void remove()}>
+              Remove message
+            </Button>
+          </div>
+          {error ? <ErrorPanel error={error} /> : null}
+        </div>
+      ) : null}
+    </Sheet>
+  );
+}
+
+function IncidentResolveSheet({
+  incident,
+  onClose,
+  onResolved,
+}: {
+  incident: AdminIncident | null;
+  onClose: () => void;
+  onResolved: (message: string) => void;
+}) {
+  const [action, setAction] = useState<'clear' | 'compensate'>('clear');
+  const [reason, setReason] = useState(INCIDENT_REASONS[0]!);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+
+  const compensated = incident?.captured_paise ?? 0;
+
+  async function submit() {
+    if (!incident) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.post<{ refund_id: string | null }>(`/admin/bookings/${incident.booking_id}/incident`, {
+        action,
+        reason_code: reason,
+        ...(note.trim() ? { note: note.trim() } : {}),
+      });
+      onResolved(
+        action === 'clear'
+          ? 'Cleared. The booking is payout_eligible and the traveller can be paid.'
+          : res.refund_id
+            ? `Compensated. Refund ${shortId(res.refund_id)} was opened for the full captured amount.`
+            : 'Compensated. The refund was opened and the payout voided.',
+      );
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Sheet
+      open={Boolean(incident)}
+      onClose={() => {
+        setError(null);
+        onClose();
+      }}
+      title="Close this incident"
+      footer={
+        <>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setError(null);
+              onClose();
+            }}
+          >
+            Close
+          </Button>
+          <Button loading={busy} onClick={() => void submit()}>
+            Record outcome
+          </Button>
+        </>
+      }
+    >
+      <Banner tone="danger" title="This decides whether a person gets paid" icon>
+        Nothing here is reversible from the console. Read the thread and the booking events first.
+      </Banner>
+
+      <Field label="Outcome" htmlFor="incident-action">
+        <Select
+          id="incident-action"
+          value={action}
+          onChange={(event) => setAction(event.target.value as 'clear' | 'compensate')}
+        >
+          <option value="clear">Clear — the parcel is accounted for, the traveller keeps their share</option>
+          <option value="compensate" disabled={compensated === 0}>
+            Compensate — refund the sender, void the payout
+          </option>
+        </Select>
+      </Field>
+
+      {compensated === 0 ? (
+        <p className="text-xs text-ink-500">
+          Nothing was captured for this booking, so there is no money to send back. The server refuses
+          compensation here rather than writing a "refunded" state that no ledger row agrees with.
+        </p>
+      ) : (
+        <p className="text-xs text-ink-500">
+          {inr(compensated)} was captured. Compensation opens a refund for exactly that amount, and voids the
+          traveller's payout. A refund above the dual-approval threshold is created waiting for a second
+          approver instead of going out at once.
+        </p>
+      )}
+
+      <Field label="Reason code" htmlFor="incident-reason">
+        <Select id="incident-reason" value={reason} onChange={(event) => setReason(event.target.value)}>
+          {INCIDENT_REASONS.map((value) => (
+            <option key={value} value={value}>
+              {value.replaceAll('_', ' ')}
+            </option>
+          ))}
+        </Select>
+      </Field>
+
+      <Field label="Internal note" htmlFor="incident-note" optional hint="Stored on the refund and the audit entry, not shown to either side.">
+        <TextInput
+          id="incident-note"
+          value={note}
+          maxLength={500}
+          onChange={(event) => setNote(event.target.value)}
+        />
+      </Field>
+
+      {error ? (
+        <div className="rounded-card border border-warn-600/30 bg-warn-50 p-3 text-sm">
+          <p className="font-semibold text-ink-900">{errorCopy(error).title}</p>
+          <p className="mt-1 text-ink-700">{errorCopy(error).body}</p>
+          {error instanceof ApiError && error.code === 'PAYMENT_NOT_PAYABLE' ? (
+            <p className="mt-1 text-xs text-ink-500">Nothing was changed on this booking.</p>
+          ) : null}
+        </div>
+      ) : null}
+    </Sheet>
   );
 }
 

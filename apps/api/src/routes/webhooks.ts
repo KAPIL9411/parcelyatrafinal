@@ -1,10 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
+import { config } from '../config.ts';
 import { AppError } from '../lib/errors.ts';
 import { safeEqual, webhookSignature } from '../lib/crypto.ts';
 import { audit } from '../services/audit.ts';
 import { applyBookingTransition, type BookingRowFull } from './bookings.ts';
+import { isPayoutEligible } from './admin.ts';
 
 const eventSchema = z
   .object({
@@ -124,22 +126,57 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
          VALUES ($1,'refund',$2,$3,'sandbox refund')`,
         [p.booking_id, -Math.abs(p.amount_paise), String(event.data.provider_ref ?? '')],
       );
-    }
-
-    if (event.type === 'payout.succeeded') {
+      // The queue row this refund came from can now be closed. Nothing else ever moves a refund out
+      // of `pending`, so without this the staff list fills with money that has already gone back.
       await db.query(
-        `UPDATE payouts SET state = 'released', released_at = now(), provider_ref = $2 WHERE booking_id = $1`,
-        [p.booking_id, String(event.data.provider_ref ?? event.id)],
+        `UPDATE refunds SET state = 'processed'
+         WHERE id = (SELECT id FROM refunds
+                      WHERE payment_id = $1 AND state IN ('pending','pending_approval')
+                      ORDER BY amount_paise DESC, created_at LIMIT 1)`,
+        [p.id],
       );
-      if (booking && booking.status === 'payout_eligible') {
-        await applyBookingTransition(app, booking, 'release', 'system', { reasonCode: 'payout_succeeded' });
-      }
     }
 
-    if (event.type === 'payout.failed') {
-      await db.query(`UPDATE payouts SET state = 'eligible', frozen_reason = 'provider_failed' WHERE booking_id = $1`, [
-        p.booking_id,
-      ]);
+    if (event.type === 'payout.succeeded' || event.type === 'payout.failed') {
+      if (!booking) throw new AppError('NOT_FOUND', { reason: 'unknown_booking' });
+
+      // A provider notice reports that money moved; it does not authorise it to move. The pilot
+      // refuses payouts at the rail, so a payout event arriving here is a misconfiguration or an
+      // attack, and either way nothing in the database may claim the traveller was paid.
+      const blocked: string | null = !config.PAYOUTS_ENABLED
+        ? 'payouts_disabled_at_pilot'
+        : !(await isPayoutEligible(app, booking))
+          ? 'payout_not_eligible'
+          : null;
+
+      if (blocked) {
+        await audit(db, {
+          actorId: null,
+          actorKind: 'system',
+          action: `webhook.${event.type}.refused`,
+          resource: 'booking',
+          resourceId: booking.id,
+          reasonCode: blocked,
+          after: { event_id: event.id, status: booking.status },
+        });
+        req.log.error({ event_id: event.id, type: event.type, reason: blocked }, 'payout event refused: payout controls failed');
+        return reply.code(200).send({ received: true, applied: false, reason: blocked });
+      }
+
+      if (event.type === 'payout.succeeded') {
+        await db.query(
+          `UPDATE payouts SET state = 'released', released_at = now(), provider_ref = $2, frozen_reason = NULL
+           WHERE booking_id = $1`,
+          [p.booking_id, String(event.data.provider_ref ?? event.id)],
+        );
+        if (booking.status === 'payout_eligible') {
+          await applyBookingTransition(app, booking, 'release', 'system', { reasonCode: 'payout_succeeded' });
+        }
+      } else {
+        await db.query(`UPDATE payouts SET state = 'eligible', frozen_reason = 'provider_failed' WHERE booking_id = $1`, [
+          p.booking_id,
+        ]);
+      }
     }
 
     await audit(db, {

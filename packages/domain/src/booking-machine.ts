@@ -37,16 +37,23 @@ export type BookingCommand =
   | 'clear'
   | 'release';
 
-/** The commands a user token is allowed to send. Everything else is system/support only. */
+/**
+ * The commands a user token may send to the generic transitions route.
+ *
+ * `confirm_pickup` and `confirm_delivery` are absent on purpose: proof that a handover happened is a
+ * six-digit code plus a photo, and only the two handover endpoints collect them. Accepting them here
+ * would offer a way to claim delivery with no evidence at all.
+ */
+export const HANDOVER_ONLY_COMMANDS = ['confirm_pickup', 'confirm_delivery'] as const satisfies readonly BookingCommand[];
+
+/** Everything else that a signed-in party can ask for. The API builds its request schema from this. */
 export const CLIENT_COMMANDS: readonly BookingCommand[] = [
   'submit',
   'accept',
   'decline',
   'cancel',
-  'confirm_pickup',
   'start_transit',
   'arrive',
-  'confirm_delivery',
   'receiver_unavailable',
   'raise_dispute',
   'report_incident',
@@ -179,6 +186,11 @@ const RULES: readonly Rule[] = [
   },
   { from: 'pickup_ready', command: 'cancel', to: 'cancelled_by_sender', actors: ['sender'] },
   { from: 'pickup_ready', command: 'lock', to: 'locked_for_review', actors: ['system'] },
+  // Exhausting the delivery code attempts has to lock the booking the same way the pickup code does,
+  // and it has to happen as a transition: the raw status write it used to be left the timeline
+  // claiming the parcel was still where it was.
+  { from: 'arrived', command: 'lock', to: 'locked_for_review', actors: ['system'] },
+  { from: 'delivery_attempt_failed', command: 'lock', to: 'locked_for_review', actors: ['system'] },
   { from: 'picked_up', command: 'start_transit', to: 'in_transit', actors: ['traveller'] },
   { from: 'picked_up', command: 'report_incident', to: 'incident_open', actors: ['sender', 'traveller', 'support'] },
   { from: 'in_transit', command: 'arrive', to: 'arrived', actors: ['traveller'] },
@@ -201,8 +213,33 @@ const RULES: readonly Rule[] = [
     to: 'delivery_attempt_failed',
     actors: ['traveller'],
   },
-  { from: 'delivery_attempt_failed', command: 'confirm_delivery', to: 'delivered', actors: ['traveller'] },
+  // A failed attempt is followed by a second handover, not by a free pass. Without this guard the
+  // generic transitions route could walk `arrived -> receiver_unavailable -> confirm_delivery` and
+  // reach `delivered` with no code and no photo, which then qualifies the payout.
+  {
+    from: 'delivery_attempt_failed',
+    command: 'confirm_delivery',
+    to: 'delivered',
+    actors: ['traveller'],
+    dataGuard: true,
+    guard: (ctx) => {
+      if (!ctx.otpValid) return { ok: false, code: 'OTP_INVALID', message: 'That delivery code is not correct.' };
+      if (!ctx.photoPresent) return { ok: false, code: 'HANDOVER_NOT_ALLOWED_IN_STATE', message: 'A delivery photo is required.' };
+      return null;
+    },
+  },
   { from: 'delivery_attempt_failed', command: 'escalate', to: 'incident_open', actors: ['system', 'support'] },
+  // A parcel that has reached the city but cannot be handed over is exactly when a human needs to
+  // be told. Before these two edges, `incident_open` was reachable from the delivery end of the
+  // journey only by `escalate`, which is system/support — and no staff surface issued it, so a stuck
+  // parcel stayed stuck and its payout stayed frozen.
+  { from: 'arrived', command: 'report_incident', to: 'incident_open', actors: ['sender', 'traveller', 'support'] },
+  {
+    from: 'delivery_attempt_failed',
+    command: 'report_incident',
+    to: 'incident_open',
+    actors: ['sender', 'traveller', 'support'],
+  },
   {
     from: 'delivered',
     command: 'raise_dispute',
@@ -287,6 +324,9 @@ export function applyTransition(
 /** Server-computed list of commands the caller may attempt right now (guards included). */
 export function allowedCommands(from: BookingStatus, ctx: TransitionContext): BookingCommand[] {
   return RULES.filter((r) => r.from === from && r.actors.includes(ctx.actor))
+    // A handover needs the code and the photo, so it is offered by the handover panel instead of by
+    // this list — advertising a command the transitions route refuses would be a dead button.
+    .filter((r) => !(HANDOVER_ONLY_COMMANDS as readonly string[]).includes(r.command))
     .filter((r) => (r.guard && !r.dataGuard ? r.guard(ctx) === null : true))
     .map((r) => r.command);
 }

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { formatPaise, groupIndian, parseRupeesToPaise, rupeesToPaise } from '../src/money.ts';
 import { quotePrice, corridorKm, PRICING_V1, indicativePricePaise } from '../src/pricing.ts';
 import { evaluateEligibility, detectProhibitedContent } from '../src/eligibility.ts';
-import { applyTransition, allowedCommands } from '../src/booking-machine.ts';
+import { applyTransition, allowedCommands, CLIENT_COMMANDS, HANDOVER_ONLY_COMMANDS } from '../src/booking-machine.ts';
 import { computeRefund } from '../src/refunds.ts';
 import {
   rankMatches,
@@ -188,8 +188,35 @@ test('booking machine: allowed_commands is actor- and guard-aware', () => {
   const now = new Date();
   const senderCmds = allowedCommands('confirmed', { now, actor: 'sender', hoursUntilWindowStart: 0.5 });
   assert.ok(!senderCmds.includes('cancel'), 'inside 2h the sender cannot use the plain cancel command');
+
+  // A handover is proved on the handover endpoints with a code and a photo, so it is never advertised
+  // as a plain command the transitions route would accept.
   const travellerCmds = allowedCommands('pickup_ready', { now, actor: 'traveller' });
-  assert.deepEqual(travellerCmds, ['confirm_pickup']);
+  assert.deepEqual(travellerCmds, []);
+  for (const command of HANDOVER_ONLY_COMMANDS) {
+    assert.ok(!CLIENT_COMMANDS.includes(command), `${command} must not be sendable as a plain command`);
+    assert.ok(!allowedCommands('arrived', { now, actor: 'traveller' }).includes(command));
+  }
+});
+
+test('booking machine: a second delivery attempt still needs proof', () => {
+  const now = new Date();
+  const bare = applyTransition('delivery_attempt_failed', 'confirm_delivery', { now, actor: 'traveller' });
+  assert.equal(!bare.ok && bare.code, 'OTP_INVALID');
+
+  const noPhoto = applyTransition('delivery_attempt_failed', 'confirm_delivery', { now, actor: 'traveller', otpValid: true });
+  assert.equal(!noPhoto.ok && noPhoto.code, 'HANDOVER_NOT_ALLOWED_IN_STATE');
+
+  // The walk that used to fake a delivery: declare the receiver absent, then confirm without anything.
+  const failed = applyTransition('arrived', 'receiver_unavailable', { now, actor: 'traveller' });
+  assert.deepEqual(failed, { ok: true, to: 'delivery_attempt_failed' });
+  const stillNeedsProof = applyTransition('delivery_attempt_failed', 'confirm_delivery', { now, actor: 'traveller' });
+  assert.equal(!stillNeedsProof.ok, true);
+
+  assert.deepEqual(
+    applyTransition('delivery_attempt_failed', 'confirm_delivery', { now, actor: 'traveller', otpValid: true, photoPresent: true }),
+    { ok: true, to: 'delivered' },
+  );
 });
 
 test('refunds: documented outcomes', () => {

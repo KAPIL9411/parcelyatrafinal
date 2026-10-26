@@ -11,6 +11,7 @@ import { Login } from './screens/Login';
 import { Send } from './screens/Send';
 import { Bookings } from './screens/Bookings';
 import { BookingDetail } from './screens/BookingDetail';
+import { ParcelDetail } from './screens/ParcelDetail';
 import { Trips } from './screens/Trips';
 import { NewTrip } from './screens/NewTrip';
 import { Verification } from './screens/Verification';
@@ -103,6 +104,14 @@ export function App() {
             element={
               <RequireAuth>
                 <BookingDetail />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="parcels/:parcelId"
+            element={
+              <RequireAuth>
+                <ParcelDetail />
               </RequireAuth>
             }
           />

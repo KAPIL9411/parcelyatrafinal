@@ -129,8 +129,14 @@ const BY_CODE: Record<string, ErrorCopy> = {
   TRIP_WINDOW_INVALID: {
     title: 'Check the trip times',
     body: 'The arrival must be after the departure, and the departure cannot be in the past.',
+    hint: 'Nothing was changed on your trip.',
   },
   TRIP_CAPACITY_INVALID: { title: 'Check the capacity', body: 'Capacity must be between 1 and 20 kg.' },
+  TRIP_EDIT_BREAKS_BOOKING: {
+    title: 'That change would strand a booked parcel',
+    body: 'A parcel you have already accepted would fall outside this trip.',
+    hint: 'Nothing was changed. Move the trip so it still covers that parcel, or cancel the booking first.',
+  },
 
   NO_MATCH: {
     title: 'No traveller matches this route and time yet',
@@ -304,15 +310,48 @@ const BY_STATUS: Record<number, ErrorCopy> = {
   503: BY_CODE.SERVICE_UNAVAILABLE!,
 };
 
+/**
+ * The engine's own gate names, in the traveller's terms.
+ *
+ * A refused trip edit arrives with the gate the booked parcel actually failed, so this is a
+ * translation table and not a guess about why the change was refused.
+ */
+const TRIP_GATE_COPY: Record<string, string> = {
+  DEPARTS_AFTER_WINDOW: 'You would leave after the sender needs the parcel collected.',
+  ARRIVES_TOO_LATE: 'You would arrive after that parcel is due.',
+  NO_CAPACITY: 'That parcel is heavier than the space you are leaving yourself.',
+  WINDOW_TOO_TIGHT: "The sender's delivery window would no longer cover this trip.",
+  CATEGORY_NOT_ACCEPTED: 'That parcel is a kind your trip would stop accepting.',
+  PARCEL_TOO_LARGE: 'That parcel would no longer fit the limits of this trip.',
+  ITEM_PROHIBITED: 'That parcel is not something a trip can carry.',
+  TRAVELLER_NOT_VERIFIED: 'This trip would lose the verification that lets it carry parcels.',
+  PARCEL_NOT_OPEN: 'That parcel is no longer open, so the booking needs staff attention.',
+};
+
 export function errorCopy(error: unknown): ErrorCopy {
   if (error && typeof error === 'object' && 'code' in error && 'status' in error) {
     const apiError = error as ApiError;
     const mapped = BY_CODE[apiError.code] ?? BY_STATUS[apiError.status];
     if (mapped) {
+      const details = apiError.details ?? {};
       // OTP_INVALID carries the remaining attempt count; say it rather than making the user guess.
       const remaining = apiError.details?.attempts_remaining;
       if (apiError.code === 'OTP_INVALID' && typeof remaining === 'number') {
         return { ...mapped, body: `${remaining} ${remaining === 1 ? 'try' : 'tries'} left.` };
+      }
+      // The server names the smallest capacity that still holds what is booked; quoting it is more use
+      // than the generic 1–20 kg range, which is a different mistake.
+      if (apiError.code === 'TRIP_CAPACITY_INVALID' && typeof details.min_capacity_kg === 'number') {
+        const held = typeof details.bookings_held === 'number' ? details.bookings_held : 1;
+        return {
+          title: mapped.title,
+          body: `You are already carrying ${held} booked ${held === 1 ? 'parcel' : 'parcels'} on this trip. The smallest capacity that keeps ${held === 1 ? 'it' : 'them'} is ${details.min_capacity_kg} kg.`,
+          hint: 'Nothing was changed on your trip.',
+        };
+      }
+      if (apiError.code === 'TRIP_EDIT_BREAKS_BOOKING') {
+        const gate = typeof details.reason === 'string' ? TRIP_GATE_COPY[details.reason] : undefined;
+        return { ...mapped, body: gate ?? mapped.body };
       }
       return mapped;
     }

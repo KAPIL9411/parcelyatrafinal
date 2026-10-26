@@ -58,7 +58,29 @@ function check(name, condition, detail) {
   }
 }
 
-async function call(method, path, { token, body, idempotencyKey, headers = {} } = {}) {
+/**
+ * A throttled call is waited out, read or write, everywhere — not just where a helper was written for it.
+ *
+ * The write budget is 60/min per address and the read budget 300/min, and every harness on this
+ * machine shares those pools — plus any browser left open on the app. A run that fails because the
+ * previous suite spent the budget measures nothing about the product, and the failure it prints is a
+ * lie. `ratelimit.mjs` keeps its own transport, because there the refusal is the thing under test.
+ */
+async function call(method, path, opts) {
+  for (let attempt = 0; ; attempt += 1) {
+    const res = await rawCall(method, path, opts);
+    if (res.status !== 429 || attempt >= 5) return res;
+    const wait = Number(res.headers.get('retry-after') ?? '5') + 2;
+    // A window we can sit out is waited: the shared read and write budgets name at most a minute. A per-route
+    // hourly limit hands the refusal straight back, because tripping it is a finding the harness
+    // reports itself instead of sleeping on for an hour.
+    if (wait > 75) return res;
+    console.log(`  ---- ${method} ${path} throttled; waiting ${wait}s for the rate-limit window`);
+    await new Promise((resolve) => setTimeout(resolve, wait * 1000));
+  }
+}
+
+async function rawCall(method, path, { token, body, idempotencyKey, headers = {} } = {}) {
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: {
@@ -76,23 +98,42 @@ async function call(method, path, { token, body, idempotencyKey, headers = {} } 
   } catch {
     json = { raw: text };
   }
-  return { status: res.status, body: json };
+  return { status: res.status, body: json, headers: res.headers };
+}
+
+/** The template ids this account was told about for one booking, oldest possible list first. */
+async function notices(token, bookingId) {
+  const res = await call('GET', '/notifications?limit=50', { token });
+  return (res.body?.items ?? []).filter((n) => n.booking_id === bookingId).map((n) => n.template_id);
+}
+
+/**
+ * The long-lived credential is only ever handed out in an HttpOnly cookie — `/auth/otp/verify` answers
+ * `access_token` and nothing else. A harness that reads the body for a refresh token caches undefined
+ * and then silently falls back to a fresh OTP on every run.
+ */
+function refreshCookieFrom(res) {
+  return /py_refresh=([^;,]+)/.exec(res.headers.get('set-cookie') ?? '')?.[1] ?? null;
 }
 
 async function signIn(phone) {
   const cache = loadCache();
   const entry = cache[phone];
 
+
   if (entry?.access_token) {
     const me = await call('GET', '/me', { token: entry.access_token });
     if (me.status === 200) return { token: entry.access_token, user: me.body };
 
     if (entry.refresh_token) {
-      const refreshed = await call('POST', '/auth/refresh', { body: { refresh_token: entry.refresh_token } });
+      // `/auth/refresh` reads the credential from the httpOnly cookie only; it never looks at a body.
+      // Posting one meant every cached-token refresh failed and silently fell through to a fresh OTP.
+      const refreshed = await call('POST', '/auth/refresh', { headers: { cookie: `py_refresh=${entry.refresh_token}` } });
       if (refreshed.status === 200) {
+        const rotated = refreshCookieFrom(refreshed);
         cache[phone] = {
           access_token: refreshed.body.access_token,
-          refresh_token: refreshed.body.refresh_token,
+          refresh_token: rotated ?? entry.refresh_token,
         };
         saveCache(cache);
         return { token: refreshed.body.access_token, user: refreshed.body.user };
@@ -104,12 +145,10 @@ async function signIn(phone) {
   if (request.status !== 202) throw new Error(`otp request failed: ${request.status} ${JSON.stringify(request.body)}`);
   const peek = await call('GET', `/dev/otp/${request.body.challenge_id}`);
   if (peek.status !== 200) throw new Error(`dev otp peek failed: ${peek.status} ${JSON.stringify(peek.body)}`);
-  const verify = await call('POST', '/auth/otp/verify', {
-    body: { challenge_id: request.body.challenge_id, code: peek.body.code },
-  });
+  const verify = await call('POST', '/auth/otp/verify', { body: { challenge_id: request.body.challenge_id, code: peek.body.code } });
   if (verify.status !== 200) throw new Error(`otp verify failed: ${verify.status} ${JSON.stringify(verify.body)}`);
 
-  cache[phone] = { access_token: verify.body.access_token, refresh_token: verify.body.refresh_token };
+  cache[phone] = { access_token: verify.body.access_token, refresh_token: refreshCookieFrom(verify) };
   saveCache(cache);
   return { token: verify.body.access_token, user: verify.body.user };
 }
@@ -266,6 +305,8 @@ async function main() {
     body: { command: 'accept' },
   });
   check('traveller accepts', accept.status === 200 && accept.body.status === 'payment_pending', JSON.stringify(accept.body).slice(0, 300));
+  check('the sender is told the traveller accepted', (await notices(sender.token, bookingId)).includes('booking_accepted'));
+  check('the traveller is not told about their own acceptance', !(await notices(traveller.token, bookingId)).includes('booking_accepted'));
 
   // ---- sandbox payment
   const intent = await call('POST', `/bookings/${bookingId}/payment-intent`, {
@@ -282,6 +323,8 @@ async function main() {
 
   const afterPay = await call('GET', `/bookings/${bookingId}`, { token: sender.token });
   check('payment moves the booking to confirmed', afterPay.body.status === 'confirmed', afterPay.body.status);
+  check('the provider capture notifies the sender', (await notices(sender.token, bookingId)).includes('payment_captured'));
+  check('the provider capture notifies the traveller', (await notices(traveller.token, bookingId)).includes('payment_captured'));
 
   const badSignature = await call('POST', '/webhooks/payments/mock', {
     body: { id: 'evt_forged', type: 'payment.captured', data: { provider_ref: intent.body.provider_ref } },
@@ -308,6 +351,7 @@ async function main() {
     body: { otp: pickupOtp.body.code, photo_key: travellerPickupKey, checklist: { seal_intact: true } },
   });
   check('pickup with the right OTP succeeds', pickup.status === 200 && pickup.body.status === 'picked_up', JSON.stringify(pickup.body).slice(0, 300));
+  check('the sender is told the parcel left', (await notices(sender.token, bookingId)).includes('pickup_confirmed'));
 
   // ---- transit and delivery
   for (const [command, expected] of [
@@ -321,12 +365,68 @@ async function main() {
     });
     check(`${command} moves the booking to ${expected}`, step.status === 200 && step.body.status === expected, JSON.stringify(step.body).slice(0, 200));
   }
+  check('the sender is told the parcel is on the way', (await notices(sender.token, bookingId)).includes('in_transit'));
+
+  // ---- a delivery cannot be claimed without proof
+  const fakeConfirm = await call('POST', `/bookings/${bookingId}/transitions`, {
+    token: traveller.token,
+    idempotencyKey: `smoke-fake-confirm-${bookingId}`,
+    body: { command: 'confirm_delivery' },
+  });
+  check(
+    'confirm_delivery is refused as a plain command',
+    fakeConfirm.status === 409 && fakeConfirm.body?.error?.code === 'HANDOVER_NOT_ALLOWED_IN_STATE',
+    `${fakeConfirm.status} ${JSON.stringify(fakeConfirm.body).slice(0, 200)}`,
+  );
 
   const deliveryKey = await uploadPhoto(traveller.token, 'parcel_delivery');
-  const deliveryOtp = await call('GET', `/dev/handover-otp/${bookingId}/delivery`, { token: sender.token });
+  const wrongDeliveryOtp = await call('POST', `/bookings/${bookingId}/handover/delivery`, {
+    token: traveller.token,
+    body: { otp: '123456', photo_key: deliveryKey },
+  });
+  check(
+    'a wrong delivery code is refused and costs an attempt',
+    wrongDeliveryOtp.status === 400 && wrongDeliveryOtp.body?.error?.code === 'OTP_INVALID',
+    `${wrongDeliveryOtp.status} ${JSON.stringify(wrongDeliveryOtp.body).slice(0, 200)}`,
+  );
+
+  const reissue = await call('POST', `/bookings/${bookingId}/otp/regenerate`, {
+    token: sender.token,
+    body: { phase: 'delivery' },
+  });
+  check(
+    're-issuing the code does not hand back the guessing budget',
+    reissue.status === 202 && reissue.body.attempts_remaining === 4,
+    `${reissue.status} ${JSON.stringify(reissue.body).slice(0, 200)}`,
+  );
+
+  const freshDeliveryOtp = await call('GET', `/dev/handover-otp/${bookingId}/delivery`, { token: sender.token });
+
+  const unavailable = await call('POST', `/bookings/${bookingId}/transitions`, {
+    token: traveller.token,
+    idempotencyKey: `smoke-unavailable-${bookingId}`,
+    body: { command: 'receiver_unavailable' },
+  });
+  check(
+    'receiver_unavailable is allowed and is not proof of anything',
+    unavailable.status === 200 && unavailable.body.status === 'delivery_attempt_failed',
+    `${unavailable.status} ${JSON.stringify(unavailable.body).slice(0, 200)}`,
+  );
+
+  const fakeAfterFailure = await call('POST', `/bookings/${bookingId}/transitions`, {
+    token: traveller.token,
+    idempotencyKey: `smoke-fake-confirm2-${bookingId}`,
+    body: { command: 'confirm_delivery' },
+  });
+  check(
+    'a failed attempt cannot be closed without a code either',
+    fakeAfterFailure.status === 409 && fakeAfterFailure.body?.error?.code === 'HANDOVER_NOT_ALLOWED_IN_STATE',
+    `${fakeAfterFailure.status} ${JSON.stringify(fakeAfterFailure.body).slice(0, 200)}`,
+  );
+
   const delivery = await call('POST', `/bookings/${bookingId}/handover/delivery`, {
     token: traveller.token,
-    body: { otp: deliveryOtp.body.code, photo_key: deliveryKey, receiver_name_confirmed: true },
+    body: { otp: freshDeliveryOtp.body.code, photo_key: deliveryKey, receiver_name_confirmed: true },
   });
   check('delivery succeeds', delivery.status === 200 && delivery.body.status === 'delivered', JSON.stringify(delivery.body).slice(0, 300));
   check('delivery opens the dispute window', Boolean(delivery.body.dispute_deadline));
@@ -345,6 +445,26 @@ async function main() {
     'payout release is refused while payouts are disabled',
     release.status === 501 && release.body?.error?.code === 'PAYOUTS_NOT_ENABLED',
     `${release.status} ${JSON.stringify(release.body).slice(0, 200)}`,
+  );
+
+  // A provider message that a payout succeeded is a report, not an authorisation. With payouts off
+  // at the rail it must change nothing at all.
+  const payoutEvent = await call('POST', '/dev/webhooks/simulate', {
+    token: sender.token,
+    body: { type: 'payout.succeeded', provider_ref: intent.body.provider_ref },
+  });
+  check(
+    'a payout webhook cannot release money past the pilot rail',
+    payoutEvent.body?.webhook_body?.applied === false &&
+      payoutEvent.body?.webhook_body?.reason === 'payouts_disabled_at_pilot',
+    `${payoutEvent.status} ${JSON.stringify(payoutEvent.body).slice(0, 240)}`,
+  );
+
+  const afterPayoutEvent = await call('GET', `/bookings/${bookingId}`, { token: sender.token });
+  check(
+    'the booking stays payout_eligible, never paid_out, on a webhook alone',
+    afterPayoutEvent.body.status === 'payout_eligible',
+    afterPayoutEvent.body.status,
   );
 
   // ---- review, while the booking is still settled and undisputed

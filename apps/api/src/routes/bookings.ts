@@ -2,8 +2,10 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import {
-  applyTransition,
   allowedCommands,
+  CLIENT_COMMANDS,
+  HANDOVER_ONLY_COMMANDS,
+  applyTransition,
   type ActorKind,
   type BookingCommand,
   type BookingStatus,
@@ -13,6 +15,8 @@ import {
 } from '@py/domain';
 
 import { config } from '../config.ts';
+import type { Db } from '../db/client.ts';
+import { dbIsScoped } from '../lib/db-scope.ts';
 import { AppError } from '../lib/errors.ts';
 import { requireAuth } from '../lib/auth.ts';
 import { generateOtp, hashCode, safeEqual } from '../lib/crypto.ts';
@@ -20,6 +24,7 @@ import { rememberCode } from '../lib/dev-store.ts';
 import { open as openSealed, seal } from '../lib/seal.ts';
 import { bookingView, num, toIso } from '../lib/serialize.ts';
 import { keyBelongsTo } from '../lib/storage.ts';
+import { matchPolicy } from '../lib/matching-policy.ts';
 import { withIdempotency } from '../lib/idempotency.ts';
 import { audit, emitOutbox, queueNotification } from '../services/audit.ts';
 
@@ -33,23 +38,36 @@ const createSchema = z
 
 const transitionSchema = z
   .object({
-    command: z.enum([
-      'submit',
-      'accept',
-      'decline',
-      'cancel',
-      'confirm_pickup',
-      'start_transit',
-      'arrive',
-      'confirm_delivery',
-      'receiver_unavailable',
-      'raise_dispute',
-      'report_incident',
-    ]),
+    // Derived from the domain list, so the route can never drift ahead of (or behind) what a party is
+    // actually allowed to ask for. Handover proofs are deliberately not in that list.
+    command: z.enum(CLIENT_COMMANDS as [BookingCommand, ...BookingCommand[]]),
     reason_code: z.string().max(64).optional(),
     note: z.string().max(500).optional(),
   })
   .strict();
+
+/**
+ * Which command tells which side that something happened.
+ *
+ * Without this table the notification list only covers the three states that also mint a handover
+ * code, so a sender who is waiting to hear whether the traveller said yes hears nothing at all. The
+ * actor is never notified about their own action, and the handover-code states are absent because
+ * `applyBookingTransition` already announces those.
+ */
+const TRANSITION_ALERTS: Partial<
+  Record<BookingCommand, { template: string; audience: 'sender' | 'traveller' | 'both' | 'counterparty' }>
+> = {
+  accept: { template: 'booking_accepted', audience: 'sender' },
+  decline: { template: 'booking_declined', audience: 'sender' },
+  cancel: { template: 'booking_cancelled', audience: 'counterparty' },
+  payment_authorised: { template: 'payment_captured', audience: 'both' },
+  payment_failed: { template: 'payment_failed', audience: 'both' },
+  confirm_pickup: { template: 'pickup_confirmed', audience: 'sender' },
+  start_transit: { template: 'in_transit', audience: 'sender' },
+  receiver_unavailable: { template: 'delivery_failed', audience: 'sender' },
+  resolve_sender: { template: 'dispute_resolved', audience: 'both' },
+  resolve_traveller: { template: 'dispute_resolved', audience: 'both' },
+};
 
 export interface BookingRowFull {
   id: string;
@@ -169,6 +187,19 @@ async function transitionContext(
     `SELECT used_at FROM handover_otps WHERE booking_id = $1 AND phase = 'pickup'`,
     [booking.id],
   );
+  // Money truth comes from the journal, not from the price the booking agreed to. Feeding
+  // `agreed_total_paise` in here made the release guard unable to fail, so a payout could be called
+  // settled for a booking whose capture never arrived.
+  const ledger = await app.db.query<{ total: string }>(
+    `SELECT COALESCE(SUM(amount_paise), 0)::text AS total FROM payment_ledger WHERE booking_id = $1`,
+    [booking.id],
+  );
+  const openDispute = await app.db.query(
+    `SELECT 1 FROM disputes
+     WHERE booking_id = $1 AND state IN ('open','evidence_requested','under_review','appealed')
+     LIMIT 1`,
+    [booking.id],
+  );
 
   return {
     now,
@@ -180,9 +211,9 @@ async function transitionContext(
     hoursUntilWindowStart,
     disputeDeadline: booking.dispute_deadline,
     disputeWindowElapsed: booking.dispute_deadline ? now > new Date(booking.dispute_deadline) : false,
-    openDispute: false,
+    openDispute: openDispute.rows.length > 0,
     pickupConsumed: Boolean(pickup.rows[0]?.used_at),
-    ledgerBalancePaise: booking.agreed_total_paise,
+    ledgerBalancePaise: Number(ledger.rows[0]?.total ?? 0),
     payoutAmountPaise: booking.traveller_share_paise,
     supportRole: null,
     payoutState: payout.rows[0]?.state ?? 'not_eligible',
@@ -217,27 +248,58 @@ export async function applyBookingTransition(
   const result = applyTransition(booking.status, command, ctx);
   if (!result.ok) throw new AppError(result.code as never, { command, from: booking.status }, result.message);
 
-  // Optimistic concurrency: the status must still be what we read.
-  const updated = await db.query(
-    `UPDATE bookings SET status = $2, updated_at = now() WHERE id = $1 AND status = $3`,
-    [booking.id, result.to, booking.status],
-  );
-  if (updated.rowCount === 0) throw new AppError('TRANSITION_CONFLICT');
+  // The status flip, the event row and the capacity hand-back are one transaction. Run separately, a
+  // process that stopped between them left the trip charging a sender for space that no booking holds —
+  // invisible afterwards, because every read (matching, the trip card, the traveller's edit checks)
+  // trusts that column.
+  //
+  // A caller that already holds a transaction passes a scoped app (see lib/db-scope.ts: the staff and
+  // dispute routes), whose `db` *is* that transaction. This interface refuses to nest, so there the
+  // statements join the caller's transaction and commit with it instead.
+  const releasesCapacity = result.to.startsWith('cancelled_') || result.to === 'expired';
+  const alreadyScoped = dbIsScoped(app);
 
-  await db.query(
-    `INSERT INTO booking_events (booking_id, from_state, to_state, actor_id, actor_kind, command, reason_code, metadata)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-    [
-      booking.id,
-      booking.status,
-      result.to,
-      opts.actorId ?? null,
-      actor === 'sender' || actor === 'traveller' ? 'user' : actor,
-      command,
-      opts.reasonCode ?? null,
-      JSON.stringify(opts.metadata ?? {}),
-    ],
-  );
+  const write = async (q: Db) => {
+    // Optimistic concurrency: the status must still be what we read.
+    const updated = await q.query(
+      `UPDATE bookings SET status = $2, updated_at = now() WHERE id = $1 AND status = $3`,
+      [booking.id, result.to, booking.status],
+    );
+    if (updated.rowCount === 0) throw new AppError('TRANSITION_CONFLICT');
+
+    await q.query(
+      `INSERT INTO booking_events (booking_id, from_state, to_state, actor_id, actor_kind, command, reason_code, metadata)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        booking.id,
+        booking.status,
+        result.to,
+        opts.actorId ?? null,
+        actor === 'sender' || actor === 'traveller' ? 'user' : actor,
+        command,
+        opts.reasonCode ?? null,
+        JSON.stringify(opts.metadata ?? {}),
+      ],
+    );
+
+    if (releasesCapacity) {
+      const parcel = await q.query<{ weight_kg: unknown }>(`SELECT weight_kg FROM parcels WHERE id = $1`, [
+        booking.parcel_id,
+      ]);
+      // Measured with the same allowance the reservation took and the engine gates on, so the three can
+      // never disagree about how much of the trip a parcel occupies.
+      const releaseKg = num(parcel.rows[0]?.weight_kg) * matchPolicy.packagingAllowance;
+      await q.query(
+        `UPDATE trips SET capacity_kg_remaining = LEAST(capacity_kg, capacity_kg_remaining + $2),
+                status = CASE WHEN status = 'full' THEN 'partially_booked'::trip_status ELSE status END
+         WHERE id = $1`,
+        [booking.trip_id, releaseKg],
+      );
+    }
+  };
+
+  if (alreadyScoped) await write(db);
+  else await db.transaction(write);
 
   // ---- side effects ----
   if (result.to === 'pickup_ready') {
@@ -246,6 +308,9 @@ export async function applyBookingTransition(
   }
   if (result.to === 'arrived') {
     await ensureHandoverOtp(app, booking.id, 'delivery');
+    // The receiver has no account, so the sender is the one who has to read the delivery code out
+    // to them. Nothing tells the sender that the code exists unless this is queued here.
+    await queueNotification(db, { userId: booking.sender_id, bookingId: booking.id, templateId: 'delivery_code_ready' });
   }
   if (result.to === 'delivered') {
     const deadline = new Date(Date.now() + config.DISPUTE_WINDOW_HOURS * 3_600_000);
@@ -256,15 +321,26 @@ export async function applyBookingTransition(
   if (result.to === 'payout_eligible') {
     await db.query(`UPDATE payouts SET state = 'eligible' WHERE booking_id = $1`, [booking.id]);
   }
-  if (result.to.startsWith('cancelled_') || result.to === 'expired') {
-    const parcel = await db.query<{ weight_kg: unknown }>(`SELECT weight_kg FROM parcels WHERE id = $1`, [booking.parcel_id]);
-    const releaseKg = num(parcel.rows[0]?.weight_kg) * 1.1;
-    await db.query(
-      `UPDATE trips SET capacity_kg_remaining = LEAST(capacity_kg, capacity_kg_remaining + $2),
-              status = CASE WHEN status = 'full' THEN 'partially_booked'::trip_status ELSE status END
-       WHERE id = $1`,
-      [booking.trip_id, releaseKg],
-    );
+
+  const alert = TRANSITION_ALERTS[command];
+  if (alert) {
+    const told: Array<string | null> =
+      alert.audience === 'sender'
+        ? [booking.sender_id]
+        : alert.audience === 'traveller'
+          ? [booking.traveller_id]
+          : alert.audience === 'counterparty'
+            ? actor === 'sender'
+              ? [booking.traveller_id]
+              : actor === 'traveller'
+                ? [booking.sender_id]
+                : [booking.sender_id, booking.traveller_id]
+            : [booking.sender_id, booking.traveller_id];
+    for (const userId of told) {
+      // Nobody gets a notification about a change they just made themselves.
+      if (!userId || userId === opts.actorId) continue;
+      await queueNotification(db, { userId, bookingId: booking.id, templateId: alert.template });
+    }
   }
 
   await emitOutbox(db, `booking.${result.to}`, { booking_id: booking.id, command });
@@ -292,19 +368,25 @@ export async function ensureHandoverOtp(
     `SELECT id, used_at, expires_at FROM handover_otps WHERE booking_id = $1 AND phase = $2`,
     [bookingId, phase],
   );
-  if (existing.rows[0] && !existing.rows[0].used_at && !opts.force) {
+  if (existing.rows[0]?.used_at) {
+    // That step already happened. Re-issuing here would make a spent code live again.
+    return;
+  }
+  if (existing.rows[0] && !opts.force) {
     // Still valid and unused: keep it. A sender who asks again sees the same code.
     if (new Date(existing.rows[0].expires_at).getTime() > Date.now()) return;
   }
 
   const code = generateOtp();
   const expiresAt = new Date(Date.now() + 6 * 3_600_000);
+  // `attempts` is deliberately not reset. A fresh code with a clean budget could be issued as many
+  // times as the guesser likes, which turns the five-try limit into five tries per request.
   await app.db.query(
     `INSERT INTO handover_otps (booking_id, phase, code_hash, code_sealed, expires_at)
      VALUES ($1,$2,$3,$4,$5)
      ON CONFLICT (booking_id, phase)
      DO UPDATE SET code_hash = EXCLUDED.code_hash, code_sealed = EXCLUDED.code_sealed,
-                   expires_at = EXCLUDED.expires_at, used_at = NULL, attempts = 0`,
+                   expires_at = EXCLUDED.expires_at`,
     [bookingId, phase, hashCode(code), seal(code), expiresAt],
   );
 
@@ -317,10 +399,11 @@ export async function ensureHandoverOtp(
 
 async function verifyHandoverOtp(
   app: FastifyInstance,
-  bookingId: string,
+  booking: BookingRowFull,
   phase: 'pickup' | 'delivery',
   code: string,
 ): Promise<void> {
+  const bookingId = booking.id;
   const res = await app.db.query<{
     id: string;
     code_hash: string;
@@ -342,7 +425,12 @@ async function verifyHandoverOtp(
     );
     const r = next.rows[0]!;
     if (r.attempts >= r.max_attempts) {
-      await app.db.query(`UPDATE bookings SET status = 'locked_for_review', updated_at = now() WHERE id = $1`, [bookingId]);
+      // Pausing the booking is a transition like any other: it has to appear in the timeline, or the
+      // history tells anyone who reads it that nothing happened while the parcel sits unmovable.
+      await applyBookingTransition(app, booking, 'lock', 'system', {
+        reasonCode: 'OTP_ATTEMPTS_EXCEEDED',
+        metadata: { phase },
+      });
       throw new AppError('BOOKING_LOCKED');
     }
     throw new AppError('OTP_INVALID', { attempts_remaining: r.max_attempts - r.attempts });
@@ -396,7 +484,9 @@ export async function bookingRoutes(app: FastifyInstance): Promise<void> {
       if (!['published', 'partially_booked'].includes(t.status)) throw new AppError('TRIP_NOT_AVAILABLE');
       if (t.traveller_id === auth.userId) throw new AppError('SELF_BOOKING_FORBIDDEN');
 
-      const reservedKg = num(p.weight_kg) * 1.1;
+      // The same allowance the release hands back and the engine gates on, taken from the policy rather
+      // than written out again here.
+      const reservedKg = num(p.weight_kg) * matchPolicy.packagingAllowance;
       const booking = await db.transaction(async (tx) => {
         // The parcel is re-checked *inside* the transaction. This takes the row lock, so two senders
         // requesting the same parcel at the same moment cannot both get through: the second one waits,
@@ -553,6 +643,18 @@ export async function bookingRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Params: { bookingId: string } }>('/bookings/:bookingId/transitions', async (req, reply) => {
     const auth = requireAuth(req);
+
+    // A handover is proved with a code and a photo, and only the two handover endpoints take them.
+    // Saying so beats letting it fall through as an anonymous validation error.
+    const asked = (req.body as { command?: unknown } | null)?.command;
+    if (typeof asked === 'string' && (HANDOVER_ONLY_COMMANDS as readonly string[]).includes(asked)) {
+      throw new AppError(
+        'HANDOVER_NOT_ALLOWED_IN_STATE',
+        { command: asked, use: asked === 'confirm_pickup' ? '/bookings/:id/handover/pickup' : '/bookings/:id/handover/delivery' },
+        'Confirming a handover needs the code and a photo. Use the handover step instead.',
+      );
+    }
+
     const body = transitionSchema.parse(req.body);
     const { row, role } = await loadForViewer(app, req.params.bookingId, auth.userId);
 
@@ -606,101 +708,124 @@ export async function bookingRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  app.post<{ Params: { bookingId: string } }>('/bookings/:bookingId/otp/regenerate', async (req, reply) => {
-    const auth = requireAuth(req);
-    const body = z.object({ phase: z.enum(['pickup', 'delivery']) }).strict().parse(req.body);
-    const { row, role } = await loadForViewer(app, req.params.bookingId, auth.userId);
-    if (role !== 'sender') throw new AppError('FORBIDDEN', { reason: 'only_sender_may_reissue' });
+  app.post<{ Params: { bookingId: string } }>(
+    '/bookings/:bookingId/otp/regenerate',
+    { config: { rateLimit: { max: 6, timeWindow: '1 hour' } } },
+    async (req, reply) => {
+      const auth = requireAuth(req);
+      const body = z.object({ phase: z.enum(['pickup', 'delivery']) }).strict().parse(req.body);
+      const { row, role } = await loadForViewer(app, req.params.bookingId, auth.userId);
+      if (role !== 'sender') throw new AppError('FORBIDDEN', { reason: 'only_sender_may_reissue' });
 
-    const applicable =
-      (body.phase === 'pickup' && row.status === 'pickup_ready') ||
-      (body.phase === 'delivery' && row.status === 'arrived');
-    if (!applicable) throw new AppError('OTP_NOT_APPLICABLE');
+      const applicable =
+        (body.phase === 'pickup' && row.status === 'pickup_ready') ||
+        // A receiver who was not there the first time often comes back the next day, by which point
+        // the code has expired. The sender has to be able to issue a new one — with the attempt
+        // budget carried over, that stays safe.
+        (body.phase === 'delivery' && (row.status === 'arrived' || row.status === 'delivery_attempt_failed'));
+      if (!applicable) throw new AppError('OTP_NOT_APPLICABLE');
 
-    await ensureHandoverOtp(app, row.id, body.phase, { force: true });
-    return reply.code(202).send({
-      phase: body.phase,
-      expires_at: toIso(new Date(Date.now() + 6 * 3_600_000)),
-      attempts_remaining: 5,
-    });
-  });
+      await ensureHandoverOtp(app, row.id, body.phase, { force: true });
 
-  app.post<{ Params: { bookingId: string } }>('/bookings/:bookingId/handover/pickup', async (req, reply) => {
-    const auth = requireAuth(req);
-    const body = z
-      .object({
-        otp: z.string().regex(/^[0-9]{6}$/),
-        photo_key: z.string().min(1).max(256),
-        checklist: z
-          .object({ seal_intact: z.boolean().optional(), weight_matches_declaration: z.boolean().optional() })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .parse(req.body);
+      // The attempt budget survives a re-issue, so the honest answer is what is actually left rather
+      // than a constant that promises five more guesses every time.
+      const after = await app.db.query<{ attempts: number; max_attempts: number; expires_at: Date }>(
+        `SELECT attempts, max_attempts, expires_at FROM handover_otps WHERE booking_id = $1 AND phase = $2`,
+        [row.id, body.phase],
+      );
+      const otp = after.rows[0]!;
+      return reply.code(202).send({
+        phase: body.phase,
+        expires_at: toIso(otp.expires_at),
+        attempts_remaining: Math.max(0, otp.max_attempts - otp.attempts),
+      });
+    },
+  );
 
-    const { row, role } = await loadForViewer(app, req.params.bookingId, auth.userId);
-    if (role !== 'traveller') throw new AppError('TRANSITION_NOT_PERMITTED');
-    if (row.status !== 'pickup_ready') throw new AppError('HANDOVER_NOT_ALLOWED_IN_STATE');
+  app.post<{ Params: { bookingId: string } }>(
+    '/bookings/:bookingId/handover/pickup',
+    { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      const auth = requireAuth(req);
+      const body = z
+        .object({
+          otp: z.string().regex(/^[0-9]{6}$/),
+          photo_key: z.string().min(1).max(256),
+          checklist: z
+            .object({ seal_intact: z.boolean().optional(), weight_matches_declaration: z.boolean().optional() })
+            .strict()
+            .optional(),
+        })
+        .strict()
+        .parse(req.body);
 
-    // The handover photo must be the uploader's own object.
-    if (!keyBelongsTo(body.photo_key, auth.userId)) {
-      throw new AppError('VALIDATION_FAILED', { field: 'photo_key' }, 'Upload the photo again from this account.');
-    }
-    await verifyHandoverOtp(app, row.id, 'pickup', body.otp);
-    await db.query(`UPDATE handovers SET pickup_photo_key = $2, pickup_at = now() WHERE booking_id = $1`, [
-      row.id,
-      body.photo_key,
-    ]);
+      const { row, role } = await loadForViewer(app, req.params.bookingId, auth.userId);
+      if (role !== 'traveller') throw new AppError('TRANSITION_NOT_PERMITTED');
+      if (row.status !== 'pickup_ready') throw new AppError('HANDOVER_NOT_ALLOWED_IN_STATE');
 
-    await applyBookingTransition(app, row, 'confirm_pickup', 'traveller', {
-      actorId: auth.userId,
-      otpValid: true,
-      photoPresent: true,
-      metadata: body.checklist ?? {},
-    });
+      // The handover photo must be the uploader's own object.
+      if (!keyBelongsTo(body.photo_key, auth.userId)) {
+        throw new AppError('VALIDATION_FAILED', { field: 'photo_key' }, 'Upload the photo again from this account.');
+      }
+      await verifyHandoverOtp(app, row, 'pickup', body.otp);
+      await db.query(`UPDATE handovers SET pickup_photo_key = $2, pickup_at = now() WHERE booking_id = $1`, [
+        row.id,
+        body.photo_key,
+      ]);
 
-    const fresh = await db.query<BookingRowFull>(`SELECT * FROM bookings WHERE id = $1`, [row.id]);
-    return reply.code(200).send(await renderBooking(app, fresh.rows[0]!, auth.userId));
-  });
+      await applyBookingTransition(app, row, 'confirm_pickup', 'traveller', {
+        actorId: auth.userId,
+        otpValid: true,
+        photoPresent: true,
+        metadata: body.checklist ?? {},
+      });
 
-  app.post<{ Params: { bookingId: string } }>('/bookings/:bookingId/handover/delivery', async (req, reply) => {
-    const auth = requireAuth(req);
-    const body = z
-      .object({
-        otp: z.string().regex(/^[0-9]{6}$/),
-        photo_key: z.string().min(1).max(256),
-        receiver_name_confirmed: z.boolean().optional(),
-      })
-      .strict()
-      .parse(req.body);
+      const fresh = await db.query<BookingRowFull>(`SELECT * FROM bookings WHERE id = $1`, [row.id]);
+      return reply.code(200).send(await renderBooking(app, fresh.rows[0]!, auth.userId));
+    },
+  );
 
-    const { row, role } = await loadForViewer(app, req.params.bookingId, auth.userId);
-    if (role !== 'traveller') throw new AppError('TRANSITION_NOT_PERMITTED');
-    if (row.status !== 'arrived' && row.status !== 'delivery_attempt_failed') {
-      throw new AppError('HANDOVER_NOT_ALLOWED_IN_STATE');
-    }
+  app.post<{ Params: { bookingId: string } }>(
+    '/bookings/:bookingId/handover/delivery',
+    { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      const auth = requireAuth(req);
+      const body = z
+        .object({
+          otp: z.string().regex(/^[0-9]{6}$/),
+          photo_key: z.string().min(1).max(256),
+          receiver_name_confirmed: z.boolean().optional(),
+        })
+        .strict()
+        .parse(req.body);
 
-    // The handover photo must be the uploader's own object.
-    if (!keyBelongsTo(body.photo_key, auth.userId)) {
-      throw new AppError('VALIDATION_FAILED', { field: 'photo_key' }, 'Upload the photo again from this account.');
-    }
-    await verifyHandoverOtp(app, row.id, 'delivery', body.otp);
-    await db.query(`UPDATE handovers SET delivery_photo_key = $2, delivered_at = now() WHERE booking_id = $1`, [
-      row.id,
-      body.photo_key,
-    ]);
+      const { row, role } = await loadForViewer(app, req.params.bookingId, auth.userId);
+      if (role !== 'traveller') throw new AppError('TRANSITION_NOT_PERMITTED');
+      if (row.status !== 'arrived' && row.status !== 'delivery_attempt_failed') {
+        throw new AppError('HANDOVER_NOT_ALLOWED_IN_STATE');
+      }
 
-    await applyBookingTransition(app, row, 'confirm_delivery', 'traveller', {
-      actorId: auth.userId,
-      otpValid: true,
-      photoPresent: true,
-      metadata: { receiver_name_confirmed: body.receiver_name_confirmed ?? false },
-    });
+      // The handover photo must be the uploader's own object.
+      if (!keyBelongsTo(body.photo_key, auth.userId)) {
+        throw new AppError('VALIDATION_FAILED', { field: 'photo_key' }, 'Upload the photo again from this account.');
+      }
+      await verifyHandoverOtp(app, row, 'delivery', body.otp);
+      await db.query(`UPDATE handovers SET delivery_photo_key = $2, delivered_at = now() WHERE booking_id = $1`, [
+        row.id,
+        body.photo_key,
+      ]);
 
-    const fresh = await db.query<BookingRowFull>(`SELECT * FROM bookings WHERE id = $1`, [row.id]);
-    return reply.code(200).send(await renderBooking(app, fresh.rows[0]!, auth.userId));
-  });
+      await applyBookingTransition(app, row, 'confirm_delivery', 'traveller', {
+        actorId: auth.userId,
+        otpValid: true,
+        photoPresent: true,
+        metadata: { receiver_name_confirmed: body.receiver_name_confirmed ?? false },
+      });
+
+      const fresh = await db.query<BookingRowFull>(`SELECT * FROM bookings WHERE id = $1`, [row.id]);
+      return reply.code(200).send(await renderBooking(app, fresh.rows[0]!, auth.userId));
+    },
+  );
 
   app.post<{ Params: { bookingId: string } }>('/bookings/:bookingId/review', async (req, reply) => {
     const auth = requireAuth(req);

@@ -1,4 +1,4 @@
-import type { SVGProps } from 'react';
+import type { SVGProps } from "react";
 
 /**
  * Icon set. 24 px grid, 1.75 px stroke, rounded caps, single colour (`currentColor`).
@@ -201,9 +201,12 @@ export function InfoIcon(props: IconProps) {
   );
 }
 
-export function StarIcon({ filled = false, ...props }: IconProps & { filled?: boolean }) {
+export function StarIcon({
+  filled = false,
+  ...props
+}: IconProps & { filled?: boolean }) {
   return (
-    <Svg {...props} fill={filled ? 'currentColor' : 'none'}>
+    <Svg {...props} fill={filled ? "currentColor" : "none"}>
       <path d="m12 4 2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 9.7l5.4-.8Z" />
     </Svg>
   );
@@ -280,6 +283,53 @@ export function MenuIcon(props: IconProps) {
   return (
     <Svg {...props}>
       <path d="M4 7h16M4 12h16M4 17h16" />
+    </Svg>
+  );
+}
+
+export function AwardIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="12" cy="9.5" r="5.5" />
+      <path d="M9 14.2 7.5 20.5l4.5-2.4 4.5 2.4L15 14.2" />
+    </Svg>
+  );
+}
+
+export function TagIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M11.5 3.5H20v8.5l-8.7 8.7a1.6 1.6 0 0 1-2.3 0l-6.2-6.2a1.6 1.6 0 0 1 0-2.3Z" />
+      <path d="M16.2 7.8h.01" />
+    </Svg>
+  );
+}
+
+export function CoinsIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <ellipse cx="9" cy="7" rx="5.5" ry="2.8" />
+      <path d="M3.5 7v4.2c0 1.55 2.47 2.8 5.5 2.8s5.5-1.25 5.5-2.8V7" />
+      <path d="M9.5 16.6v.4c0 1.55 2.47 2.8 5.5 2.8s5.5-1.25 5.5-2.8v-4.2" />
+      <path d="M15 12.8c2.7-.3 4.8-1.4 4.8-2.8" />
+    </Svg>
+  );
+}
+
+export function ChatIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M4 6.5h16v10H13l-4.5 3.5V16.5H4Z" />
+      <path d="M8 10.5h8M8 13.2h5" />
+    </Svg>
+  );
+}
+
+export function SendIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M20.5 3.5 3.8 10.2l6.1 2.4 2.4 6.1Z" />
+      <path d="m9.9 12.6 4.4-4.4" />
     </Svg>
   );
 }

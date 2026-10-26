@@ -79,6 +79,7 @@ Envelope shape is defined once in `api/API_CONVENTIONS.md` §4.
 | `TRIP_CAPACITY_INVALID` | 422 | Capacity ≤ 0 or > 20 kg |
 | `NO_MATCH` | 409 | No eligible trip; **no price is returned** |
 | `TRIP_NOT_AVAILABLE` | 409 | Trip full, cancelled or expired |
+| `OPPORTUNITY_NOT_AVAILABLE` | 409 | Traveller offered for a parcel that no longer passes the hard gates; `details.reason` is the engine's rejection code |
 | `SELF_BOOKING_FORBIDDEN` | 403 | Sender is the trip's traveller |
 | `USER_BLOCKED` | 403 | Either party blocked the other |
 
@@ -96,6 +97,7 @@ Envelope shape is defined once in `api/API_CONVENTIONS.md` §4.
 | `ACCEPT_WINDOW_CLOSED` | 409 | Traveller accepted after `accept_by` | |
 | `PARCEL_HAS_ACTIVE_BOOKING` | 409 | Tried to withdraw a booked parcel | |
 | `TRIP_HAS_ACCEPTED_BOOKING` | 409 | Tried to cancel a trip with bookings | |
+| `CONVERSATION_CLOSED` | 409 | Chat is read-only once the delivery is closed | |
 
 ## 7. Handover & OTP
 

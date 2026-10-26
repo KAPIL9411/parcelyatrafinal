@@ -51,6 +51,7 @@ export type ErrorCode =
   | 'TRIP_CAPACITY_INVALID'
   | 'NO_MATCH'
   | 'TRIP_NOT_AVAILABLE'
+  | 'OPPORTUNITY_NOT_AVAILABLE'
   | 'SELF_BOOKING_FORBIDDEN'
   | 'USER_BLOCKED'
   | 'CAPACITY_UNAVAILABLE'
@@ -63,6 +64,7 @@ export type ErrorCode =
   | 'ACCEPT_WINDOW_CLOSED'
   | 'PARCEL_HAS_ACTIVE_BOOKING'
   | 'TRIP_HAS_ACCEPTED_BOOKING'
+  | 'TRIP_EDIT_BREAKS_BOOKING'
   | 'BOOKING_LOCKED'
   | 'OTP_NOT_APPLICABLE'
   | 'PHOTO_REQUIRED'
@@ -82,6 +84,7 @@ export type ErrorCode =
   | 'DISPUTE_CLOSED'
   | 'REVIEW_ALREADY_SUBMITTED'
   | 'REVIEW_WINDOW_CLOSED'
+  | 'CONVERSATION_CLOSED'
   | 'UPLOAD_INVALID_TYPE'
   | 'UPLOAD_TOO_LARGE'
   | 'WEBHOOK_SIGNATURE_INVALID'
@@ -147,6 +150,10 @@ export const ERROR_TABLE: Record<ErrorCode, Spec> = {
   TRIP_CAPACITY_INVALID: { status: 422, message: 'Capacity must be between 0 and 20 kg.' },
   NO_MATCH: { status: 409, message: 'No traveller matches this route and window yet.' },
   TRIP_NOT_AVAILABLE: { status: 409, message: 'That trip is no longer available.' },
+  OPPORTUNITY_NOT_AVAILABLE: {
+    status: 409,
+    message: 'This parcel no longer fits your trip. Refresh the list before offering again.',
+  },
   SELF_BOOKING_FORBIDDEN: { status: 403, message: 'You cannot book your own trip.' },
   USER_BLOCKED: { status: 403, message: 'This pairing is not available.' },
   CAPACITY_UNAVAILABLE: { status: 409, message: 'That traveller just filled up. Try another match.' },
@@ -159,6 +166,10 @@ export const ERROR_TABLE: Record<ErrorCode, Spec> = {
   ACCEPT_WINDOW_CLOSED: { status: 409, message: 'The 30-minute acceptance window has closed.' },
   PARCEL_HAS_ACTIVE_BOOKING: { status: 409, message: 'This parcel is already booked.' },
   TRIP_HAS_ACCEPTED_BOOKING: { status: 409, message: 'Cancel the booking first.' },
+  TRIP_EDIT_BREAKS_BOOKING: {
+    status: 409,
+    message: 'That change would leave a parcel you already accepted outside your trip.',
+  },
   BOOKING_LOCKED: { status: 423, message: 'This booking is locked while our team reviews it.' },
   OTP_NOT_APPLICABLE: { status: 409, message: 'That code is not used at this step.' },
   PHOTO_REQUIRED: { status: 400, message: 'A photo is required.' },
@@ -181,6 +192,7 @@ export const ERROR_TABLE: Record<ErrorCode, Spec> = {
   DISPUTE_CLOSED: { status: 409, message: 'This dispute is closed.' },
   REVIEW_ALREADY_SUBMITTED: { status: 409, message: 'You already rated this booking.' },
   REVIEW_WINDOW_CLOSED: { status: 409, message: 'The rating window has closed.' },
+  CONVERSATION_CLOSED: { status: 409, message: 'This delivery is closed, so the chat is read-only.' },
   UPLOAD_INVALID_TYPE: { status: 400, message: 'Upload a JPEG or PNG.' },
   UPLOAD_TOO_LARGE: { status: 400, message: 'Files must be 10 MB or smaller.' },
   WEBHOOK_SIGNATURE_INVALID: { status: 401, message: 'Signature check failed.' },

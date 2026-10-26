@@ -7,7 +7,7 @@ import { makeAuthenticate, requireRole } from '../lib/auth.ts';
 import { toIso, toIsoOrNull } from '../lib/serialize.ts';
 import { withDb } from '../lib/db-scope.ts';
 import { idempotencyKey, withIdempotency } from '../lib/idempotency.ts';
-import { audit } from '../services/audit.ts';
+import { audit, queueNotification } from '../services/audit.ts';
 import { signObjectKey } from '../lib/storage.ts';
 import { applyBookingTransition, type BookingRowFull } from './bookings.ts';
 
@@ -208,6 +208,15 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         before: { state: v.state },
         after: { state: nextState, reason_code: body.reason_code },
       });
+
+      // The person who submitted the ID is the one waiting on this. The reason code is a machine
+      // label, so the notification names the outcome and the verification page explains it.
+      if (body.decision !== 'request_more') {
+        await queueNotification(db, {
+          userId: v.user_id,
+          templateId: body.decision === 'approve' ? 'verification_approved' : 'verification_rejected',
+        });
+      }
 
       const refreshed = await db.query<{
         id: string;
@@ -695,6 +704,263 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
+  // ---------------------------------------------------------------- incidents
+  //
+  // `report_incident` is available to both parties from `picked_up`, `in_transit`, `arrived` and
+  // `delivery_attempt_failed`. Until this pair of routes existed, a booking could enter
+  // `incident_open` but nothing in the product could take it out: `compensate` and `clear` are
+  // support-only commands with no surface, so an escalated parcel stayed escalated forever with its
+  // payout frozen. An openable queue is the point.
+
+  const incidentQuery = z
+    .object({
+      state: z.enum(['incident_open', 'locked_for_review']).default('incident_open'),
+      limit: z.coerce.number().int().min(1).max(100).default(50),
+      offset: z.coerce.number().int().min(0).max(100_000).default(0),
+    })
+    .strict();
+
+  app.get('/admin/incidents', async (req) => {
+    requireRole(req, 'support_agent', 'trust_safety', 'admin_readonly');
+    const q = incidentQuery.parse(req.query);
+
+    const res = await db.query<{
+      id: string;
+      status: string;
+      parcel_id: string;
+      sender_name: string | null;
+      traveller_name: string | null;
+      agreed_total_paise: number;
+      payout_state: string;
+      updated_at: Date;
+      opened_at: Date | null;
+      opened_by_role: string | null;
+      reason_code: string | null;
+      capture_paise: string;
+    }>(
+      `SELECT b.id, b.status::text AS status, b.parcel_id, su.name AS sender_name, tu.name AS traveller_name,
+              b.agreed_total_paise, COALESCE(p.state,'not_eligible') AS payout_state, b.updated_at,
+              e.occurred_at AS opened_at, e.actor_kind AS opened_by_role, e.reason_code,
+              (SELECT COALESCE(SUM(l.amount_paise),0)::text FROM payment_ledger l
+                WHERE l.booking_id = b.id AND l.entry_type = 'capture') AS capture_paise
+       FROM bookings b
+       JOIN users su ON su.id = b.sender_id
+       JOIN users tu ON tu.id = b.traveller_id
+       LEFT JOIN payouts p ON p.booking_id = b.id
+       LEFT JOIN LATERAL (
+         SELECT ev.occurred_at, ev.actor_kind, ev.reason_code
+         FROM booking_events ev
+         WHERE ev.booking_id = b.id AND ev.to_state::text = $1
+         ORDER BY ev.occurred_at DESC LIMIT 1
+       ) e ON TRUE
+       WHERE b.status::text = $1
+       ORDER BY b.updated_at DESC
+       LIMIT $2 OFFSET $3`,
+      [q.state, q.limit, q.offset],
+    );
+
+    return {
+      items: res.rows.map((r) => ({
+        booking_id: r.id,
+        parcel_id: r.parcel_id,
+        status: r.status,
+        sender_name: r.sender_name,
+        traveller_name: r.traveller_name,
+        agreed_total_paise: r.agreed_total_paise,
+        captured_paise: Number(r.capture_paise),
+        payout_state: r.payout_state,
+        opened_at: r.opened_at ? toIso(r.opened_at) : null,
+        opened_by: r.opened_by_role,
+        reason_code: r.reason_code,
+        updated_at: toIso(r.updated_at),
+      })),
+      limit: q.limit,
+      offset: q.offset,
+    };
+  });
+
+  const resolveIncidentSchema = z
+    .object({
+      // `clear` = the parcel is accounted for and the traveller keeps their share.
+      // `compensate` = the sender is made whole; it only exists when money was actually captured.
+      action: z.enum(['clear', 'compensate']),
+      reason_code: z.string().min(1).max(64),
+      note: z.string().max(500).optional(),
+    })
+    .strict();
+
+  app.post<{ Params: { bookingId: string } }>('/admin/bookings/:bookingId/incident', async (req, reply) => {
+    const auth = requireRole(req, 'support_agent', 'trust_safety');
+    const body = resolveIncidentSchema.parse(req.body);
+
+    const found = await db.query<BookingRowFull>(`SELECT * FROM bookings WHERE id = $1`, [req.params.bookingId]);
+    const booking = found.rows[0];
+    if (!booking) throw new AppError('NOT_FOUND');
+    if (booking.status !== 'incident_open') {
+      throw new AppError('CONFLICT', { status: booking.status }, 'This booking is not an open incident.');
+    }
+
+    let refundId: string | null = null;
+
+    if (body.action === 'compensate') {
+      const captured = await db.query<{ total: string }>(
+        `SELECT COALESCE(SUM(amount_paise),0)::text AS total FROM payment_ledger
+         WHERE booking_id = $1 AND entry_type = 'capture'`,
+        [booking.id],
+      );
+      const capturedPaise = Number(captured.rows[0]?.total ?? 0);
+      if (capturedPaise === 0) {
+        // No capture means there is nothing to send back. Marking a booking `refunded` in that case
+        // would put a state in the database that no money agrees with.
+        throw new AppError(
+          'PAYMENT_NOT_PAYABLE',
+          { reason: 'no_captured_payment', booking_id: booking.id },
+          'Nothing was captured for this booking, so it cannot be compensated. Use "clear" once the parcel is accounted for.',
+        );
+      }
+
+      const payment = await db.query<{ id: string }>(
+        `SELECT id FROM payments WHERE booking_id = $1 AND state = 'captured' ORDER BY created_at DESC LIMIT 1`,
+        [booking.id],
+      );
+      const paymentId = payment.rows[0]?.id;
+      if (!paymentId) throw new AppError('PAYMENT_NOT_PAYABLE', { reason: 'no_captured_payment' });
+
+      const needsApproval = capturedPaise > config.DUAL_APPROVAL_THRESHOLD_PAISE;
+      const created = await db.query<{ id: string }>(
+        `INSERT INTO refunds (payment_id, amount_paise, reason_code, state, requested_by, note)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+        [
+          paymentId,
+          capturedPaise,
+          body.reason_code,
+          needsApproval ? 'pending_approval' : 'pending',
+          auth.userId,
+          body.note ?? null,
+        ],
+      );
+      refundId = created.rows[0]!.id;
+    }
+
+    await db.transaction(async (tx) => {
+      await applyBookingTransition(withDb(app, tx), booking, body.action, 'support', {
+        actorId: auth.userId,
+        reasonCode: body.reason_code,
+        supportRole: auth.roles.includes('trust_safety') ? 'trust_safety' : 'support_agent',
+        metadata: { refund_id: refundId, note: body.note ?? null },
+      });
+      await tx.query(
+        `UPDATE payouts SET state = $2::payout_state, frozen_reason = NULL WHERE booking_id = $1`,
+        [booking.id, body.action === 'clear' ? 'eligible' : 'void'],
+      );
+    });
+
+    await audit(db, {
+      actorId: auth.userId,
+      actorKind: 'support',
+      action: `incident.${body.action}`,
+      resource: 'booking',
+      resourceId: booking.id,
+      before: { status: booking.status },
+      after: { status: body.action === 'clear' ? 'payout_eligible' : 'refunded', reason_code: body.reason_code, refund_id: refundId },
+    });
+
+    return reply.code(200).send({
+      booking_id: booking.id,
+      action: body.action,
+      refund_id: refundId,
+      reason_code: body.reason_code,
+    });
+  });
+
+  // ---------------------------------------------------------------- chat review
+  //
+  // Staff read a booking's thread only through these two routes, and every read is audited. The
+  // thread is not on the public web: `GET /bookings/:id/conversation*` answers 404 for anyone who is
+  // not a member, staff included.
+
+  app.get<{ Params: { bookingId: string } }>('/admin/bookings/:bookingId/messages', async (req) => {
+    const auth = requireRole(req, 'support_agent', 'trust_safety', 'admin_readonly');
+    const booking = await db.query<{ id: string }>(`SELECT id FROM bookings WHERE id = $1`, [req.params.bookingId]);
+    if (!booking.rows[0]) throw new AppError('NOT_FOUND');
+
+    const res = await db.query<{
+      id: string;
+      kind: string;
+      body: string;
+      sender_name: string | null;
+      sender_role: string | null;
+      created_at: Date;
+      removed_at: Date | null;
+      removed_reason: string | null;
+    }>(
+      `SELECT m.id, m.kind, m.body, u.name AS sender_name, cm.role::text AS sender_role,
+              m.created_at, m.removed_at, m.removed_reason
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id AND c.booking_id = $1
+       JOIN users u ON u.id = m.sender_id
+       LEFT JOIN conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.user_id = m.sender_id
+       ORDER BY m.created_at ASC, m.id ASC
+       LIMIT 500`,
+      [req.params.bookingId],
+    );
+
+    await audit(db, {
+      actorId: auth.userId,
+      actorKind: 'support',
+      action: 'admin.conversation_read',
+      resource: 'booking',
+      resourceId: req.params.bookingId,
+      after: { message_count: res.rows.length },
+    });
+
+    return {
+      booking_id: req.params.bookingId,
+      items: res.rows.map((r) => ({
+        id: r.id,
+        kind: r.kind,
+        body: r.body,
+        sender_name: r.kind === 'system' ? 'Parcel Yatra' : (r.sender_name ?? 'A member'),
+        sender_role: r.sender_role,
+        created_at: toIso(r.created_at),
+        removed_at: r.removed_at ? toIso(r.removed_at) : null,
+        removed_reason: r.removed_reason,
+      })),
+    };
+  });
+
+  const removeMessageSchema = z.object({ reason_code: z.string().min(1).max(64) }).strict();
+
+  app.post<{ Params: { messageId: string } }>('/admin/messages/:messageId/remove', async (req, reply) => {
+    const auth = requireRole(req, 'trust_safety');
+    const body = removeMessageSchema.parse(req.body);
+
+    const found = await db.query<{ id: string; removed_at: Date | null }>(
+      `SELECT removed_at FROM messages WHERE id = $1`,
+      [req.params.messageId],
+    );
+    const message = found.rows[0];
+    if (!message) throw new AppError('NOT_FOUND');
+    // Refuse rather than re-stamp: a second removal would silently rewrite the moderation record.
+    if (message.removed_at) throw new AppError('CONFLICT', { reason: 'already_removed' });
+
+    await db.query(`UPDATE messages SET removed_at = now(), removed_by = $2, removed_reason = $3 WHERE id = $1`, [
+      req.params.messageId,
+      auth.userId,
+      body.reason_code,
+    ]);
+    await audit(db, {
+      actorId: auth.userId,
+      actorKind: 'support',
+      action: 'message.removed',
+      resource: 'message',
+      resourceId: req.params.messageId,
+      after: { reason_code: body.reason_code },
+    });
+
+    return reply.code(200).send({ id: req.params.messageId, removed: true, reason_code: body.reason_code });
+  });
+
   // ---------------------------------------------------------------- audit log
 
   app.get('/admin/audit-log', async (req) => {
@@ -770,7 +1036,11 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   });
 }
 
-async function isPayoutEligible(app: FastifyInstance, booking: BookingRowFull): Promise<boolean> {
+/**
+ * Whether the money may actually leave. Shared with the webhook handler: a provider message saying a
+ * payout succeeded is a report, not an authorisation, so both paths ask the same questions.
+ */
+export async function isPayoutEligible(app: FastifyInstance, booking: BookingRowFull): Promise<boolean> {
   if (booking.status !== 'payout_eligible') return false;
 
   const dispute = await app.db.query(

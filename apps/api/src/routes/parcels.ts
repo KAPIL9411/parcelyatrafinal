@@ -43,7 +43,7 @@ const createSchema = z
   })
   .strict();
 
-interface CityRow {
+export interface CityRow {
   id: string;
   name: string;
   state: string;
@@ -52,7 +52,7 @@ interface CityRow {
   is_serviceable: boolean;
 }
 
-interface ParcelRowFull {
+export interface ParcelRowFull {
   id: string;
   sender_id: string;
   status: string;
@@ -73,11 +73,11 @@ interface ParcelRowFull {
 }
 
 /** Area names are free text; distances are only ever carried to one decimal. */
-function round1(v: number): number {
+export function round1(v: number): number {
   return Math.round(v * 10) / 10;
 }
 
-async function loadCity(app: FastifyInstance, id: string): Promise<CityRow> {
+export async function loadCity(app: FastifyInstance, id: string): Promise<CityRow> {
   const res = await app.db.query<CityRow>(`SELECT * FROM cities WHERE id = $1`, [id]);
   const row = res.rows[0];
   if (!row) throw new AppError('CITY_NOT_SERVICED', { city_id: id });
@@ -191,10 +191,133 @@ export async function parcelRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(decision.reviewRequired ? 202 : 201).send(parcelView(inserted.rows[0]! as never));
   });
 
+  /**
+   * The sender's own parcels, newest first.
+   *
+   * Without this the send wizard is the only place a parcel is ever visible: post it, close the tab,
+   * and there is no way back to it — including when a traveller offers to carry it hours later. Each
+   * row carries the offer count and the booking it resulted in so the list can say what needs
+   * attention instead of leaving the account holder to guess.
+   */
+  app.get('/parcels', async (req) => {
+    const auth = requireAuth(req);
+    const q = z
+      .object({
+        status: z.enum(['draft', 'posted', 'matched', 'ineligible', 'cancelled', 'closed']).optional(),
+        limit: z.coerce.number().int().min(1).max(50).default(20),
+      })
+      .strict()
+      .parse(req.query);
+
+    const params: unknown[] = [auth.userId];
+    let where = `p.sender_id = $1`;
+    if (q.status) {
+      params.push(q.status);
+      where += ` AND p.status = $${params.length}`;
+    }
+    params.push(q.limit);
+
+    const res = await db.query<
+      ParcelRowFull & { interests_count: number; booking_id: string | null; booking_status: string | null }
+    >(
+      `SELECT p.*,
+              (SELECT count(*) FROM trip_interests i WHERE i.parcel_id = p.id)::int AS interests_count,
+              b.id AS booking_id,
+              b.status::text AS booking_status
+       FROM parcels p
+       LEFT JOIN LATERAL (
+         SELECT id, status FROM bookings bs
+          WHERE bs.parcel_id = p.id
+            AND bs.status NOT IN ('cancelled_by_sender','cancelled_by_traveller','cancelled_ineligible',
+                                  'cancelled_safety','expired','refunded','paid_out')
+          ORDER BY bs.created_at DESC LIMIT 1
+       ) b ON true
+       WHERE ${where}
+       ORDER BY p.created_at DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+
+    return {
+      items: res.rows.map((row) => ({
+        ...parcelView(row as never),
+        interests_count: row.interests_count,
+        booking_id: row.booking_id,
+        booking_status: row.booking_status,
+      })),
+    };
+  });
+
   app.get<{ Params: { parcelId: string } }>('/parcels/:parcelId', async (req) => {
     const auth = requireAuth(req);
     const row = await loadOwnedParcel(app, req.params.parcelId, auth.userId);
-    return parcelView(row as never);
+    // The parcel page has to say whether the work is already taken, and get you to the booking that
+    // took it. Without these two fields the page can only re-derive it from the matches endpoint.
+    const held = await db.query<{ booking_id: string | null; booking_status: string | null }>(
+      `SELECT id AS booking_id, status::text AS booking_status FROM bookings
+       WHERE parcel_id = $1
+         AND status NOT IN ('cancelled_by_sender','cancelled_by_traveller','cancelled_ineligible',
+                            'cancelled_safety','expired','refunded','paid_out')
+       ORDER BY created_at DESC LIMIT 1`,
+      [row.id],
+    );
+    return {
+      ...parcelView(row as never),
+      booking_id: held.rows[0]?.booking_id ?? null,
+      booking_status: held.rows[0]?.booking_status ?? null,
+    };
+  });
+
+  /**
+   * Travellers who have offered to carry this parcel. The sender's side of the same table the
+   * traveller writes to; it is only ever read by the parcel's own owner, and it names the traveller
+   * because choosing them is the action the list exists for.
+   */
+  app.get<{ Params: { parcelId: string } }>('/parcels/:parcelId/interests', async (req) => {
+    const auth = requireAuth(req);
+    const parcel = await loadOwnedParcel(app, req.params.parcelId, auth.userId);
+
+    const res = await db.query<{
+      id: string;
+      trip_id: string;
+      traveller_id: string;
+      created_at: Date;
+      name: string | null;
+      mode: string;
+      origin_area: string | null;
+      departure_at: Date;
+      arrival_estimate_at: Date;
+      capacity_kg_remaining: unknown;
+      trip_status: string;
+      verification_state: string | null;
+    }>(
+      `SELECT i.id, i.trip_id, i.traveller_id, i.created_at, u.name,
+              t.mode::text AS mode, t.origin_area, t.departure_at, t.arrival_estimate_at,
+              t.capacity_kg_remaining, t.status::text AS trip_status,
+              (SELECT state FROM verifications v WHERE v.user_id = i.traveller_id ORDER BY v.created_at DESC LIMIT 1) AS verification_state
+       FROM trip_interests i
+       JOIN users u ON u.id = i.traveller_id
+       JOIN trips t ON t.id = i.trip_id
+       WHERE i.parcel_id = $1
+       ORDER BY i.created_at`,
+      [parcel.id],
+    );
+
+    return {
+      parcel_id: parcel.id,
+      items: res.rows.map((r) => ({
+        trip_id: r.trip_id,
+        traveller_first_name: r.name ? r.name.trim().split(/\s+/)[0] ?? null : null,
+        verification_state: r.verification_state ?? 'not_started',
+        mode: r.mode,
+        origin_area: r.origin_area,
+        departure_at: toIso(r.departure_at),
+        arrival_estimate_at: toIso(r.arrival_estimate_at),
+        capacity_kg_remaining: num(r.capacity_kg_remaining),
+        trip_status: r.trip_status,
+        offered_at: toIso(r.created_at),
+      })),
+    };
   });
 
   app.delete<{ Params: { parcelId: string } }>('/parcels/:parcelId', async (req, reply) => {
@@ -337,7 +460,7 @@ async function loadCorridor(app: FastifyInstance, parcel: ParcelRowFull): Promis
  * Cities whose centroid lies within `km` of the parcel's origin city, by lat/lng box. The box is a
  * cheap prefilter; the engine itself measures the great-circle distance and applies the limit again.
  */
-async function nearbyCityIds(app: FastifyInstance, origin: CityRow, km: number): Promise<string[]> {
+export async function nearbyCityIds(app: FastifyInstance, origin: CityRow, km: number): Promise<string[]> {
   if (km <= 0) return [origin.id];
   const lat = Number(origin.lat);
   const lng = Number(origin.lng);

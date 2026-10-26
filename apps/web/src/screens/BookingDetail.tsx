@@ -34,6 +34,7 @@ import {
   cn,
 } from '../components/ui';
 import { Chip, PayoutChip, StatusChip, VerificationChip } from '../components/StatusChip';
+import { ChatPanel } from '../components/ChatPanel';
 import { OtpInput } from '../components/OtpInput';
 import { LastUpdated, Timeline } from '../components/Timeline';
 import { RouteLine } from '../components/RouteLine';
@@ -151,7 +152,7 @@ export function BookingDetail() {
               meta={
                 booking.pickup_window_start && booking.pickup_window_end
                   ? formatWindow(booking.pickup_window_start, booking.pickup_window_end)
-                  : 'Pickup window shared in messages'
+                  : 'No pickup time set — agree one in the chat below'
               }
             />
           </div>
@@ -191,6 +192,8 @@ export function BookingDetail() {
       </Card>
 
       <ActionPanel booking={booking} role={role} onChanged={refresh} />
+
+      <ChatPanel bookingId={booking.id} />
 
       <Card>
         <SectionHeading title="Status history" description="Updates come from the people involved, not from a map." />
@@ -390,9 +393,7 @@ function ActionPanel({
       ) : null}
 
       {booking.status === 'arrived' && role === 'sender' ? (
-        <Banner tone="info" title="The traveller has arrived">
-          The receiver will get a six-digit delivery code. Share it with them, not with the traveller.
-        </Banner>
+        <SenderCodePanel booking={booking} phase="delivery" onChanged={onChanged} />
       ) : null}
 
       {booking.status === 'delivery_attempt_failed' && role === 'traveller' ? (
@@ -403,9 +404,15 @@ function ActionPanel({
             code.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
-            <Button variant="secondary" loading={acting === 'escalate'} onClick={() => void act('escalate')}>
-              Ask support to step in
-            </Button>
+            {booking.allowed_commands.includes('report_incident') ? (
+              <Button
+                variant="secondary"
+                loading={acting === 'report_incident'}
+                onClick={() => void act('report_incident')}
+              >
+                Open a case
+              </Button>
+            ) : null}
             <Link to="/help">
               <Button variant="tertiary">Contact support</Button>
             </Link>
@@ -486,21 +493,31 @@ function ActionPanel({
 // ---------------------------------------------------------------------------- payment
 
 function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Promise<void> }) {
-  const [state, setState] = useState<'idle' | 'creating' | 'confirming' | 'done'>('idle');
+  const [state, setState] = useState<'idle' | 'creating' | 'confirming' | 'done' | 'awaiting'>('idle');
   const [error, setError] = useState<unknown>(null);
+  const [intent, setIntent] = useState<PaymentIntent | null>(null);
 
   async function pay() {
     setState('creating');
     setError(null);
     try {
-      const intent = await api.post<PaymentIntent>(`/bookings/${booking.id}/payment-intent`, {});
+      const created = await api.post<PaymentIntent>(`/bookings/${booking.id}/payment-intent`, {});
+      setIntent(created);
       setState('confirming');
+
+      if (!import.meta.env.DEV) {
+        // A capture can only come from the provider's signed webhook, and no provider checkout is
+        // wired into this build. The intent stays open and the booking stays unpaid — which is the
+        // truth, not a failure to paper over.
+        setState('awaiting');
+        return;
+      }
 
       // There is no provider UI in this build. The sandbox adapter is driven by the same signed
       // webhook a real provider would call, through the development simulator.
       await api.post('/dev/webhooks/simulate', {
         type: 'payment.captured',
-        provider_ref: intent.provider_ref,
+        provider_ref: created.provider_ref,
       });
 
       await onPaid();
@@ -522,15 +539,28 @@ function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Pro
         </div>
       </div>
 
-      <Banner tone="info" className="mt-4" title="Sandbox payments">
-        This build uses a test payment provider. The booking moves forward exactly as it would after a real
-        capture, and nothing leaves a bank account.
-      </Banner>
+      {import.meta.env.DEV ? (
+        <Banner tone="info" className="mt-4" title="Sandbox payments">
+          This build uses a test payment provider. The booking moves forward exactly as it would after a real
+          capture, and nothing leaves a bank account.
+        </Banner>
+      ) : null}
 
       {state === 'confirming' ? (
         <p className="mt-4 flex items-center gap-2 text-sm font-semibold text-ink-900">
           <ClockIcon size={18} className="text-brand-700" /> Confirming with the payment provider…
         </p>
+      ) : null}
+
+      {state === 'awaiting' ? (
+        <Banner tone="warn" className="mt-4" title="Payment started, not taken">
+          <span className="block">
+            A payment of {inr(intent?.amount_paise ?? booking.agreed_total_paise)} was created but no money has moved,
+            because this build has no checkout connected to a real payment provider. The booking stays unpaid until a
+            capture webhook arrives from the provider.
+          </span>
+          <span className="mt-1 block tabular text-xs text-ink-500">Payment reference {intent?.id?.slice(0, 8) ?? '—'}</span>
+        </Banner>
       ) : null}
 
       {state === 'done' ? <SuccessPanel title="Payment confirmed">Your booking is confirmed.</SuccessPanel> : null}
@@ -539,7 +569,7 @@ function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Pro
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <Button size="lg" loading={state === 'creating' || state === 'confirming'} disabled={state === 'done'} onClick={() => void pay()}>
-          Pay {inr(booking.agreed_total_paise)}
+          {state === 'awaiting' ? 'Try again' : `Pay ${inr(booking.agreed_total_paise)}`}
         </Button>
         <span className="text-xs text-ink-500">
           Amount set by the server from the stored quote. A client-supplied amount is ignored.
@@ -625,7 +655,7 @@ function SenderCodePanel({
         </Button>
         <Link to="/help">
           <Button variant="tertiary" size="sm">
-            Traveller is late
+            {pickup ? 'Traveller is late' : 'Receiver cannot be reached'}
           </Button>
         </Link>
       </div>

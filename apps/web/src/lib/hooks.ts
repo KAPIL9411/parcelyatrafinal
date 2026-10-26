@@ -1,7 +1,17 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
-import { api, ApiError, type AppConfig, type Area, type City, type DevOtp } from './api';
+import {
+  api,
+  ApiError,
+  type AppConfig,
+  type Area,
+  type ChatThread,
+  type City,
+  type DevOtp,
+  type Inbox,
+  type NotificationItem,
+} from './api';
 
 export function useOnline(): boolean {
   const [online, setOnline] = useState(() => (typeof navigator === 'undefined' ? true : navigator.onLine));
@@ -120,4 +130,42 @@ export function useDevCode(path: string | null, options: { enabled?: boolean; au
   }, [path, enabled, auth]);
 
   return code;
+}
+
+/**
+ * The booking's chat thread, polled rather than pushed.
+ *
+ * This stack has no websocket and no configured push service, so polling is the honest way to move a
+ * message from one party to the other. Ten seconds is short enough that neither side waits on a
+ * manual refresh and cheap enough to leave running while the booking is open.
+ */
+export function useChatThread(bookingId: string, enabled = true) {
+  return useQuery({
+    queryKey: ['chat', bookingId],
+    queryFn: () => api.get<ChatThread>(`/bookings/${bookingId}/conversation/messages?limit=100`),
+    enabled,
+    refetchInterval: 10_000,
+  });
+}
+
+/** Unread chat count for the badge in the app chrome. */
+export function useUnreadChats(enabled = true) {
+  return useQuery({
+    queryKey: ['conversations', 'badge'],
+    queryFn: () => api.get<Inbox>('/conversations?limit=1'),
+    enabled,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+}
+
+/** Unread notification count for the same badge. */
+export function useUnreadNotifications(enabled = true) {
+  return useQuery({
+    queryKey: ['notifications', 'badge'],
+    queryFn: () => api.get<{ items: NotificationItem[]; unread_count: number }>('/notifications?limit=1'),
+    enabled,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
 }

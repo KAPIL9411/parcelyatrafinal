@@ -32,7 +32,29 @@ function check(name, condition, detail) {
   }
 }
 
-async function call(method, path, { token, body, idempotencyKey } = {}) {
+/**
+ * A throttled call is waited out, read or write, by `call` itself, in every harness.
+ *
+ * The write budget is 60/min per address, the read budget 300/min, and every harness here shares those
+ * pools, plus any
+ * browser left open on the app. A run that fails because the previous suite spent the budget measures
+ * nothing about the product, and the failure it prints is a lie. The refusal arrives from a preHandler
+ * before the route runs, so nothing was created and the retry is safe.
+ */
+async function call(method, path, opts) {
+  for (let attempt = 0; ; attempt += 1) {
+    const res = await rawCall(method, path, opts);
+    if (res.status !== 429 || attempt >= 5) return res;
+    const wait = Number(res.headers.get('retry-after') ?? '5') + 2;
+    // A window we can sit out is waited: the shared read and write budgets name at most a minute. A per-route
+    // hourly limit hands the refusal straight back instead of making the harness sleep on it.
+    if (wait > 75) return res;
+    console.log(`  ---- ${method} ${path} throttled; waiting ${wait}s for the rate-limit window`);
+    await new Promise((resolve) => setTimeout(resolve, wait * 1000));
+  }
+}
+
+async function rawCall(method, path, { token, body, idempotencyKey } = {}) {
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: {
@@ -49,7 +71,21 @@ async function call(method, path, { token, body, idempotencyKey } = {}) {
   } catch {
     json = { raw: text };
   }
-  return { status: res.status, body: json };
+  return { status: res.status, body: json, headers: res.headers };
+}
+
+/** Positional shorthand for an auth write; the throttling itself now lives in `call`. */
+async function writeInRoom(path, body, token) {
+  return call('POST', path, { body, ...(token ? { token } : {}) });
+}
+
+/**
+ * The long-lived credential is only ever handed out in an HttpOnly cookie — `/auth/otp/verify` answers
+ * `access_token` and nothing else. A harness that reads the body for a refresh token caches undefined
+ * and then silently falls back to a fresh OTP on every run.
+ */
+function refreshCookieFrom(res) {
+  return /py_refresh=([^;,]+)/.exec(res.headers.get('set-cookie') ?? '')?.[1] ?? null;
 }
 
 async function signIn(phone) {
@@ -62,13 +98,11 @@ async function signIn(phone) {
   const cached = cache[phone]?.access_token;
   if (cached && (await call('GET', '/me', { token: cached })).status === 200) return cached;
 
-  const request = await call('POST', '/auth/otp/request', { body: { phone, purpose: 'login' } });
+  const request = await writeInRoom('/auth/otp/request', { phone, purpose: 'login' });
   const peek = await call('GET', `/dev/otp/${request.body.challenge_id}`);
-  const verify = await call('POST', '/auth/otp/verify', {
-    body: { challenge_id: request.body.challenge_id, code: peek.body.code },
-  });
+  const verify = await writeInRoom('/auth/otp/verify', { challenge_id: request.body.challenge_id, code: peek.body.code });
   if (verify.status !== 200) throw new Error(`sign-in failed: ${verify.status} ${JSON.stringify(verify.body)}`);
-  cache[phone] = { access_token: verify.body.access_token, refresh_token: verify.body.refresh_token };
+  cache[phone] = { access_token: verify.body.access_token, refresh_token: refreshCookieFrom(verify) };
   writeFileSync(TOKEN_CACHE, JSON.stringify(cache, null, 2));
   return verify.body.access_token;
 }

@@ -20,7 +20,16 @@ import { applyBookingTransition, ensureHandoverOtp, type BookingRowFull } from '
 
 const simulateSchema = z
   .object({
-    type: z.enum(['payment.authorised', 'payment.captured', 'payment.failed', 'payment.refunded']),
+    // Payout events are simulable on purpose: the refusal path is the thing worth proving, and a
+    // sandbox that can only send the happy types cannot test it.
+    type: z.enum([
+      'payment.authorised',
+      'payment.captured',
+      'payment.failed',
+      'payment.refunded',
+      'payout.succeeded',
+      'payout.failed',
+    ]),
     provider_ref: z.string().min(1).max(128),
     event_id: z.string().min(1).max(128).optional(),
   })
@@ -33,10 +42,17 @@ export async function devRoutes(app: FastifyInstance): Promise<void> {
 
   // ---- OTP peek. Only the in-memory dev store is read; the database holds HMACs only.
 
+  // This hands out a live login credential, so it answers only to the machine that runs the process.
+  // A dev server reachable from anywhere else would be a way into any account that ever asked for a
+  // code, which is precisely what the automated journeys need to be able to do locally and nothing
+  // else needs at all.
+  const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
   app.get<{ Params: { challengeId: string } }>(
     '/dev/otp/:challengeId',
     { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
     async (req) => {
+      if (!LOOPBACK.has(req.socket.remoteAddress ?? '')) throw new AppError('NOT_FOUND');
       const hit = recallCode(req.params.challengeId);
       if (!hit) throw new AppError('NOT_FOUND', { reason: 'code_not_in_dev_store' });
       return { challenge_id: req.params.challengeId, code: hit.code, kind: hit.kind, sandbox: true };
@@ -47,8 +63,19 @@ export async function devRoutes(app: FastifyInstance): Promise<void> {
     '/dev/handover-otp/:bookingId/:phase',
     { preHandler: authenticate },
     async (req) => {
+      const auth = requireAuth(req);
       const phase = req.params.phase === 'pickup' || req.params.phase === 'delivery' ? req.params.phase : null;
       if (!phase) throw new AppError('VALIDATION_FAILED', { reason: 'phase' });
+
+      // Being logged in is not enough: this returns a live handover code. The dev route has to
+      // respect the same party check as the real one, or a dev-flagged deployment leaks every
+      // booking's pickup and delivery codes to every account.
+      const party = await db.query<{ id: string }>(
+        `SELECT id FROM bookings WHERE id = $1 AND (sender_id = $2 OR traveller_id = $2)`,
+        [req.params.bookingId, auth.userId],
+      );
+      if (party.rows.length === 0) throw new AppError('NOT_FOUND');
+
       const hit = recallCode(`${req.params.bookingId}:${phase}`);
       if (!hit) throw new AppError('NOT_FOUND', { reason: 'code_not_in_dev_store' });
       return { booking_id: req.params.bookingId, phase, code: hit.code, sandbox: true };

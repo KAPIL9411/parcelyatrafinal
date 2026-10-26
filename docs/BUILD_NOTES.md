@@ -47,7 +47,8 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
 | DEFECT-019 | Presentation | Web UI | Sandbox badge and seeded demo numbers removed from the chrome; tokens and type scale retuned for a calmer launch look; landing limits read from `GET /v1/config`. |
 | DEFECT-020 | Presentation | Web UI | Homepage rebuilt around a functional booking panel (live cities, weight, category) that hands off to `/send` via query-param prefill; Porter/Rapido investigation summarised with evidence and stated limits; tracking and driver-onboarding paths surfaced on the landing page. |
 | DEFECT-021 | Presentation | Web UI | Sign-in page: the two auth cards now stretch to equal height on desktop (grid `align-items` default instead of `items-start`, `h-full` navy panel) and stack on mobile; the placeholder Google glyph was replaced with the official four-colour Google G mark (`#EA4335`/`#4285F4`/`#FBBC05`/`#34A853`). |
-| DEFECT-022 | Presentation | Web UI | Landing hero: the user-supplied cityscape image (`hero-background.png`) is the hero background (`cover`/`center`/`no-repeat`, subtle 25% navy overlay), visible on both sides of the navy card; the card is flush with the hero's bottom edge so the grey strip below it is gone; `overflow-x: clip` on `html` absorbs the scrollbar-width overflow of the full-bleed breakout. |
+| DEFECT-022 | Presentation | Web UI | Landing hero: the user-supplied cityscape image (`hero-background.png`) is the hero background (`cover`/`center`/`no-repeat`, subtle 25% navy overlay), visible on both sides of the navy card; the card is flush with the hero's bottom edge so the grey strip below it is gone; `overflow-x: clip` on `html` absorbs the scrollbar-width overflow of the full-bleed breakout. **Superseded by DEFECT-023**, which removed the viewport-unit breakout entirely. |
+| DEFECT-023 | Presentation | Web UI | Homepage redesigned around a reference visual language: curved full-bleed navy hero with the cityscape layered under a navy scrim, centred headline, pill booking bar, and a row of six floating category cards straddling the curve; below-the-fold re-rhythmed with a centred section heading and four feature cards. Full-bleed is now achieved by giving the `/` route its own un-boxed `<main>` instead of viewport-unit negative margins. |
 
 ### DEFECT-001 — traveller-share cap basis
 
@@ -436,6 +437,57 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
   capture confirms the stacked layout with the image visible at the frame edges. In-browser
   checks confirm the swap control and the signed-out submit → `/login?next=/send?…` prefill flow
   still work. Typecheck and `vite build` pass.
+
+---
+
+### DEFECT-023 — Homepage redesigned against a reference visual language
+
+- **OBSERVED:** DEFECT-022's hero was a rectangular navy panel bled to the viewport with
+  `-mx-[calc((100svw-100%)/2)]`. Two problems followed from that: the breakout is one viewport
+  unit wide in Chrome when a classic scrollbar is reserved (`100svw` = window width, `clientWidth`
+  = window − 15px), which cost the right-hand gutter on narrow screens, and the page read as a
+  plain block — no shape, no overlapping elements, weak hierarchy below the fold.
+- **CHANGED (presentation only):**
+  - `Layout.tsx`: `<main>` is now conditional on the route. `/` gets an un-boxed
+    `flex-1 pb-28 md:pb-16` and the landing page owns its own containers; every other route keeps
+    the previous `max-w-6xl px-4 pt-8` box, so no other screen's layout moved. This is what makes
+    the hero full-bleed — the viewport-unit negative margin and its scrollbar error are gone.
+  - `index.css`: new `.hero-panel` utility layers the supplied cityscape under a navy scrim
+    (`linear-gradient(180deg, rgb(10 23 48/.8) → rgb(7 15 30/.95)`) over `url('/hero-background.png')`,
+    `cover`/`center`/`no-repeat`) and gives the section an elliptical bottom edge
+    (`border-bottom-left/right-radius: 50vw 2.5rem`, `50vw 5rem` at `sm`). Added a `--shadow-float`
+    token for the lifted form and card hover. `overflow-x: clip` on `html` is retained as a
+    belt-and-braces guard for the card strip's bleed, not as an overflow workaround.
+  - `Landing.tsx`: hero content is centred (eyebrow pill, headline with a `text-brand-200` accent
+    phrase, subcopy, the `GET /v1/config` limits row) and the booking form became a wide lifted bar
+    — pickup city, swap, destination on one row at `md`, weight and category below, full-width CTA.
+    Six floating cards (Documents, Certificates, Business samples, Low-value accessories,
+    Travelling & earning, Track a parcel) sit at `-mt-16 sm:-mt-24` so they straddle the curve;
+    they are equal-height (`h-full` in a grid; a snap-scrolling flex row below `sm`). Below the fold
+    a centred section heading plus four feature cards precede the existing three-step,
+    what's-included, prohibited-items and tracking/driver sections, which were kept and re-spaced.
+  - `icons.tsx`: added `AwardIcon`, `TagIcon`, `CoinsIcon` in the existing house style (24px grid,
+    1.75px stroke, `currentColor`); no emoji were introduced.
+- **Deliberate content deviation:** the reference is a shopping directory, and the requested card
+  set included "Electronics". `packages/domain/src/enums.ts` lists `electronics`, `laptop`,
+  `mobile_phone` and `battery` under `PROHIBITED_CATEGORY_KEYS`, so that card would have advertised
+  something the API rejects. The card is `electronics_accessories_low_value` instead — the closest
+  offerable category, which is itself soft-restricted (rule E8, human review). Likewise the
+  "delivery tracking" feature is worded as **Recorded status** with "Live vehicle location is not
+  offered", because the product does not track location. Every card links to a route that exists
+  (`/send?category=…`, `/trips/new`, `/bookings`), wrapped in `/login?next=…` when signed out.
+- **Consequence:** no booking, matching, auth, validation or API behaviour changed. Verified in the
+  running app at 623px (`scrollWidth === clientWidth`, hero spans exactly the client width, form
+  gutters 16px both sides, all six cards 129px tall and horizontally scrollable) and by pixel
+  profiling 768px and 1280px captures (symmetric gutters, symmetric curve, equal-height card rows).
+  Functional checks: swap exchanges the two city IDs; same-city submit shows the validation alert;
+  a valid signed-out submit lands on
+  `/login?next=/send?origin=…&dest=…&weight=1.5&category=documents`. Typecheck, `vite build`,
+  domain tests and API tests pass. There is no lint script in this repo.
+- **Verification caveat:** headless Chrome at `--window-size=390` lays the page out ~15px wider than
+  the captured image when a classic scrollbar is reserved, so pixel measurements taken from a 390px
+  screenshot overstate right-edge clipping. Geometry was therefore confirmed from live DOM
+  metrics, with screenshots used only for appearance.
 
 ---
 

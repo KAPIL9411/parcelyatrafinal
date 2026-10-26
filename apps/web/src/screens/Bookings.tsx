@@ -4,12 +4,12 @@ import { useQuery } from '@tanstack/react-query';
 
 import { CATEGORY_LABELS, MODE_LABELS, type Category } from '@py/domain';
 
-import { api, type BookingSummary } from '../lib/api';
-import { formatDateTime, inr, timeAgo } from '../lib/format';
-import { useDocumentTitle } from '../lib/hooks';
+import { api, type BookingSummary, type ParcelList, type ParcelSummary } from '../lib/api';
+import { formatDateTime, formatWindow, inr, kg, timeAgo } from '../lib/format';
+import { useCities, useDocumentTitle } from '../lib/hooks';
 import { useSession } from '../lib/session';
 import { Button, Card, EmptyState, ErrorPanel, LoadingBlock, SectionHeading, Skeleton, cn } from '../components/ui';
-import { StatusChip } from '../components/StatusChip';
+import { Chip, StatusChip } from '../components/StatusChip';
 import { ArrowRightIcon, CarIcon, ParcelIcon } from '../components/icons';
 
 interface BookingList {
@@ -44,6 +44,7 @@ const OPEN_STATUSES = new Set([
 export function Bookings() {
   useDocumentTitle('My parcels');
   const { user } = useSession();
+  const cities = useCities();
   const [filter, setFilter] = useState<Filter>('all');
 
   const query = useQuery({
@@ -54,9 +55,26 @@ export function Bookings() {
     refetchInterval: 30_000,
   });
 
+  /**
+   * Parcels that are posted but not yet booked. A booking only exists once the sender picks someone,
+   * so before that moment the parcel is invisible in the list below — including to the sender who is
+   * waiting for a traveller to offer. This is where those live.
+   */
+  const parcels = useQuery({
+    queryKey: ['parcels', 'mine'],
+    queryFn: () => api.get<ParcelList>('/parcels?limit=50'),
+    enabled: Boolean(user),
+    refetchInterval: 60_000,
+  });
+
+  const awaitingChoice = (parcels.data?.items ?? []).filter(
+    (p) => !p.booking_id && (p.status === 'posted' || p.status === 'matched'),
+  );
+
   const items = query.data?.items ?? [];
   const open = items.filter((item) => OPEN_STATUSES.has(item.status));
   const past = items.filter((item) => !OPEN_STATUSES.has(item.status));
+  const cityName = (id: string) => cities.data?.find((c) => c.id === id)?.name ?? 'City';
 
   return (
     <div className="mx-auto max-w-3xl space-y-5">
@@ -95,6 +113,29 @@ export function Bookings() {
           </button>
         ))}
       </div>
+
+      {filter !== 'traveller' && parcels.isSuccess && awaitingChoice.length > 0 ? (
+        <section aria-labelledby="awaiting-choice">
+          <SectionHeading
+            title="Posted, waiting for you to choose"
+            description="No booking on these yet. Open one to see which travellers have offered to carry it."
+          />
+          <div className="space-y-3">
+            {awaitingChoice.map((parcel) => (
+              <ParcelRow
+                key={parcel.id}
+                parcel={parcel}
+                originCity={cityName(parcel.origin_city_id)}
+                destCity={cityName(parcel.dest_city_id)}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {filter !== 'traveller' && parcels.isError ? (
+        <ErrorPanel error={parcels.error} onRetry={() => void parcels.refetch()} />
+      ) : null}
 
       {query.isLoading ? (
         <div className="space-y-3">
@@ -165,8 +206,57 @@ export function Bookings() {
   );
 }
 
-function BookingRow({ booking }: { booking: BookingSummary }) {
+/**
+ * A posted parcel with no booking yet. The offer count is the only thing a sender can act on here, so
+ * it is the boldest element on the row; the price is deliberately absent because nothing is agreed
+ * until a traveller is chosen.
+ */
+function ParcelRow({
+  parcel,
+  originCity,
+  destCity,
+}: {
+  parcel: ParcelSummary;
+  originCity: string;
+  destCity: string;
+}) {
   return (
+    <Link
+      to={`/parcels/${parcel.id}`}
+      className="block rounded-card border border-line bg-surface p-4 shadow-card transition-colors hover:border-line-strong sm:p-5"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <Chip tone={parcel.interests_count > 0 ? 'brand' : 'neutral'}>
+              {parcel.interests_count > 0
+                ? `${parcel.interests_count} traveller ${parcel.interests_count === 1 ? 'has' : 'have'} offered`
+                : 'No offer yet'}
+            </Chip>
+            <span className="rounded-full border border-line bg-canvas px-2 py-0.5 text-xs font-semibold text-ink-700">
+              {parcel.status}
+            </span>
+          </div>
+          <p className="mt-2 text-sm font-semibold text-ink-900">
+            {CATEGORY_LABELS[parcel.category as Category] ?? parcel.category} · {originCity} → {destCity}
+          </p>
+          <p className="tabular mt-0.5 text-xs text-ink-500">
+            {parcel.origin_area} → {parcel.dest_area} · {kg(parcel.weight_kg)} ·{' '}
+            {formatWindow(parcel.window_start, parcel.window_end)}
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-sm font-semibold text-brand-700">
+            {parcel.interests_count > 0 ? 'Choose a traveller' : 'See who is going'}
+          </p>
+          <p className="text-xs text-ink-500">Posted {timeAgo(parcel.created_at)}</p>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+function BookingRow({ booking }: { booking: BookingSummary }) {  return (
     <Link
       to={`/bookings/${booking.id}`}
       state={{ role: booking.role }}

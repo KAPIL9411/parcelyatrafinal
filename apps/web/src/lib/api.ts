@@ -373,8 +373,74 @@ export interface Trip {
   created_at: string;
 }
 
-export interface Verification {
-  id: string;
+/** Where a parcel stands: the booking that holds it, if a sender has chosen anyone yet. */
+export interface ParcelWithBooking extends Parcel {
+  booking_id: string | null;
+  booking_status: string | null;
+}
+
+/** One of the sender's own parcels in the list, with what has happened to it since it was posted. */
+export interface ParcelSummary extends ParcelWithBooking {
+  /** Travellers who have offered to carry it. The number that tells the sender to come and look. */
+  interests_count: number;
+}
+
+export interface ParcelList {
+  items: ParcelSummary[];
+}
+
+/** A traveller's offer on one of your parcels. A flag, not a commitment — see GET /trips/:id/opportunities. */
+export interface ParcelOffer {
+  trip_id: string;
+  traveller_first_name: string | null;
+  verification_state: string;
+  mode: string;
+  origin_area: string | null;
+  departure_at: string;
+  arrival_estimate_at: string;
+  capacity_kg_remaining: number;
+  trip_status: string;
+  offered_at: string;
+}
+
+export interface ParcelOfferList {
+  parcel_id: string;
+  items: ParcelOffer[];
+}
+
+/**
+ * One parcel the engine says fits this trip. `indicative_price_paise` is what the sender would be
+ * quoted, not what the traveller earns; the traveller's share is only fixed when a booking is created.
+ */
+export interface Opportunity {
+  parcel_id: string;
+  category: string;
+  weight_kg: number;
+  dims_cm: number[];
+  origin_area: string;
+  dest_area: string;
+  window_start: string;
+  window_end: string;
+  declared_value_paise: number;
+  sender_verified: boolean;
+  score: number;
+  band: 'excellent' | 'good' | 'fair';
+  reasons: string[];
+  pickup_distance_band_km?: '<1' | '1-3' | '3-5' | '5-10';
+  indicative_price_paise: number;
+  offered?: boolean;
+}
+
+export interface OpportunityList {
+  trip_id: string;
+  trip_status: string;
+  capacity_kg_remaining?: number;
+  items: Opportunity[];
+  no_match_reasons: string[];
+  blocked_counts?: Record<string, number>;
+}
+
+export interface Verification {  id: string;
   user_id: string;
   state: string;
   id_type: string | null;
@@ -420,6 +486,55 @@ export interface NotificationItem {
   status: string;
   booking_id: string | null;
   created_at: string;
+  read_at: string | null;
+}
+
+export interface ConversationMember {
+  user_id: string;
+  role: 'sender' | 'traveller' | 'recipient';
+  name: string;
+  you: boolean;
+}
+
+export interface Conversation {
+  id: string;
+  booking_id: string;
+  role: ConversationMember['role'];
+  closed: boolean;
+  members: ConversationMember[];
+}
+
+export interface ChatMessage {
+  id: string;
+  kind: 'text' | 'system';
+  body: string;
+  sender_id: string;
+  sender_name: string;
+  mine: boolean;
+  created_at: string;
+}
+
+export interface ChatThread {
+  items: ChatMessage[];
+  unread_count: number;
+  closed: boolean;
+}
+
+export interface ConversationSummary {
+  conversation_id: string;
+  booking_id: string;
+  booking_status: string;
+  role: ConversationMember['role'];
+  closed: boolean;
+  counterparty: string | null;
+  last_message: string | null;
+  last_at: string | null;
+  unread_count: number;
+}
+
+export interface Inbox {
+  items: ConversationSummary[];
+  total_unread: number;
 }
 
 export interface AdminVerification {
@@ -470,6 +585,34 @@ export interface AdminDispute {
     side: 'opener' | 'counterparty';
     created_at: string;
   }>;
+}
+
+/** A booking held as an incident or locked for review — what `GET /admin/incidents` answers. */
+export interface AdminIncident {
+  booking_id: string;
+  parcel_id: string;
+  status: string;
+  sender_name: string | null;
+  traveller_name: string | null;
+  agreed_total_paise: number;
+  captured_paise: number;
+  payout_state: string;
+  opened_at: string | null;
+  opened_by: string | null;
+  reason_code: string | null;
+  updated_at: string;
+}
+
+/** One message in a booking thread, as staff read it. Reading the thread is itself audited. */
+export interface AdminThreadMessage {
+  id: string;
+  kind: string;
+  body: string;
+  sender_name: string;
+  sender_role: string | null;
+  created_at: string;
+  removed_at: string | null;
+  removed_reason: string | null;
 }
 
 export interface DevOtp {
