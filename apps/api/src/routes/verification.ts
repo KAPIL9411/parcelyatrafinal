@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -5,6 +7,7 @@ import { config } from '../config.ts';
 import { AppError } from '../lib/errors.ts';
 import { requireAuth } from '../lib/auth.ts';
 import { toIso, toIsoOrNull } from '../lib/serialize.ts';
+import { getObject, keyBelongsTo } from '../lib/storage.ts';
 import { audit } from '../services/audit.ts';
 
 const submitSchema = z
@@ -77,6 +80,15 @@ export async function verificationRoutes(app: FastifyInstance): Promise<void> {
     }
     const body = submitSchema.parse(req.body);
 
+    const documentKeys = [body.id_front_key, body.selfie_key, ...(body.id_back_key ? [body.id_back_key] : [])];
+    for (const key of documentKeys) {
+      // An ID document is the most sensitive object in the system. A key that points at somebody
+      // else's upload is refused here rather than copied into this account's review queue.
+      if (!keyBelongsTo(key, auth.userId)) {
+        throw new AppError('VALIDATION_FAILED', { field: 'object_key' }, 'Upload the document again from this account.');
+      }
+    }
+
     const prior = await db.query<VerificationRow>(
       `SELECT * FROM verifications WHERE user_id = $1 ORDER BY created_at DESC`,
       [auth.userId],
@@ -105,11 +117,24 @@ export async function verificationRoutes(app: FastifyInstance): Promise<void> {
       if (body.id_back_key) docs.push({ kind: 'id_back', key: body.id_back_key });
 
       for (const doc of docs) {
+        // The metadata is measured from the bytes that were actually stored. A hash nobody computed,
+        // a MIME type nobody sniffed and a size nobody measured are exactly what a reviewer would
+        // then trust, so they are not written at all.
+        const object = await getObject(doc.key);
+        if (!object) throw new AppError('VALIDATION_FAILED', { field: 'object_key' }, 'Upload the document again.');
         await tx.query(
           `INSERT INTO verification_documents
             (verification_id, kind, object_key, content_sha256, mime_type, byte_size, purge_after)
-           VALUES ($1,$2,$3,$4,'image/jpeg',1024,$5)`,
-          [row.id, doc.kind, doc.key, 'pending-server-hash', new Date(Date.now() + 180 * 24 * 3_600_000)],
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [
+            row.id,
+            doc.kind,
+            doc.key,
+            createHash('sha256').update(object.bytes).digest('hex'),
+            object.contentType,
+            object.byteSize,
+            new Date(Date.now() + 180 * 24 * 3_600_000),
+          ],
         );
       }
       return row;

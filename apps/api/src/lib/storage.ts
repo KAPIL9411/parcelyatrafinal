@@ -29,6 +29,18 @@ export function isValidKey(key: string): boolean {
   return true;
 }
 
+/**
+ * `<purpose>/<userId>/<uuid>.<ext>`, exactly as `POST /files/upload-url` issues it. A reference to
+ * somebody else's object is not merely invalid, it is somebody's ID document or parcel photo, so
+ * every route that stores a client-supplied key has to check this.
+ */
+const OWNED_KEY_PATTERN = /^[a-z_]+\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/[0-9a-f-]{36}\.[a-z0-9]{2,5}$/;
+
+export function keyBelongsTo(key: string, userId: string): boolean {
+  if (!isValidKey(key)) return false;
+  return OWNED_KEY_PATTERN.exec(key)?.[1] === userId;
+}
+
 // ─────────────────────────────────────────────── local disk (dev)
 
 export function storageRoot(): string {

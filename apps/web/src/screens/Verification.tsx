@@ -124,8 +124,8 @@ export function Verification() {
     <div className="mx-auto max-w-2xl space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold tracking-wide text-brand-700 uppercase">Traveller verification</p>
-          <h1 className="mt-1 text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl">Verify your ID</h1>
+          <p className="text-xs font-medium tracking-wide text-ink-500 uppercase">Traveller verification</p>
+          <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-ink-900 sm:text-2xl">Verify your ID</h1>
           <p className="mt-1 text-sm text-ink-500">
             One photo ID and a selfie. A person checks them. It usually takes under 24 hours.
           </p>
@@ -296,7 +296,7 @@ function PhotoField({
   return (
     <Field label={label} hint={hint} optional={optional}>
       <div className="flex flex-wrap items-center gap-2">
-        <label className="inline-flex min-h-12 cursor-pointer items-center gap-2 rounded-input border border-line-strong bg-surface px-4 text-sm font-semibold text-ink-900 hover:border-ink-500">
+        <label className="inline-flex h-11 cursor-pointer items-center gap-2 rounded-input border border-line-strong bg-surface px-4 text-sm font-medium text-ink-900 hover:bg-canvas">
           <CameraIcon size={18} />
           {uploaded ? 'Replace photo' : 'Take or choose a photo'}
           <input
@@ -310,7 +310,7 @@ function PhotoField({
 
         {import.meta.env.DEV ? (
           <Button variant="tertiary" size="sm" loading={busy} onClick={onSample}>
-            Use sample image (test mode)
+            Use sample image
           </Button>
         ) : null}
 

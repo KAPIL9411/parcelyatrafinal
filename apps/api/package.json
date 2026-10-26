@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "migrate:prod": "node dist/migrate.js",
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed": "tsx src/db/seed.ts",
     "db:reset": "tsx src/db/reset.ts"

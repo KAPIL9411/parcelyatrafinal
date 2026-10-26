@@ -175,15 +175,15 @@ export function NewTrip() {
   return (
     <div className="mx-auto max-w-2xl space-y-5">
       <div>
-        <p className="text-xs font-semibold tracking-wide text-brand-700 uppercase">Travelling</p>
-        <h1 className="mt-1 text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl">Publish a trip</h1>
+        <p className="text-xs font-medium tracking-wide text-ink-500 uppercase">Travelling</p>
+        <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-ink-900 sm:text-2xl">Publish a trip</h1>
         <p className="mt-1 text-sm text-ink-500">
           Tell us the drive you are already making. Senders see the route, the time and the space — not your phone
           number.
         </p>
       </div>
 
-      <Banner tone="info" title="Only car travel is open at pilot">
+      <Banner tone="info" title="Only car travel is open at launch">
         We are not carrying parcels on bikes, buses, trains or flights yet. Car only keeps the handover simple.
       </Banner>
 
@@ -303,7 +303,7 @@ export function NewTrip() {
                   .filter((mode) => mode !== 'car')
                   .map((mode) => (
                     <option key={mode} value={mode} disabled>
-                      {MODE_LABELS[mode as keyof typeof MODE_LABELS] ?? mode} (not open at pilot)
+                      {MODE_LABELS[mode as keyof typeof MODE_LABELS] ?? mode} (not open at launch)
                     </option>
                   ))}
               </Select>
@@ -325,7 +325,7 @@ export function NewTrip() {
                 <ul className="mt-1.5 space-y-1">
                   <li>The parcel is sealed before you receive it, and you can refuse it at the door.</li>
                   <li>You hand it to the named receiver only, against a six-digit code.</li>
-                  <li>You are not a courier service: four parcels per month is the pilot limit.</li>
+                  <li>You are not a courier service: four parcels per month is the launch limit.</li>
                   <li>Your share is released after delivery, once the 72-hour problem window has passed.</li>
                 </ul>
               </div>

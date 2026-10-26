@@ -81,13 +81,11 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
     try {
       await app.db.query('SELECT 1');
       checks.push({ name: 'database', status: 'ok', latency_ms: Date.now() - t });
-    } catch (err) {
-      checks.push({
-        name: 'database',
-        status: 'down',
-        latency_ms: Date.now() - t,
-        detail: err instanceof Error ? err.message : 'unreachable',
-      });
+    } catch {
+      // Detail strings from a driver failure can contain hostnames, ports or file paths. The
+      // operator sees them in the API log; the public body only needs to say the check failed.
+      app.log.error({ err: true }, 'readiness database check failed');
+      checks.push({ name: 'database', status: 'down', latency_ms: Date.now() - t, detail: 'unreachable' });
     }
 
     t = Date.now();
@@ -99,19 +97,11 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
         name: 'migrations',
         status: drifted || pending ? 'down' : 'ok',
         latency_ms: Date.now() - t,
-        ...(drifted
-          ? { detail: `drifted: ${status.drifted.map((d) => d.version).join(', ')}` }
-          : pending
-            ? { detail: `pending: ${status.pending.map((m) => m.version).join(', ') || '0001'}` }
-            : {}),
+        ...(drifted ? { detail: 'checksum drift' } : pending ? { detail: 'migrations pending' } : {}),
       });
-    } catch (err) {
-      checks.push({
-        name: 'migrations',
-        status: 'down',
-        latency_ms: Date.now() - t,
-        detail: err instanceof Error ? err.message : 'unreadable',
-      });
+    } catch {
+      app.log.error({ err: true }, 'readiness migration check failed');
+      checks.push({ name: 'migrations', status: 'down', latency_ms: Date.now() - t, detail: 'unreadable' });
     }
 
     const ready = checks.every((c) => c.status === 'ok');

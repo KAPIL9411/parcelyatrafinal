@@ -34,18 +34,17 @@ const BUTTON_VARIANT: Record<ButtonVariant, string> = {
   primary:
     'bg-brand-600 text-white hover:bg-brand-700 active:bg-brand-700 disabled:bg-brand-200 disabled:hover:bg-brand-200',
   secondary:
-    'bg-surface text-ink-900 border border-line-strong hover:border-ink-500 active:bg-canvas disabled:text-ink-300 disabled:border-line',
+    'bg-surface text-ink-900 border border-line hover:border-line-strong hover:bg-canvas disabled:text-ink-300 disabled:border-line',
   tertiary: 'text-brand-700 hover:underline underline-offset-4 disabled:text-ink-300 disabled:no-underline',
   danger:
-    'bg-surface text-danger-600 border border-danger-600/40 hover:bg-danger-50 active:bg-danger-50 disabled:text-ink-300 disabled:border-line',
-  outline:
-    'bg-transparent border border-line hover:bg-canvas hover:border-ink-500 disabled:text-ink-300 disabled:border-line',
+    'bg-surface text-danger-600 border border-line hover:border-danger-600/40 hover:bg-danger-50 active:bg-danger-50 disabled:text-ink-300 disabled:border-line',
+  outline: 'bg-transparent border border-line hover:bg-canvas hover:border-line-strong disabled:text-ink-300 disabled:border-line',
 };
 
 const BUTTON_SIZE: Record<ButtonSize, string> = {
   sm: 'min-h-9 px-3 text-sm',
-  md: 'min-h-12 px-5 text-base',
-  lg: 'min-h-14 px-6 text-base',
+  md: 'h-11 px-4 text-sm',
+  lg: 'h-12 px-5 text-[15px]',
 };
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -123,7 +122,7 @@ export function Field({
 }) {
   return (
     <div className="space-y-1.5">
-      <label htmlFor={htmlFor} className="flex items-baseline justify-between gap-3 text-sm font-semibold text-ink-900">
+      <label htmlFor={htmlFor} className="flex items-baseline justify-between gap-3 text-sm font-medium text-ink-900">
         <span>{label}</span>
         {optional ? <span className="text-xs font-normal text-ink-500">Optional</span> : null}
       </label>
@@ -140,14 +139,14 @@ export function Field({
 }
 
 const CONTROL =
-  'w-full rounded-input border border-line-strong bg-surface px-3 text-base text-ink-900 placeholder:text-ink-300 ' +
-  'focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/20 disabled:bg-canvas disabled:text-ink-500';
+  'w-full rounded-input border border-line-strong bg-surface px-3 text-[15px] text-ink-900 placeholder:text-ink-300 ' +
+  'focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/15 disabled:bg-canvas disabled:text-ink-500';
 
 export const TextInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function TextInput(
   { className, ...props },
   ref,
 ) {
-  return <input ref={ref} className={cn(CONTROL, 'h-12', className)} {...props} />;
+  return <input ref={ref} className={cn(CONTROL, 'h-11', className)} {...props} />;
 });
 
 export const TextArea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(function TextArea(
@@ -162,7 +161,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSel
   ref,
 ) {
   return (
-    <select ref={ref} className={cn(CONTROL, 'h-12 appearance-none pr-9', className)} {...props}>
+    <select ref={ref} className={cn(CONTROL, 'h-11 appearance-none pr-9', className)} {...props}>
       {children}
     </select>
   );
@@ -198,7 +197,7 @@ export function Checkbox({
 
 export function Card({ className, children, ...props }: HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn('rounded-card border border-line bg-surface p-4 shadow-card sm:p-5', className)} {...props}>
+    <div className={cn('rounded-card border border-line bg-surface p-5 shadow-card sm:p-6', className)} {...props}>
       {children}
     </div>
   );
@@ -219,9 +218,9 @@ export function SectionHeading({
     <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
       <div className="max-w-2xl">
         {eyebrow ? (
-          <p className="mb-1 text-xs font-semibold tracking-wide text-brand-700 uppercase">{eyebrow}</p>
+          <p className="mb-1 text-xs font-medium tracking-wide text-ink-500 uppercase">{eyebrow}</p>
         ) : null}
-        <h2 className="text-xl font-semibold text-ink-900">{title}</h2>
+        <h2 className="text-lg font-semibold text-ink-900">{title}</h2>
         {description ? <p className="mt-1 text-sm text-ink-500">{description}</p> : null}
       </div>
       {action}
@@ -310,11 +309,11 @@ export function EmptyState({
   icon?: ReactNode;
 }) {
   return (
-    <div className="rounded-card border border-dashed border-line-strong bg-surface px-5 py-10 text-center">
-      {icon ? <div className="mx-auto mb-3 grid h-11 w-11 place-items-center rounded-full bg-brand-50 text-brand-700">{icon}</div> : null}
+    <div className="rounded-card border border-line bg-surface px-6 py-12 text-center">
+      {icon ? <div className="mx-auto mb-3 grid h-10 w-10 place-items-center rounded-full bg-canvas text-ink-500">{icon}</div> : null}
       <p className="text-base font-semibold text-ink-900">{title}</p>
       {body ? <p className="mx-auto mt-1 max-w-md text-sm text-ink-500">{body}</p> : null}
-      {action ? <div className="mt-4 flex justify-center">{action}</div> : null}
+      {action ? <div className="mt-5 flex justify-center">{action}</div> : null}
     </div>
   );
 }

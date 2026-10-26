@@ -1,225 +1,326 @@
-import { Link } from 'react-router-dom';
+import { useState, type FormEvent } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 
-import { useDocumentTitle } from '../lib/hooks';
+import { CATEGORY_LABELS, type Category } from '@py/domain';
+
+import { useCities, useConfig, useDocumentTitle } from '../lib/hooks';
 import { useSession } from '../lib/session';
-import { Button, Card } from '../components/ui';
-import { RouteLine } from '../components/RouteLine';
+import { inr } from '../lib/format';
+import { Button, Card, Field, Select, TextInput } from '../components/ui';
 import {
   ArrowRightIcon,
   CameraIcon,
   CarIcon,
-  DocIcon,
   LockIcon,
   ParcelIcon,
   PhoneIcon,
+  RouteIcon,
+  SearchIcon,
   ShieldCheckIcon,
+  SwapIcon,
 } from '../components/icons';
 
 const STEPS = [
   {
-    icon: DocIcon,
-    title: 'Declare it',
-    body: 'What is inside, how heavy it is, and the window it must arrive in. We show the exact price before you pay.',
+    icon: ParcelIcon,
+    title: 'Describe the parcel',
+    body: 'What is inside, how heavy it is, and the window it must arrive in. The price is calculated and shown before you pay.',
   },
   {
-    icon: CarIcon,
-    title: 'Match it',
-    body: 'We find a verified traveller already driving your route. You see why each one matched.',
+    icon: RouteIcon,
+    title: 'Match a traveller',
+    body: 'Verified travellers already driving your route, ranked on time window, capacity and reliability — with the reasons for each match.',
   },
   {
-    icon: PhoneIcon,
-    title: 'Hand it over',
-    body: 'A six-digit code at pickup and another at delivery. Both sides have a photo of the sealed parcel.',
+    icon: ShieldCheckIcon,
+    title: 'Hand over with a code',
+    body: 'A six-digit code at pickup and another at delivery. Both sides keep a photo of the sealed parcel.',
   },
 ];
 
-const TRUST = [
+const INCLUDED = [
   { icon: ShieldCheckIcon, title: 'Verified travellers', body: 'ID checked by a person before a trip goes live.' },
   { icon: CameraIcon, title: 'Sealed-parcel photo', body: 'Taken at pickup, so the condition is on record.' },
-  { icon: LockIcon, title: 'OTP at both ends', body: 'Nothing changes hands without the code.' },
+  { icon: LockIcon, title: 'Code at both ends', body: 'Nothing changes hands without the handover code.' },
   { icon: PhoneIcon, title: 'Dispute support', body: 'Raise a case for 72 hours after delivery.' },
 ];
 
 export function Landing() {
   useDocumentTitle('');
   const { user } = useSession();
+  const navigate = useNavigate();
+  const { data: config } = useConfig();
+  const cities = useCities();
+  const limits = config?.limits;
+
+  const serviceable = (cities.data ?? []).filter((city) => city.is_serviceable);
+
+  const [originCityId, setOriginCityId] = useState('');
+  const [destCityId, setDestCityId] = useState('');
+  const [weight, setWeight] = useState('1.5');
+  const [category, setCategory] = useState<Category>('documents');
+  const [error, setError] = useState('');
+
+  const maxWeight = limits?.max_weight_kg ?? 5;
+
+  function swapCities() {
+    setOriginCityId(destCityId);
+    setDestCityId(originCityId);
+  }
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (cities.isLoading || cities.isError) {
+      setError('City list unavailable right now. Try again in a moment.');
+      return;
+    }
+    if (!originCityId || !destCityId) {
+      setError('Choose both cities to continue.');
+      return;
+    }
+    if (originCityId === destCityId) {
+      setError('Pickup and destination must be different cities.');
+      return;
+    }
+    const w = Number(weight);
+    if (!Number.isFinite(w) || w < 0.1 || w > maxWeight) {
+      setError(`We carry between 0.1 and ${maxWeight} kg at launch.`);
+      return;
+    }
+    const query = new URLSearchParams({ origin: originCityId, dest: destCityId, weight: String(w), category });
+    const target = `/send?${query.toString()}`;
+    navigate(user ? target : `/login?next=${encodeURIComponent(target)}`);
+  }
 
   return (
-    <div className="space-y-10">
-      <section className="hero-gradient relative overflow-hidden rounded-sheet px-5 py-10 text-white sm:px-10 sm:py-14">
-        <div
-          className="pointer-events-none absolute -top-24 -right-24 h-72 w-72 rounded-full border border-white/10"
-          aria-hidden="true"
-        />
-        <div
-          className="pointer-events-none absolute -right-8 bottom-0 h-48 w-48 rounded-full border border-accent-500/20"
-          aria-hidden="true"
-        />
+    <div className="space-y-12">
+      <section className="hero-gradient rounded-sheet px-6 py-10 text-white sm:px-10 sm:py-14 lg:grid lg:grid-cols-[1.05fr_1fr] lg:items-center lg:gap-12">
+        <div>
+          <p className="text-xs font-medium tracking-wide text-white/60 uppercase">
+            Bareilly ⇄ Delhi NCR · Bareilly ⇄ Lucknow
+          </p>
+          <h1 className="mt-3 max-w-2xl text-[34px] leading-[1.12] font-bold tracking-tight text-balance sm:text-5xl">
+            Send it with someone already going.
+          </h1>
+          <p className="mt-4 max-w-xl text-base leading-relaxed text-white/75 sm:text-lg">
+            A small sealed parcel, carried by a verified traveller on a journey they were making anyway. You see the
+            price, the person and the handover record before anything moves.
+          </p>
 
-        <div className="relative grid gap-10 lg:grid-cols-[1.15fr_0.85fr] lg:items-center">
-          <div>
-            <p className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/5 px-3 py-1 text-xs font-semibold text-white/80">
-              <span className="h-1.5 w-1.5 rounded-full bg-accent-500" aria-hidden="true" />
-              Pilot corridors · Bareilly ⇄ Delhi NCR · Bareilly ⇄ Lucknow
-            </p>
+          {limits ? (
+            <dl className="mt-8 grid max-w-2xl grid-cols-2 gap-x-8 gap-y-4 border-t border-white/12 pt-6 text-sm sm:grid-cols-4">
+              {[
+                ['Weight', `${limits.max_weight_kg} kg`],
+                ['Each side', `${limits.max_dimension_cm} cm`],
+                ['Declared value', inr(limits.max_declared_value_paise)],
+                ['Travel mode', 'Car'],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <dt className="text-xs text-white/55">{label}</dt>
+                  <dd className="mt-1 font-semibold text-white tabular">{value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+        </div>
 
-            <h1 className="max-w-xl text-[34px] leading-[1.1] font-bold tracking-tight text-balance sm:text-5xl">
-              Send it with someone already going.
-            </h1>
+        <form
+          onSubmit={submit}
+          aria-label="Quick booking"
+          className="mt-10 rounded-card bg-surface p-5 text-ink-900 shadow-card sm:p-6 lg:mt-0"
+        >
+          <p className="text-xs font-medium tracking-wide text-ink-500 uppercase">Book in under a minute</p>
+          <h2 className="mt-1 text-lg font-semibold">Where is it going?</h2>
 
-            <p className="mt-4 max-w-lg text-base text-white/75 sm:text-lg">
-              A small sealed parcel, carried by a verified traveller on a journey they were making anyway. You
-              see the price, the person and the handover record before anything moves.
-            </p>
+          <div className="mt-4 space-y-4">
+            <Field label="Pickup city" htmlFor="hp-origin">
+              <Select
+                id="hp-origin"
+                value={originCityId}
+                onChange={(event) => {
+                  setOriginCityId(event.target.value);
+                  setError('');
+                }}
+              >
+                <option value="">Choose a city</option>
+                {serviceable.map((city) => (
+                  <option key={city.id} value={city.id}>
+                    {city.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
 
-            <div className="mt-7 flex flex-col gap-3 sm:flex-row">
-              <Link to={user ? '/send' : '/login?next=/send'}>
-                <Button size="lg" fullWidth className="sm:w-auto">
-                  Send a parcel
-                  <ArrowRightIcon size={18} />
-                </Button>
-              </Link>
-              <Link to={user ? '/trips/new' : '/login?next=/trips/new'}>
-                <Button
-                  size="lg"
-                  fullWidth
-                  variant="secondary"
-                  className="border-white/25 bg-white/5 text-white hover:border-white/60 hover:bg-white/10 sm:w-auto"
-                >
-                  I’m travelling
-                </Button>
-              </Link>
+            <div className="flex items-center gap-3" aria-hidden="true">
+              <span className="h-px flex-1 bg-line" />
+              <button
+                type="button"
+                onClick={swapCities}
+                className="inline-flex items-center gap-1.5 rounded-full border border-line-strong bg-canvas px-2.5 py-1 text-xs font-semibold text-ink-700 hover:border-ink-300 hover:text-ink-900"
+              >
+                <SwapIcon size={14} />
+                Swap
+              </button>
             </div>
 
-            <p className="mt-4 text-xs text-white/55">
-              Prices are shown after you describe the parcel — we don’t publish a number we can’t stand behind.
+            <Field label="Destination city" htmlFor="hp-dest">
+              <Select
+                id="hp-dest"
+                value={destCityId}
+                onChange={(event) => {
+                  setDestCityId(event.target.value);
+                  setError('');
+                }}
+              >
+                <option value="">Choose a city</option>
+                {serviceable.map((city) => (
+                  <option key={city.id} value={city.id}>
+                    {city.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Weight (kg)" htmlFor="hp-weight">
+                <TextInput
+                  id="hp-weight"
+                  type="number"
+                  inputMode="decimal"
+                  min={0.1}
+                  max={maxWeight}
+                  step={0.1}
+                  value={weight}
+                  onChange={(event) => {
+                    setWeight(event.target.value);
+                    setError('');
+                  }}
+                />
+              </Field>
+              <Field label="Category" htmlFor="hp-category">
+                <Select
+                  id="hp-category"
+                  value={category}
+                  onChange={(event) => setCategory(event.target.value as Category)}
+                >
+                  {(config?.categories ?? []).map((value) => (
+                    <option key={value} value={value}>
+                      {CATEGORY_LABELS[value as Category]}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            </div>
+
+            {error ? (
+              <p className="text-sm text-danger-600" role="alert">
+                {error}
+              </p>
+            ) : null}
+
+            <Button type="submit" size="lg" fullWidth disabled={cities.isLoading || cities.isError}>
+              See price and travellers
+              <ArrowRightIcon size={18} />
+            </Button>
+
+            <p className="text-center text-xs leading-relaxed text-ink-500">
+              Nothing is charged until you confirm a price. Next: the parcel photo, the time window, then a verified
+              traveller.
             </p>
           </div>
-
-          <div className="rounded-card border border-white/15 bg-white/[0.06] p-5 backdrop-blur-sm">
-            <p className="mb-4 text-xs font-semibold tracking-wide text-white/60 uppercase">A typical booking</p>
-            <RouteLine from="Bareilly" to="Delhi" meta="Documents · up to 5 kg" dark />
-            <dl className="mt-5 space-y-3 border-t border-white/15 pt-4 text-sm">
-              <div className="flex items-baseline justify-between gap-4">
-                <dt className="text-white/60">Traveller</dt>
-                <dd className="font-semibold text-white">Verified · car</dd>
-              </div>
-              <div className="flex items-baseline justify-between gap-4">
-                <dt className="text-white/60">Handover</dt>
-                <dd className="font-semibold text-white">Code at both ends</dd>
-              </div>
-              <div className="flex items-baseline justify-between gap-4">
-                <dt className="text-white/60">Tracking</dt>
-                <dd className="font-semibold text-white">Status updates, no live map</dd>
-              </div>
-              <div className="flex items-baseline justify-between gap-4">
-                <dt className="text-white/60">Insurance</dt>
-                <dd className="font-semibold text-accent-500">Not insured</dd>
-              </div>
-            </dl>
-          </div>
-        </div>
+        </form>
       </section>
 
       <section aria-labelledby="how-it-works">
         <h2 id="how-it-works" className="text-2xl font-bold tracking-tight text-ink-900">
           Three steps, both sides recorded
         </h2>
-        <div className="mt-5 grid gap-4 sm:grid-cols-3">
+        <ol className="mt-6 grid gap-px overflow-hidden rounded-card border border-line bg-line sm:grid-cols-3">
           {STEPS.map((step, index) => (
-            <Card key={step.title} className="flex h-full flex-col">
-              <div className="mb-4 flex items-center justify-between">
-                <span className="grid h-10 w-10 place-items-center rounded-input bg-brand-50 text-brand-700">
-                  <step.icon size={22} />
-                </span>
-                <span className="tabular text-sm font-bold text-ink-300">0{index + 1}</span>
-              </div>
-              <h3 className="text-base font-semibold text-ink-900">{step.title}</h3>
+            <li key={step.title} className="bg-surface p-5 sm:p-6">
+              <span className="grid h-9 w-9 place-items-center rounded-full bg-brand-50 text-brand-700">
+                <step.icon size={18} />
+              </span>
+              <p className="mt-4 tabular text-xs font-semibold text-ink-500">Step {index + 1}</p>
+              <h3 className="mt-1 text-base font-semibold text-ink-900">{step.title}</h3>
               <p className="mt-1.5 text-sm leading-relaxed text-ink-500">{step.body}</p>
-            </Card>
+            </li>
           ))}
-        </div>
+        </ol>
       </section>
 
-      <section aria-labelledby="what-you-get" className="grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
+      <section aria-labelledby="what-you-get" className="grid gap-5 lg:grid-cols-[1.05fr_0.95fr]">
         <Card>
           <h2 id="what-you-get" className="text-lg font-semibold text-ink-900">
             What every booking includes
           </h2>
-          <ul className="mt-4 grid gap-4 sm:grid-cols-2">
-            {TRUST.map((item) => (
+          <ul className="mt-5 grid gap-5 sm:grid-cols-2">
+            {INCLUDED.map((item) => (
               <li key={item.title} className="flex gap-3">
-                <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-brand-50 text-brand-700">
-                  <item.icon size={18} />
-                </span>
+                <item.icon size={18} className="mt-0.5 shrink-0 text-brand-700" />
                 <div>
                   <p className="text-sm font-semibold text-ink-900">{item.title}</p>
-                  <p className="mt-0.5 text-sm text-ink-500">{item.body}</p>
+                  <p className="mt-0.5 text-sm leading-relaxed text-ink-500">{item.body}</p>
                 </div>
               </li>
             ))}
           </ul>
         </Card>
 
-        <div className="space-y-4">
-          <Card className="border-danger-600/25 bg-danger-50">
-            <div className="flex gap-3">
-              <ParcelIcon size={22} className="mt-0.5 shrink-0 text-danger-600" />
-              <div>
-                <h2 className="text-base font-semibold text-ink-900">We don’t carry everything</h2>
-                <p className="mt-1 text-sm text-ink-700">
-                  No cash, jewellery, medicines, electronics or passports. The full list is short and specific.
-                </p>
-                <Link
-                  to="/prohibited"
-                  className="mt-2 inline-flex items-center gap-1 text-sm font-semibold text-danger-600 underline underline-offset-4"
-                >
-                  Read the prohibited items list
-                  <ArrowRightIcon size={15} />
-                </Link>
-              </div>
-            </div>
-          </Card>
-
-          <Card>
-            <h2 className="text-base font-semibold text-ink-900">Pilot limits</h2>
-            <dl className="mt-3 grid grid-cols-2 gap-3 text-sm">
-              {[
-                ['Weight', '5 kg'],
-                ['Each side', '45 cm'],
-                ['Declared value', '₹5,000'],
-                ['Travel mode', 'Car only'],
-              ].map(([label, value]) => (
-                <div key={label} className="rounded-input bg-canvas px-3 py-2">
-                  <dt className="text-xs text-ink-500">{label}</dt>
-                  <dd className="mt-0.5 font-semibold text-ink-900">{value}</dd>
-                </div>
-              ))}
-            </dl>
-            <p className="mt-3 text-sm text-ink-500">
-              <strong className="font-semibold text-ink-900">Your parcel is not insured.</strong> We’re working on
-              cover. Until it exists, if something goes wrong we can help you investigate and may offer a goodwill
-              amount, but we cannot repay the full value.
-            </p>
-          </Card>
-        </div>
+        <Card>
+          <h2 className="text-lg font-semibold text-ink-900">What we don’t carry</h2>
+          <p className="mt-2 text-sm leading-relaxed text-ink-500">
+            No cash, jewellery, medicines, electronics or passports. The list is short and specific, and it is
+            enforced when you describe a parcel.
+          </p>
+          <p className="mt-4 text-sm leading-relaxed text-ink-500">
+            <strong className="font-semibold text-ink-900">Your parcel is not insured.</strong> Until cover exists,
+            if something goes wrong we help you investigate and may offer a goodwill amount — we cannot repay the
+            full value.
+          </p>
+          <Link
+            to="/prohibited"
+            className="mt-5 inline-flex items-center gap-1 text-sm font-semibold text-brand-700 underline underline-offset-4"
+          >
+            Read the prohibited items list
+            <ArrowRightIcon size={15} />
+          </Link>
+        </Card>
       </section>
 
-      <section className="rounded-card border border-line bg-surface p-6 sm:p-8">
-        <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-xl font-semibold text-ink-900">Already driving that way?</h2>
-            <p className="mt-1 max-w-xl text-sm text-ink-500">
-              Carry a small sealed parcel on a trip you were making anyway. Get paid after delivery, once the
-              problem window has passed.
-            </p>
+      <section className="space-y-5">
+        <Card className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <SearchIcon size={20} className="mt-0.5 shrink-0 text-brand-700" />
+            <div>
+              <h2 className="text-lg font-semibold text-ink-900">Where is my parcel?</h2>
+              <p className="mt-1 max-w-xl text-sm leading-relaxed text-ink-500">
+                Sign in to see every booking, the handover codes and the current status.
+              </p>
+            </div>
           </div>
-          <Link to={user ? '/trips/new' : '/login?next=/trips/new'}>
+          <Link to={user ? '/bookings' : '/login?next=/bookings'} className="shrink-0">
+            <Button variant="secondary">Track a parcel</Button>
+          </Link>
+        </Card>
+
+        <Card className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <CarIcon size={20} className="mt-0.5 shrink-0 text-brand-700" />
+            <div>
+              <h2 className="text-lg font-semibold text-ink-900">Already driving that way?</h2>
+              <p className="mt-1 max-w-xl text-sm leading-relaxed text-ink-500">
+                Carry a small sealed parcel on a trip you were making anyway. You’re paid after delivery, once the
+                dispute window has passed.
+              </p>
+            </div>
+          </div>
+          <Link to={user ? '/trips/new' : '/login?next=/trips/new'} className="shrink-0">
             <Button variant="secondary" size="lg">
               Post a trip
             </Button>
           </Link>
-        </div>
+        </Card>
       </section>
     </div>
   );

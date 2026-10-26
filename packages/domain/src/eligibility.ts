@@ -17,6 +17,7 @@ export const PILOT_LIMITS = {
 export type EligibilityFailureCode =
   | 'ACCOUNT_SUSPENDED'
   | 'PHONE_NOT_VERIFIED'
+  | 'CONTACT_NOT_VERIFIED'
   | 'ITEM_PROHIBITED'
   | 'PARCEL_TOO_LARGE'
   | 'VALUE_ABOVE_PILOT_LIMIT'
@@ -29,6 +30,16 @@ export type EligibilityFailureCode =
 export interface EligibilityInput {
   accountStatus: 'active' | 'suspended' | 'deleted';
   phoneVerified: boolean;
+  /**
+   * True when any channel the provider itself vouched for is on file — today that means a Google
+   * account whose email Google reports as verified. It is never inferred from a value the user typed.
+   */
+  emailVerified: boolean;
+  /**
+   * Rule E2's strictness. While the business has no DLT-registered SMS route this is false, and a
+   * verified email carries the identity requirement instead.
+   */
+  phoneVerificationRequired: boolean;
   category: Category;
   description: string;
   weightKg: number;
@@ -98,9 +109,17 @@ export function evaluateEligibility(input: EligibilityInput): EligibilityDecisio
   }
   passed.push('E1');
 
-  // E2 — phone verified
-  if (!input.phoneVerified) {
+  // E2 — a verified contact channel. When the operator requires phone verification, nothing else
+  // counts. Otherwise a provider-vouched email is enough, because the handover codes themselves are
+  // delivered in-app and do not depend on SMS.
+  if (input.phoneVerificationRequired && !input.phoneVerified) {
     return fail('PHONE_NOT_VERIFIED', 'Verify your phone number before sending a parcel.');
+  }
+  if (!input.phoneVerified && !input.emailVerified) {
+    return fail(
+      'CONTACT_NOT_VERIFIED',
+      'Sign in with a verified email or phone number before sending a parcel.',
+    );
   }
   passed.push('E2');
 

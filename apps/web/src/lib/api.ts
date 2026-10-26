@@ -9,31 +9,25 @@
 
 export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/v1';
 
-const TOKEN_KEY = 'py.session.v1';
+/**
+ * The access token is held in a module variable and the refresh token in an HttpOnly cookie that
+ * JavaScript cannot read. `localStorage` would survive an XSS payload and a browser extension, and
+ * a refresh token is a 30-day session — losing it is not recoverable by the user.
+ *
+ * The cost is a re-`refresh` on every page load, which is exactly what `bootstrap()` does.
+ */
+let accessToken: string | null = null;
 
-export interface Tokens {
+export function setAccessToken(token: string | null): void {
+  accessToken = token;
+}
+
+export function hasAccessToken(): boolean {
+  return accessToken !== null;
+}
+
+export interface SessionTokens {
   access_token: string;
-  refresh_token: string;
-}
-
-export function readTokens(): Tokens | null {
-  try {
-    const raw = localStorage.getItem(TOKEN_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<Tokens>;
-    if (typeof parsed.access_token !== 'string' || typeof parsed.refresh_token !== 'string') return null;
-    return { access_token: parsed.access_token, refresh_token: parsed.refresh_token };
-  } catch {
-    return null;
-  }
-}
-
-export function writeTokens(tokens: Tokens): void {
-  localStorage.setItem(TOKEN_KEY, JSON.stringify(tokens));
-}
-
-export function clearTokens(): void {
-  localStorage.removeItem(TOKEN_KEY);
 }
 
 export class ApiError extends Error {
@@ -76,27 +70,29 @@ interface RequestOptions {
 
 let refreshInFlight: Promise<boolean> | null = null;
 
+/**
+ * Exchange the HttpOnly refresh cookie for a fresh access token. The browser attaches the cookie;
+ * nothing here ever sees it.
+ */
 async function refreshSession(): Promise<boolean> {
-  const tokens = readTokens();
-  if (!tokens) return false;
-
   const res = await fetch(`${API_BASE}/auth/refresh`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ refresh_token: tokens.refresh_token }),
+    body: '{}',
+    credentials: 'include',
   });
 
   if (!res.ok) {
-    clearTokens();
+    accessToken = null;
     return false;
   }
 
-  const next = (await res.json()) as Tokens;
-  if (typeof next.access_token !== 'string' || typeof next.refresh_token !== 'string') {
-    clearTokens();
+  const next = (await res.json()) as Partial<SessionTokens>;
+  if (typeof next.access_token !== 'string') {
+    accessToken = null;
     return false;
   }
-  writeTokens(next);
+  accessToken = next.access_token;
   return true;
 }
 
@@ -107,14 +103,18 @@ async function refreshOnce(): Promise<boolean> {
   return refreshInFlight;
 }
 
+/** Called once at startup: restores a session from the cookie alone. */
+export async function bootstrap(): Promise<boolean> {
+  return refreshOnce();
+}
+
 async function request<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
   const { body, idempotencyKey, auth = true, signal, raw, contentType } = options;
 
   const attempt = async (): Promise<Response> => {
-    const tokens = auth ? readTokens() : null;
     const headers: Record<string, string> = { accept: 'application/json' };
 
-    if (tokens) headers.authorization = `Bearer ${tokens.access_token}`;
+    if (auth && accessToken) headers.authorization = `Bearer ${accessToken}`;
     if (body !== undefined) headers['content-type'] = 'application/json';
     if (raw !== undefined) headers['content-type'] = contentType ?? 'application/octet-stream';
     if (method !== 'GET' && method !== 'HEAD') {
@@ -124,6 +124,7 @@ async function request<T>(method: string, path: string, options: RequestOptions 
     return fetch(`${API_BASE}${path}`, {
       method,
       headers,
+      credentials: 'include',
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       ...(raw !== undefined ? { body: raw } : {}),
       ...(signal ? { signal } : {}),
@@ -132,7 +133,11 @@ async function request<T>(method: string, path: string, options: RequestOptions 
 
   let res = await attempt();
 
-  if (res.status === 401 && auth && readTokens()) {
+  if (res.status === 401 && auth && !accessToken) {
+    // Page load raced the bootstrap: try the cookie once before giving up.
+    const restored = await refreshOnce();
+    if (restored) res = await attempt();
+  } else if (res.status === 401 && auth && accessToken) {
     const refreshed = await refreshOnce();
     if (refreshed) res = await attempt();
   }
@@ -203,11 +208,14 @@ export interface Profile {
   id: string;
   name: string | null;
   email: string | null;
-  phone_last4: string;
+  phone_last4: string | null;
   status: 'active' | 'suspended' | 'deleted';
   risk_tier: number;
   locale: string;
   verification_state: string;
+  /** True only when the channel was actually confirmed, never when it was merely typed in. */
+  phone_verified?: boolean;
+  email_verified?: boolean;
   created_at: string;
   /** The caller's own staff roles. Additive to the contract (docs/BUILD_NOTES.md DEFECT-011). */
   roles?: string[];
@@ -215,7 +223,6 @@ export interface Profile {
 
 export interface AuthResponse {
   access_token: string;
-  refresh_token: string;
   expires_in: number;
   user: Profile;
 }
@@ -273,12 +280,22 @@ export interface Match {
   traveller_initial?: string;
   verification_state: string;
   reliability_band: string;
+  /** completed / (completed + traveller cancellations) over the traveller's last 20 finished trips. */
+  reliability_ratio?: number;
+  completed_trips: number;
   mode: string;
   departure_at: string;
   arrival_estimate_at: string;
   capacity_kg_remaining: number;
+  /** Straight-line band between city centroids — not a road distance. */
+  pickup_distance_band_km?: '<1' | '1-3' | '3-5' | '5-10';
   indicative_price_paise: number;
   accepts_documents_only: boolean;
+  score_breakdown: {
+    formula_version: string;
+    fit: Record<string, number>;
+    points: Record<string, number>;
+  };
 }
 
 export interface MatchResult {
@@ -331,6 +348,11 @@ export interface BookingSummary {
   status: string;
   role: 'sender' | 'traveller';
   mode: string;
+  parcel_id: string;
+  category: string;
+  weight_kg: number;
+  origin_city: string;
+  dest_city: string;
   agreed_total_paise: number;
   created_at: string;
   updated_at: string;

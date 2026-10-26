@@ -18,7 +18,7 @@ const BY_CODE: Record<string, ErrorCopy> = {
   AUTH_REQUIRED: {
     title: 'Please sign in',
     body: 'This page needs a signed-in account.',
-    hint: 'Sign in with your phone number to continue.',
+    hint: 'Sign in with Google, or with a phone number, to continue.',
   },
   AUTH_TOKEN_INVALID: { title: 'Your session ended', body: 'Sign in again to continue.' },
   AUTH_TOKEN_EXPIRED: { title: 'Your session ended', body: 'Sign in again to continue.' },
@@ -76,7 +76,11 @@ const BY_CODE: Record<string, ErrorCopy> = {
 
   PHONE_NOT_VERIFIED: {
     title: 'Verify your phone first',
-    body: 'We need a verified phone number before a parcel can be posted.',
+    body: 'This step needs a verified phone number. Verify it from your profile and try again.',
+  },
+  CONTACT_NOT_VERIFIED: {
+    title: 'Confirm how to reach you',
+    body: 'We need a verified contact channel before a parcel can be posted — signing in with Google does this.',
   },
   ITEM_PROHIBITED: {
     title: "We can't carry this",
@@ -84,7 +88,7 @@ const BY_CODE: Record<string, ErrorCopy> = {
     hint: 'Read the prohibited items list before you pack.',
   },
   PARCEL_TOO_LARGE: {
-    title: 'This parcel is over the pilot limit',
+    title: 'This parcel is over the launch limit',
     body: 'At launch we carry up to 5 kg and 45 cm on each side.',
   },
   VALUE_ABOVE_PILOT_LIMIT: {
@@ -209,7 +213,7 @@ const BY_CODE: Record<string, ErrorCopy> = {
     body: 'This build runs with sandbox payments only.',
   },
   PAYOUTS_NOT_ENABLED: {
-    title: 'Payouts are disabled at pilot',
+    title: 'Payouts are disabled at launch',
     body: 'No money can be released from this build. This is deliberate.',
   },
   SPLIT_SETTLEMENT_NOT_ENABLED: {
@@ -296,7 +300,7 @@ const BY_STATUS: Record<number, ErrorCopy> = {
   422: BY_CODE.VALIDATION_FAILED!,
   429: BY_CODE.RATE_LIMITED!,
   500: BY_CODE.INTERNAL_ERROR!,
-  501: { title: 'Not available in this build', body: 'This feature is switched off at pilot.' },
+  501: { title: 'Not available in this build', body: 'This feature is switched off at launch.' },
   503: BY_CODE.SERVICE_UNAVAILABLE!,
 };
 

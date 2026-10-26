@@ -132,12 +132,19 @@ export function Profile() {
   return (
     <div className="mx-auto max-w-3xl space-y-5">
       <div>
-        <p className="text-xs font-semibold tracking-wide text-brand-700 uppercase">Your account</p>
-        <h1 className="mt-1 text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl">
-          {user.name ? user.name : `Account ending ${user.phone_last4}`}
+        <p className="text-xs font-medium tracking-wide text-ink-500 uppercase">Your account</p>
+        <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-ink-900 sm:text-2xl">
+          {user.name ?? (user.phone_last4 ? `Account ending ${user.phone_last4}` : 'Your account')}
         </h1>
         <p className="mt-1 text-sm text-ink-500">
-          Signed in with a phone number ending {user.phone_last4}. We never show the full number.
+          {user.phone_last4
+            ? `A phone number ending ${user.phone_last4}, ${
+                user.phone_verified ? 'verified' : 'not verified — you added it to the account yourself'
+              }. We never show the full number.`
+            : `Signed in as ${user.email ?? 'a Google account'}.`}
+          {user.email && !user.phone_last4 ? (
+            <span> {user.email_verified ? 'Google verified this address.' : 'This address is not verified yet.'}</span>
+          ) : null}
         </p>
       </div>
 

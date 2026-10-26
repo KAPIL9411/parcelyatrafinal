@@ -114,6 +114,32 @@ async function signIn(phone) {
   return { token: verify.body.access_token, user: verify.body.user };
 }
 
+
+/**
+ * Uploads a real 1×1 PNG through the documented two-step path and returns the object key. The API
+ * now refuses a photo key that the account did not upload, so the smoke test cannot use a made-up
+ * string any more than a client could.
+ */
+const PNG_1X1 = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+async function uploadPhoto(token, purpose) {
+  const ticket = await call('POST', '/files/upload-url', {
+    token,
+    body: { purpose, content_type: 'image/png', byte_size: PNG_1X1.byteLength },
+  });
+  if (ticket.status !== 201) throw new Error(`upload-url failed: ${ticket.status} ${JSON.stringify(ticket.body)}`);
+  const put = await fetch(ticket.body.upload_url, {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'image/png' },
+    body: PNG_1X1,
+  });
+  if (put.status !== 201) throw new Error(`upload sink failed: ${put.status} ${(await put.text()).slice(0, 200)}`);
+  return ticket.body.object_key;
+}
+
 function tomorrowAt(hour) {
   const d = new Date();
   d.setDate(d.getDate() + 1);
@@ -154,6 +180,10 @@ async function main() {
   check('GET /me works', me.status === 200 && me.body.id === sender.user.id);
   check('GET /me leaks no phone number', !JSON.stringify(me.body).includes(PHONE.sender.slice(-10, -4)));
 
+  // ---- uploads (real bytes, real keys)
+  const sealedKey = await uploadPhoto(sender.token, 'parcel_sealed');
+  check('an authenticated upload returns an owned object key', sealedKey.startsWith('parcel_sealed/'), sealedKey);
+
   // ---- parcel
   const parcel = await call('POST', '/parcels', {
     token: sender.token,
@@ -171,7 +201,7 @@ async function main() {
       window_end: tomorrowAt(18),
       receiver_name: 'R. Sharma',
       receiver_phone: '+919000000101',
-      sealed_photo_key: 'demo/parcel_sealed.jpg',
+      sealed_photo_key: sealedKey,
       declaration_accepted: true,
     },
   });
@@ -193,7 +223,7 @@ async function main() {
       window_end: tomorrowAt(18),
       receiver_name: 'R. Sharma',
       receiver_phone: '+919000000101',
-      sealed_photo_key: 'demo/x.jpg',
+      sealed_photo_key: sealedKey,
       declaration_accepted: true,
     },
   });
@@ -245,6 +275,7 @@ async function main() {
   check('payment intent is created in sandbox', intent.status === 201 && intent.body.sandbox === true && intent.body.amount_paise === q.total_paise, JSON.stringify(intent.body).slice(0, 300));
 
   const webhook = await call('POST', '/dev/webhooks/simulate', {
+    token: sender.token,
     body: { type: 'payment.captured', provider_ref: intent.body.provider_ref },
   });
   check('signed webhook is accepted', webhook.status === 200 && webhook.body.webhook_status === 200, JSON.stringify(webhook.body).slice(0, 300));
@@ -265,15 +296,16 @@ async function main() {
   const pickupOtp = await call('GET', `/dev/handover-otp/${bookingId}/pickup`, { token: sender.token });
   check('pickup OTP exists in the dev store', pickupOtp.status === 200 && /^[0-9]{6}$/.test(pickupOtp.body.code));
 
+  const travellerPickupKey = await uploadPhoto(traveller.token, 'parcel_sealed');
   const wrongOtp = await call('POST', `/bookings/${bookingId}/handover/pickup`, {
     token: traveller.token,
-    body: { otp: '000000', photo_key: 'demo/pickup.jpg' },
+    body: { otp: '000000', photo_key: travellerPickupKey },
   });
   check('wrong pickup OTP is refused', wrongOtp.status === 400 && wrongOtp.body?.error?.code === 'OTP_INVALID', JSON.stringify(wrongOtp.body).slice(0, 200));
 
   const pickup = await call('POST', `/bookings/${bookingId}/handover/pickup`, {
     token: traveller.token,
-    body: { otp: pickupOtp.body.code, photo_key: 'demo/pickup.jpg', checklist: { seal_intact: true } },
+    body: { otp: pickupOtp.body.code, photo_key: travellerPickupKey, checklist: { seal_intact: true } },
   });
   check('pickup with the right OTP succeeds', pickup.status === 200 && pickup.body.status === 'picked_up', JSON.stringify(pickup.body).slice(0, 300));
 
@@ -290,10 +322,11 @@ async function main() {
     check(`${command} moves the booking to ${expected}`, step.status === 200 && step.body.status === expected, JSON.stringify(step.body).slice(0, 200));
   }
 
+  const deliveryKey = await uploadPhoto(traveller.token, 'parcel_delivery');
   const deliveryOtp = await call('GET', `/dev/handover-otp/${bookingId}/delivery`, { token: sender.token });
   const delivery = await call('POST', `/bookings/${bookingId}/handover/delivery`, {
     token: traveller.token,
-    body: { otp: deliveryOtp.body.code, photo_key: 'demo/delivery.jpg', receiver_name_confirmed: true },
+    body: { otp: deliveryOtp.body.code, photo_key: deliveryKey, receiver_name_confirmed: true },
   });
   check('delivery succeeds', delivery.status === 200 && delivery.body.status === 'delivered', JSON.stringify(delivery.body).slice(0, 300));
   check('delivery opens the dispute window', Boolean(delivery.body.dispute_deadline));

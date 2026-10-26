@@ -2,9 +2,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 
 import {
   api,
-  clearTokens,
-  readTokens,
-  writeTokens,
+  bootstrap,
+  setAccessToken,
   type AuthResponse,
   type OtpChallenge,
   type Profile,
@@ -17,14 +16,17 @@ interface SessionValue {
   isStaff: boolean;
   requestOtp: (phone: string) => Promise<OtpChallenge>;
   verifyOtp: (challengeId: string, code: string) => Promise<Profile>;
-  signOut: () => Promise<void>;
+  /** Used by the Google callback, which gets the same shape back from a different endpoint. */
+  adoptSession: (res: AuthResponse) => Profile;
+  signOut: (everywhere?: boolean) => Promise<void>;
   reload: () => Promise<void>;
+  /** Replace the cached profile after the server confirms an update to it. */
   setUser: (user: Profile | null) => void;
 }
 
 const SessionContext = createContext<SessionValue | null>(null);
 
-const STAFF_ROLES = ['support_agent', 'trust_safety', 'finance', 'admin_readonly', 'verification_reviewer', 'support_lead'];
+const STAFF_ROLES = ['support_agent', 'trust_safety', 'finance', 'admin_readonly', 'verification_reviewer'];
 
 /**
  * Staff detection reads the caller's own roles from `/me`. `status` roles exist too, so the check
@@ -40,56 +42,72 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const isStaff = isStaffProfile(user);
 
+  // One restore per page load. The refresh cookie is the only durable credential the browser keeps,
+  // so a returning visitor is signed in again without ever typing anything.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const restored = await bootstrap();
+      if (!restored) {
+        if (!cancelled) setLoading(false);
+        return;
+      }
+      try {
+        const profile = await api.get<Profile>('/me');
+        if (!cancelled) setUser(profile);
+      } catch {
+        setAccessToken(null);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const reload = useCallback(async () => {
-    if (!readTokens()) {
-      setUser(null);
-      setLoading(false);
-      return;
-    }
     try {
       const profile = await api.get<Profile>('/me');
       setUser(profile);
     } catch {
-      // A failed `/me` with tokens present means the session is gone. Never keep a ghost user.
-      clearTokens();
+      // A failed `/me` means the session is gone. Never keep a ghost user.
+      setAccessToken(null);
       setUser(null);
-    } finally {
-      setLoading(false);
     }
   }, []);
-
-  useEffect(() => {
-    void reload();
-  }, [reload]);
 
   const requestOtp = useCallback(async (phone: string) => {
     return api.post<OtpChallenge>('/auth/otp/request', { phone, purpose: 'login' }, { auth: false });
   }, []);
 
-  const verifyOtp = useCallback(async (challengeId: string, code: string) => {
-    const res = await api.post<AuthResponse>(
-      '/auth/otp/verify',
-      { challenge_id: challengeId, code },
-      { auth: false },
-    );
-    writeTokens({ access_token: res.access_token, refresh_token: res.refresh_token });
+  const adoptSession = useCallback((res: AuthResponse) => {
+    setAccessToken(res.access_token);
     setUser(res.user);
     return res.user;
   }, []);
 
-  const signOut = useCallback(async () => {
+  const verifyOtp = useCallback(
+    async (challengeId: string, code: string) => {
+      const res = await api.post<AuthResponse>('/auth/otp/verify', { challenge_id: challengeId, code }, { auth: false });
+      return adoptSession(res);
+    },
+    [adoptSession],
+  );
+
+  const signOut = useCallback(async (everywhere = false) => {
     try {
-      await api.post('/auth/logout', {}, { idempotencyKey: crypto.randomUUID() });
+      await api.post(everywhere ? '/auth/logout-all' : '/auth/logout', {});
     } catch {
       // Signing out locally must succeed even if the server call does not.
     }
-    clearTokens();
+    setAccessToken(null);
     setUser(null);
   }, []);
 
   const value = useMemo<SessionValue>(
-    () => ({ user, loading, isStaff, requestOtp, verifyOtp, signOut, reload, setUser }),
-    [user, loading, isStaff, requestOtp, verifyOtp, signOut, reload],
+    () => ({ user, loading, isStaff, requestOtp, verifyOtp, adoptSession, signOut, reload, setUser }),
+    [user, loading, isStaff, requestOtp, verifyOtp, adoptSession, signOut, reload],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

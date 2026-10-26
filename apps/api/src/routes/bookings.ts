@@ -19,6 +19,7 @@ import { generateOtp, hashCode, safeEqual } from '../lib/crypto.ts';
 import { rememberCode } from '../lib/dev-store.ts';
 import { open as openSealed, seal } from '../lib/seal.ts';
 import { bookingView, num, toIso } from '../lib/serialize.ts';
+import { keyBelongsTo } from '../lib/storage.ts';
 import { withIdempotency } from '../lib/idempotency.ts';
 import { audit, emitOutbox, queueNotification } from '../services/audit.ts';
 
@@ -198,7 +199,7 @@ export async function applyBookingTransition(
     reasonCode?: string | null;
     otpValid?: boolean;
     photoPresent?: boolean;
-    supportRole?: 'support_lead' | 'trust_safety' | 'finance' | 'verification_reviewer' | 'admin_readonly' | null;
+    supportRole?: 'support_agent' | 'trust_safety' | 'finance' | 'verification_reviewer' | 'admin_readonly' | null;
     metadata?: Record<string, unknown>;
   } = {},
 ): Promise<{ status: BookingStatus }> {
@@ -397,6 +398,25 @@ export async function bookingRoutes(app: FastifyInstance): Promise<void> {
 
       const reservedKg = num(p.weight_kg) * 1.1;
       const booking = await db.transaction(async (tx) => {
+        // The parcel is re-checked *inside* the transaction. This takes the row lock, so two senders
+        // requesting the same parcel at the same moment cannot both get through: the second one waits,
+        // finds an active booking, and loses cleanly. The unique index stays as the backstop.
+        // The status list mirrors the `bookings_one_active_per_parcel` partial index predicate.
+        const claimed = await tx.query(
+          `UPDATE parcels SET status = 'matched', updated_at = now()
+           WHERE id = $1
+             AND status IN ('posted','matched')
+             AND NOT EXISTS (
+               SELECT 1 FROM bookings b
+               WHERE b.parcel_id = parcels.id
+                 AND b.status NOT IN ('cancelled_by_sender','cancelled_by_traveller','cancelled_ineligible',
+                                      'cancelled_safety','expired','refunded','paid_out')
+             )
+           RETURNING id`,
+          [p.id],
+        );
+        if (claimed.rowCount === 0) throw new AppError('PARCEL_HAS_ACTIVE_BOOKING');
+
         // Atomic capacity reservation. Losing this race is a normal, expected outcome.
         const reserved = await tx.query(
           `UPDATE trips SET capacity_kg_remaining = capacity_kg_remaining - $2,
@@ -420,7 +440,6 @@ export async function bookingRoutes(app: FastifyInstance): Promise<void> {
           `INSERT INTO payouts (booking_id, state, amount_paise) VALUES ($1,'not_eligible',$2)`,
           [b.id, q.traveller_paise],
         );
-        await tx.query(`UPDATE parcels SET status = 'matched', updated_at = now() WHERE id = $1`, [p.id]);
         await tx.query(
           `INSERT INTO booking_events (booking_id, from_state, to_state, actor_id, actor_kind, command)
            VALUES ($1, NULL, 'draft', $2, 'user', 'create')`,
@@ -442,29 +461,38 @@ export async function bookingRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(result.status).send(result.body);
   });
 
-  app.get<{ Querystring: { role?: string; status?: string; limit?: string; cursor?: string } }>('/bookings', async (req) => {
+  app.get('/bookings', async (req) => {
     const auth = requireAuth(req);
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 20) || 20));
+    const q = z
+      .object({
+        role: z.enum(['sender', 'traveller']).optional(),
+        status: z.string().min(1).max(64).optional(),
+        limit: z.coerce.number().int().min(1).max(100).default(20),
+        cursor: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}/)).optional(),
+      })
+      .strict()
+      .parse(req.query);
+    const limit = q.limit;
     const params: unknown[] = [];
     const clauses: string[] = [];
 
     // `trips` also has `traveller_id`, so every column here must be qualified with the `b` alias.
-    if (req.query.role === 'sender') {
+    if (q.role === 'sender') {
       params.push(auth.userId);
       clauses.push(`b.sender_id = $${params.length}`);
-    } else if (req.query.role === 'traveller') {
+    } else if (q.role === 'traveller') {
       params.push(auth.userId);
       clauses.push(`b.traveller_id = $${params.length}`);
     } else {
       params.push(auth.userId, auth.userId);
       clauses.push(`(b.sender_id = $${params.length - 1} OR b.traveller_id = $${params.length})`);
     }
-    if (req.query.status) {
-      params.push(req.query.status);
+    if (q.status) {
+      params.push(q.status);
       clauses.push(`b.status = $${params.length}`);
     }
-    if (req.query.cursor) {
-      params.push(new Date(req.query.cursor));
+    if (q.cursor) {
+      params.push(new Date(q.cursor));
       clauses.push(`b.created_at < $${params.length}`);
     }
     params.push(limit + 1);
@@ -476,11 +504,22 @@ export async function bookingRoutes(app: FastifyInstance): Promise<void> {
       traveller_id: string;
       agreed_total_paise: number;
       mode: string;
+      parcel_id: string;
+      category: string;
+      weight_kg: unknown;
+      origin_city: string;
+      dest_city: string;
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT b.id, b.status, b.sender_id, b.traveller_id, b.agreed_total_paise, t.mode, b.created_at, b.updated_at
-       FROM bookings b JOIN trips t ON t.id = b.trip_id
+      `SELECT b.id, b.status, b.sender_id, b.traveller_id, b.agreed_total_paise, t.mode,
+              b.parcel_id, p.category, p.weight_kg, oc.name AS origin_city, dc.name AS dest_city,
+              b.created_at, b.updated_at
+       FROM bookings b
+       JOIN trips t ON t.id = b.trip_id
+       JOIN parcels p ON p.id = b.parcel_id
+       JOIN cities oc ON oc.id = p.origin_city_id
+       JOIN cities dc ON dc.id = p.dest_city_id
        WHERE ${clauses.join(' AND ')}
        ORDER BY b.created_at DESC LIMIT $${params.length}`,
       params,
@@ -493,6 +532,11 @@ export async function bookingRoutes(app: FastifyInstance): Promise<void> {
         status: r.status,
         role: r.sender_id === auth.userId ? 'sender' : 'traveller',
         mode: r.mode,
+        parcel_id: r.parcel_id,
+        category: r.category,
+        weight_kg: num(r.weight_kg),
+        origin_city: r.origin_city,
+        dest_city: r.dest_city,
         agreed_total_paise: Number(r.agreed_total_paise),
         created_at: toIso(r.created_at),
         updated_at: toIso(r.updated_at),
@@ -599,6 +643,10 @@ export async function bookingRoutes(app: FastifyInstance): Promise<void> {
     if (role !== 'traveller') throw new AppError('TRANSITION_NOT_PERMITTED');
     if (row.status !== 'pickup_ready') throw new AppError('HANDOVER_NOT_ALLOWED_IN_STATE');
 
+    // The handover photo must be the uploader's own object.
+    if (!keyBelongsTo(body.photo_key, auth.userId)) {
+      throw new AppError('VALIDATION_FAILED', { field: 'photo_key' }, 'Upload the photo again from this account.');
+    }
     await verifyHandoverOtp(app, row.id, 'pickup', body.otp);
     await db.query(`UPDATE handovers SET pickup_photo_key = $2, pickup_at = now() WHERE booking_id = $1`, [
       row.id,
@@ -633,6 +681,10 @@ export async function bookingRoutes(app: FastifyInstance): Promise<void> {
       throw new AppError('HANDOVER_NOT_ALLOWED_IN_STATE');
     }
 
+    // The handover photo must be the uploader's own object.
+    if (!keyBelongsTo(body.photo_key, auth.userId)) {
+      throw new AppError('VALIDATION_FAILED', { field: 'photo_key' }, 'Upload the photo again from this account.');
+    }
     await verifyHandoverOtp(app, row.id, 'delivery', body.otp);
     await db.query(`UPDATE handovers SET delivery_photo_key = $2, delivered_at = now() WHERE booking_id = $1`, [
       row.id,

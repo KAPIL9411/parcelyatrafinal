@@ -8,6 +8,7 @@ import { requireAuth } from '../lib/auth.ts';
 import { toIso, toIsoOrNull } from '../lib/serialize.ts';
 import { withDb } from '../lib/db-scope.ts';
 import { withIdempotency } from '../lib/idempotency.ts';
+import { keyBelongsTo } from '../lib/storage.ts';
 import { audit, queueNotification } from '../services/audit.ts';
 import { applyBookingTransition, type BookingRowFull } from './bookings.ts';
 
@@ -174,6 +175,9 @@ export async function disputeRoutes(app: FastifyInstance): Promise<void> {
     const dispute = await loadForParty(app, req.params.disputeId, auth.userId);
 
     if (['resolved', 'closed'].includes(dispute.state)) throw new AppError('DISPUTE_CLOSED');
+    if (body.object_key && !keyBelongsTo(body.object_key, auth.userId)) {
+      throw new AppError('VALIDATION_FAILED', { field: 'object_key' }, 'Upload the evidence again from this account.');
+    }
 
     const created = await db.query<EvidenceRow>(
       `INSERT INTO dispute_evidence (dispute_id, uploaded_by, object_key, note)

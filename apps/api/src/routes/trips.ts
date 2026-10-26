@@ -93,17 +93,25 @@ export async function tripRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send(tripView(inserted.rows[0]! as never));
   });
 
-  app.get<{ Querystring: { status?: string; limit?: string; cursor?: string } }>('/trips', async (req) => {
+  app.get('/trips', async (req) => {
     const auth = requireAuth(req);
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 20) || 20));
+    const q = z
+      .object({
+        status: z.enum(['published', 'partially_booked', 'full', 'in_progress', 'completed', 'cancelled', 'expired']).optional(),
+        limit: z.coerce.number().int().min(1).max(100).default(20),
+        cursor: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}/)).optional(),
+      })
+      .strict()
+      .parse(req.query);
+    const limit = q.limit;
     const params: unknown[] = [auth.userId];
     let where = `traveller_id = $1`;
-    if (req.query.status) {
-      params.push(req.query.status);
+    if (q.status) {
+      params.push(q.status);
       where += ` AND status = $${params.length}`;
     }
-    if (req.query.cursor) {
-      params.push(new Date(req.query.cursor));
+    if (q.cursor) {
+      params.push(new Date(q.cursor));
       where += ` AND departure_at < $${params.length}`;
     }
     params.push(limit + 1);

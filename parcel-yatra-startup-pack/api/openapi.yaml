@@ -1450,6 +1450,28 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 
+  /admin/payouts/{bookingId}/approve:
+    parameters:
+      - $ref: '#/components/parameters/BookingId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Admin]
+      operationId: adminApprovePayout
+      summary: Second-approver sign-off for a payout above the dual-approval threshold
+      description: |
+        Requires the `finance` role. Appends a `payout.approved` audit entry for this booking so a
+        subsequent release can pass `approval_id = <approver user id>`. Self-approval is refused:
+        the release caller must be a different finance user than the approver.
+      responses:
+        '201':
+          description: Approval recorded
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Booking or payout row missing
+        '409':
+          description: PAYOUT_NOT_ELIGIBLE (payout already released or void)
+
   /admin/payouts/{bookingId}/release:
     parameters:
       - $ref: '#/components/parameters/BookingId'
@@ -1836,6 +1858,19 @@ components:
           enum: [en-IN, hi-IN]
         verification_state:
           $ref: '#/components/schemas/VerificationState'
+        phone_verified:
+          type: boolean
+          description: >-
+            True only when the number was confirmed by a code. A number that was typed into the
+            profile is not a verified number.
+        email_verified:
+          type: boolean
+          description: True only when the provider (Google) or a verification step confirmed the address.
+        roles:
+          type: array
+          description: The caller's own staff roles, read from user_roles on every request. Never client-supplied.
+          items:
+            type: string
         created_at:
           type: string
           format: date-time
@@ -2119,6 +2154,14 @@ components:
         reliability_band:
           type: string
           enum: [new, building, reliable, highly_reliable]
+        reliability_ratio:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: completed / (completed + traveller cancellations) over the last 20 finished trips
+        completed_trips:
+          type: integer
+          minimum: 0
         mode:
           $ref: '#/components/schemas/TransportMode'
         departure_at:
@@ -2132,9 +2175,30 @@ components:
         pickup_distance_band_km:
           type: string
           enum: ['<1', '1-3', '3-5', '5-10']
+          description: Straight-line band between city centroids. Never a road distance.
         indicative_price_paise:
           type: integer
           minimum: 0
+        accepts_documents_only:
+          type: boolean
+        score_breakdown:
+          type: object
+          additionalProperties: false
+          required: [formula_version, fit, points]
+          properties:
+            formula_version:
+              type: string
+            fit:
+              type: object
+              additionalProperties:
+                type: number
+                minimum: 0
+                maximum: 1
+            points:
+              type: object
+              additionalProperties:
+                type: number
+                minimum: 0
 
     MatchList:
       type: object
@@ -2158,6 +2222,11 @@ components:
               - ORIGIN_NOT_SERVED
               - DESTINATION_NOT_SERVED
               - MODE_DISABLED
+              - TRAVELLER_NOT_VERIFIED
+              - CATEGORY_NOT_ACCEPTED
+              - PARCEL_TOO_LARGE
+              - PARCEL_NOT_OPEN
+              - PARCEL_ALREADY_ASSIGNED
 
     TransportMode:
       type: string
@@ -2276,6 +2345,18 @@ components:
           enum: [sender, traveller]
         mode:
           $ref: '#/components/schemas/TransportMode'
+        parcel_id:
+          type: string
+          format: uuid
+        category:
+          $ref: '#/components/schemas/Category'
+        weight_kg:
+          type: number
+          description: The parcel weight the booking reserved capacity for.
+        origin_city:
+          type: string
+        dest_city:
+          type: string
         agreed_total_paise:
           type: integer
         created_at:

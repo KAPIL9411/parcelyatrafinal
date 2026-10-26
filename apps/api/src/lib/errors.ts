@@ -35,6 +35,7 @@ export type ErrorCode =
   | 'REQUEST_IN_PROGRESS'
   | 'PAYLOAD_TOO_LARGE'
   | 'PHONE_NOT_VERIFIED'
+  | 'CONTACT_NOT_VERIFIED'
   | 'ITEM_PROHIBITED'
   | 'PARCEL_TOO_LARGE'
   | 'VALUE_ABOVE_PILOT_LIMIT'
@@ -68,6 +69,7 @@ export type ErrorCode =
   | 'PAYMENTS_NOT_ENABLED'
   | 'PAYOUTS_NOT_ENABLED'
   | 'SPLIT_SETTLEMENT_NOT_ENABLED'
+  | 'BACKGROUND_WORKER_UNAVAILABLE'
   | 'PAYMENT_ALREADY_EXISTS'
   | 'PAYMENT_NOT_PAYABLE'
   | 'PAYMENT_PROVIDER_UNAVAILABLE'
@@ -129,6 +131,7 @@ export const ERROR_TABLE: Record<ErrorCode, Spec> = {
   REQUEST_IN_PROGRESS: { status: 409, message: 'That request is still being processed.' },
   PAYLOAD_TOO_LARGE: { status: 413, message: 'That file or request is too large.' },
   PHONE_NOT_VERIFIED: { status: 403, message: 'Verify your phone number first.' },
+  CONTACT_NOT_VERIFIED: { status: 403, message: 'Sign in with a verified email or phone number first.' },
   ITEM_PROHIBITED: { status: 422, message: 'We do not carry that item.' },
   PARCEL_TOO_LARGE: { status: 422, message: 'Parcels are capped at 5 kg and 45 cm.' },
   VALUE_ABOVE_PILOT_LIMIT: { status: 422, message: 'Declared value is capped at ₹5,000.' },
@@ -162,6 +165,10 @@ export const ERROR_TABLE: Record<ErrorCode, Spec> = {
   PAYMENTS_NOT_ENABLED: { status: 501, message: 'Payments are not enabled in this environment.' },
   PAYOUTS_NOT_ENABLED: { status: 501, message: 'Payouts are not enabled.' },
   SPLIT_SETTLEMENT_NOT_ENABLED: { status: 501, message: 'Split settlement is not enabled.' },
+  BACKGROUND_WORKER_UNAVAILABLE: {
+    status: 501,
+    message: 'This deployment has no background worker. The action cannot be completed here.',
+  },
   PAYMENT_ALREADY_EXISTS: { status: 409, message: 'A payment already exists for this booking.' },
   PAYMENT_NOT_PAYABLE: { status: 409, message: 'This booking is not payable right now.' },
   PAYMENT_PROVIDER_UNAVAILABLE: { status: 503, message: 'The payment provider did not respond. Nothing was charged.' },

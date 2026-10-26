@@ -60,6 +60,12 @@ const schema = z.object({
 
   HOST: z.string().default('127.0.0.1'),
 
+  /**
+   * Comma-separated addresses that receive the staff role set when they sign in with Google.
+   * Compared lowercased against the *Google-verified* email, server-side, at sign-in only.
+   */
+  ADMIN_EMAILS: z.string().default(''),
+
   JWT_ACCESS_SECRET: secret.default('dev_only_access_secret_change_me_48bytes'),
   JWT_REFRESH_SECRET: secret.default('dev_only_refresh_secret_change_me_48bytes'),
   JWT_ACCESS_TTL_SECONDS: int(1800, 60, 3600),
@@ -71,6 +77,14 @@ const schema = z.object({
   PHONE_HASH_SECRET: secret.default('dev_only_phone_hash_secret_change_me'),
   /** Seals handover codes so the sender can read them in-app without storing plaintext at rest. */
   OTP_SEAL_SECRET: secret.default('dev_only_otp_seal_secret_change_me'),
+
+  /**
+   * Whether a verified phone number is required to *use* the product. It is false while the
+   * business has no DLT-registered SMS route: a Google-verified email is then the verified contact
+   * channel, and the handover codes stay in-app. Flipping this to true re-arms rule E2 and the OTP
+   * login path without any code change.
+   */
+  PHONE_VERIFICATION_REQUIRED: bool(false),
 
   // OTP delivery. `log` is the zero-cost pilot path: the code is written to the operator log and
   // relayed out of band. It is never returned to the client.
@@ -134,9 +148,19 @@ const schema = z.object({
   DISPUTE_WINDOW_HOURS: int(72, 1),
   REVIEW_WINDOW_DAYS: int(7, 1),
 
+  // Matching tunables (docs/MATCHING_ENGINE.md §4). A trip that fails a hard constraint is never
+  // ranked, so these only retune the order of eligible trips.
+  MATCH_MAX_ORIGIN_DETOUR_KM: int(10, 0, 50),
+  MATCH_ARRIVAL_GRACE_HOURS: int(2, 0, 24),
+  MATCH_MIN_SCORE: int(50, 0, 100),
+  MATCH_MAX_RESULTS: int(10, 1, 50),
+  /** Optional override: `time=30,departure=20,detour=20,reliability=15,capacity=10,preference=5`. */
+  MATCH_WEIGHTS: z.string().default(''),
+  /** Hard cap on trips read per match request, so a busy corridor cannot exhaust the pool. */
+  MATCH_CANDIDATE_SCAN_LIMIT: int(200, 10, 1000),
+
   // Feature flags
-  FEATURE_MATCHING_ENABLED: bool(true),
-  FEATURE_NEW_BOOKINGS_ENABLED: bool(true),
+  FEATURE_MATCHING_ENABLED: bool(true),  FEATURE_NEW_BOOKINGS_ENABLED: bool(true),
   FEATURE_VERIFICATION_SUBMISSIONS_ENABLED: bool(true),
   FEATURE_PAYMENTS_ENABLED: bool(true),
   FEATURE_PAYOUTS_ENABLED: bool(false),
@@ -156,6 +180,13 @@ const schema = z.object({
   RATE_LIMIT_WRITE_PER_MINUTE: int(60, 1),
   RATE_LIMIT_OTP_PER_HOUR_PER_NUMBER: int(3, 1),
   TRUST_PROXY: bool(false),
+
+  /**
+   * Extra browser origins allowed to call the API with credentials, comma separated. Kept as an
+   * explicit list: a suffix match such as `*.vercel.app` would let any tenant of the platform read
+   * a signed-in user's data.
+   */
+  WEB_ORIGINS: z.string().default(''),
 
   LOG_REQUEST_BODIES: bool(false),
   FAIL_FAST_ON_PAYMENT_CONFIG: bool(true),
@@ -188,6 +219,22 @@ function load(): Config {
 }
 
 export const config = load();
+
+/** Lowercased, de-duplicated set of addresses that receive staff access at sign-in. */
+export const adminEmails = new Set(
+  config.ADMIN_EMAILS.split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean),
+);
+
+/** Exact browser origins permitted to send credentials. Never a pattern. */
+export const corsOrigins = Array.from(
+  new Set(
+    [config.PUBLIC_WEB_URL, config.ADMIN_WEB_URL, ...config.WEB_ORIGINS.split(',').map((o) => o.trim())]
+      .filter((o) => o && !o.includes('CHANGE_ME'))
+      .map((o) => o.replace(/\/$/, '')),
+  ),
+);
 
 /** Hard safety rails. These throw at boot rather than at the moment money would move. */
 export function assertSafetyRails(c: Config): void {
@@ -246,6 +293,11 @@ export function assertSafetyRails(c: Config): void {
       console.warn(
         '[warn] STORAGE_PROVIDER=local in production. Uploads are stored on the host disk.\n' +
         '       Set STORAGE_PROVIDER=cloudinary with Cloudinary credentials for durable object storage.',
+      );
+    }
+    if (c.SMS_PROVIDER === 'log') {
+      problems.push(
+        'SMS_PROVIDER=log in production would print OTP codes to stdout. Use a real gateway (fast2sms / twilio / two_factor) or SMS_PROVIDER=none to disable OTP delivery.',
       );
     }
   }

@@ -67,6 +67,9 @@ export function bearerToken(req: FastifyRequest): string | null {
  * Populates `request.auth`. Missing credentials are rejected with AUTH_REQUIRED; a bad token with
  * AUTH_TOKEN_INVALID. Resource-level authorisation is handled per route and always returns 404 for
  * resources the caller is not party to (resource non-disclosure).
+ *
+ * The user row is read on every request so that suspension and deletion take effect immediately —
+ * a 30-minute access token must not outlive the account it belongs to.
  */
 export function makeAuthenticate(db: Db) {
   return async function authenticate(req: FastifyRequest, _reply: FastifyReply): Promise<void> {
@@ -74,13 +77,22 @@ export function makeAuthenticate(db: Db) {
     if (!token) throw new AppError('AUTH_REQUIRED');
     const claims = await verifyAccessToken(token);
 
-    const session = await db.query<{ id: string; revoked_at: Date | null; expires_at: Date }>(
-      `SELECT id, revoked_at, expires_at FROM sessions WHERE id = $1`,
+    const session = await db.query<{
+      id: string;
+      revoked_at: Date | null;
+      expires_at: Date;
+      status: 'active' | 'suspended' | 'deleted';
+    }>(
+      `SELECT s.id, s.revoked_at, s.expires_at, u.status
+       FROM sessions s JOIN users u ON u.id = s.user_id
+       WHERE s.id = $1`,
       [claims.sid],
     );
     const row = session.rows[0];
     if (!row || row.revoked_at) throw new AppError('AUTH_SESSION_REVOKED');
     if (new Date(row.expires_at).getTime() < Date.now()) throw new AppError('AUTH_TOKEN_EXPIRED');
+    if (row.status === 'deleted') throw new AppError('ACCOUNT_DELETED');
+    if (row.status === 'suspended') throw new AppError('ACCOUNT_SUSPENDED');
 
     const roles = await db.query<{ role: string }>(`SELECT role FROM user_roles WHERE user_id = $1`, [claims.sub]);
     req.auth = {

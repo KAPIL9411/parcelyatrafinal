@@ -7,5 +7,5 @@
       "@py/domain": ["../../packages/domain/src/index.ts"]
     }
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts"]
 }

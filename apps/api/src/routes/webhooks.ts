@@ -1,7 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
-import { config } from '../config.ts';
 import { AppError } from '../lib/errors.ts';
 import { safeEqual, webhookSignature } from '../lib/crypto.ts';
 import { audit } from '../services/audit.ts';
@@ -91,11 +90,13 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     const bookingRes = await db.query<BookingRowFull>(`SELECT * FROM bookings WHERE id = $1`, [p.booking_id]);
     const booking = bookingRes.rows[0];
 
-    if (event.type === 'payment.authorised' || event.type === 'payment.captured') {
-      await db.query(`UPDATE payments SET state = $2, updated_at = now() WHERE id = $1`, [
-        p.id,
-        event.type === 'payment.captured' ? 'captured' : 'authorised',
-      ]);
+    if (event.type === 'payment.authorised') {
+      // Authorisation is a hold, not settled money. Record the state, do not confirm the booking.
+      await db.query(`UPDATE payments SET state = 'authorised', updated_at = now() WHERE id = $1`, [p.id]);
+    }
+
+    if (event.type === 'payment.captured') {
+      await db.query(`UPDATE payments SET state = 'captured', updated_at = now() WHERE id = $1`, [p.id]);
       if (booking && booking.status === 'payment_pending') {
         await applyBookingTransition(app, booking, 'payment_authorised', 'system', {
           reasonCode: event.type,
@@ -153,12 +154,4 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     req.log.info({ event_id: event.id, type: event.type, sandbox: true }, 'webhook processed');
     return reply.code(200).send({ received: true });
   });
-
-  // Exposed so operators can see whether live money is possible without reading config.
-  app.get('/webhooks/payments/health', { config: { rateLimit: false } }, async () => ({
-    provider: config.PAYMENT_PROVIDER,
-    live: config.PAYMENTS_LIVE,
-    payouts_enabled: config.PAYOUTS_ENABLED,
-    sandbox: true,
-  }));
 }

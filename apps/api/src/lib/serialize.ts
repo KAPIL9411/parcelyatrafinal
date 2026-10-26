@@ -41,12 +41,18 @@ export interface UserRow {
   id: string;
   name: string | null;
   email: string | null;
-  phone_last4: string;
+  phone_last4: string | null;
   status: 'active' | 'suspended' | 'deleted';
   risk_tier: number;
   locale: string;
   created_at: Date | string;
   verification_state?: VerificationState | null;
+  /**
+   * Whether each contact channel has actually been confirmed. A number typed into a profile is not
+   * a verified number, and the UI must be able to say so honestly.
+   */
+  phone_verified?: boolean;
+  email_verified?: boolean;
 }
 
 export function userProfile(row: UserRow, roles: string[] = []) {
@@ -59,6 +65,8 @@ export function userProfile(row: UserRow, roles: string[] = []) {
     risk_tier: Number(row.risk_tier),
     locale: row.locale,
     verification_state: row.verification_state ?? 'not_started',
+    phone_verified: row.phone_verified ?? false,
+    email_verified: row.email_verified ?? false,
     created_at: toIso(row.created_at),
     // The caller's own roles only. Additive to the contract: see docs/BUILD_NOTES.md DEFECT-011.
     // Without it every client has to probe a staff endpoint and eat a 403 to find out.

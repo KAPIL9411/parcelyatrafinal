@@ -33,7 +33,7 @@ import {
   TextArea,
   cn,
 } from '../components/ui';
-import { Chip, PayoutChip, SandboxChip, StatusChip, VerificationChip } from '../components/StatusChip';
+import { Chip, PayoutChip, StatusChip, VerificationChip } from '../components/StatusChip';
 import { OtpInput } from '../components/OtpInput';
 import { LastUpdated, Timeline } from '../components/Timeline';
 import { RouteLine } from '../components/RouteLine';
@@ -240,9 +240,9 @@ export function BookingDetail() {
         <MoneyRow label="Total the sender pays" amountPaise={booking.agreed_total_paise} />
         <MoneyRow label="Traveller’s share" amountPaise={booking.traveller_share_paise} note="Paid after delivery, once the problem window has passed." />
         <div className="mt-3">
-          <SandboxChip />
-          <p className="mt-2 text-xs text-ink-500">
-            Test mode. No real money is charged and no real payout is made in this build.
+          <p className="text-xs text-ink-500">
+            Payments run through a sandbox provider in this build. No money leaves an account and no payout is
+            released.
           </p>
         </div>
       </Card>
@@ -348,7 +348,7 @@ function ActionPanel({
             </div>
             {import.meta.env.DEV ? (
               <Button variant="tertiary" size="sm" loading={acting === 'advance'} onClick={() => void devAdvance()}>
-                Open pickup now (test mode)
+                Open pickup now
               </Button>
             ) : null}
           </div>
@@ -498,11 +498,10 @@ function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Pro
 
       // There is no provider UI in this build. The sandbox adapter is driven by the same signed
       // webhook a real provider would call, through the development simulator.
-      await api.post(
-        '/dev/webhooks/simulate',
-        { type: 'payment.captured', provider_ref: intent.provider_ref },
-        { auth: false },
-      );
+      await api.post('/dev/webhooks/simulate', {
+        type: 'payment.captured',
+        provider_ref: intent.provider_ref,
+      });
 
       await onPaid();
       setState('done');
@@ -513,7 +512,7 @@ function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Pro
   }
 
   return (
-    <Card className="border-brand-600/25">
+    <Card>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-ink-900">Confirm and pay</h2>
@@ -521,17 +520,16 @@ function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Pro
             The traveller accepted. Your price is fixed at {inr(booking.agreed_total_paise)}.
           </p>
         </div>
-        <SandboxChip />
       </div>
 
-      <Banner tone="warn" className="mt-4" title="Test mode. No real money will be charged.">
-        This build uses a mock payment provider. The booking moves forward exactly as it would after a real
+      <Banner tone="info" className="mt-4" title="Sandbox payments">
+        This build uses a test payment provider. The booking moves forward exactly as it would after a real
         capture, and nothing leaves a bank account.
       </Banner>
 
       {state === 'confirming' ? (
         <p className="mt-4 flex items-center gap-2 text-sm font-semibold text-ink-900">
-          <ClockIcon size={18} className="text-brand-700" /> Confirming with the mock provider…
+          <ClockIcon size={18} className="text-brand-700" /> Confirming with the payment provider…
         </p>
       ) : null}
 
@@ -541,7 +539,7 @@ function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Pro
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <Button size="lg" loading={state === 'creating' || state === 'confirming'} disabled={state === 'done'} onClick={() => void pay()}>
-          Pay {inr(booking.agreed_total_paise)} in test mode
+          Pay {inr(booking.agreed_total_paise)}
         </Button>
         <span className="text-xs text-ink-500">
           Amount set by the server from the stored quote. A client-supplied amount is ignored.
@@ -584,7 +582,7 @@ function SenderCodePanel({
   const pickup = phase === 'pickup';
 
   return (
-    <Card className="border-brand-600/30">
+    <Card>
       <h2 className="text-lg font-semibold text-ink-900">{pickup ? 'Pickup code' : 'Delivery code'}</h2>
       <p className="mt-1 text-sm text-ink-500">
         {pickup ? (
@@ -600,9 +598,9 @@ function SenderCodePanel({
       </p>
 
       {code ? (
-        <div className="mt-4 rounded-card border border-dashed border-brand-600/40 bg-brand-50 px-4 py-5 text-center">
-          <p className="tabular text-3xl font-bold tracking-[0.3em] text-brand-900">{code}</p>
-          <p className="mt-2 text-xs font-semibold text-ink-500">
+        <div className="mt-4 rounded-card border border-dashed border-line-strong bg-canvas px-4 py-6 text-center">
+          <p className="tabular text-3xl font-bold tracking-[0.3em] text-ink-900">{code}</p>
+          <p className="mt-2 text-xs font-medium text-ink-500">
             {handover.data?.expires_at
               ? `Valid until ${new Date(handover.data.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`
               : 'Six digits. Read it out; do not forward it.'}
@@ -701,7 +699,7 @@ function HandoverPanel({
   const copy = error ? errorCopy(error) : null;
 
   return (
-    <Card className="border-brand-600/30">
+    <Card>
       <h2 className="text-lg font-semibold text-ink-900">
         {phase === 'pickup' ? 'Confirm pickup' : 'Confirm delivery'}
       </h2>
@@ -727,7 +725,7 @@ function HandoverPanel({
             className="mt-2 text-xs font-semibold text-warn-600 underline underline-offset-2"
             onClick={() => setCode(testCode)}
           >
-            Test mode: use code {testCode}
+            Use code {testCode}
           </button>
         ) : null}
       </div>
@@ -760,7 +758,7 @@ function HandoverPanel({
             {phase === 'pickup' ? 'Photo of the sealed parcel' : 'Photo of the handover'}
           </p>
           <div className="flex flex-wrap items-center gap-2">
-            <label className="inline-flex min-h-12 cursor-pointer items-center gap-2 rounded-input border border-line-strong bg-surface px-4 text-sm font-semibold text-ink-900 hover:border-ink-500">
+            <label className="inline-flex h-11 cursor-pointer items-center gap-2 rounded-input border border-line-strong bg-surface px-4 text-sm font-medium text-ink-900 hover:bg-canvas">
               <CameraIcon size={18} />
               {photoKey ? 'Replace photo' : 'Take a photo'}
               <input
@@ -773,7 +771,7 @@ function HandoverPanel({
             </label>
             {import.meta.env.DEV ? (
               <Button variant="tertiary" size="sm" loading={uploading} onClick={() => void attach(sampleImage(`${phase}.png`))}>
-                Use sample image (test mode)
+                Use sample image
               </Button>
             ) : null}
             {photoKey ? (
@@ -1065,7 +1063,7 @@ function CasePanel({ booking, onChanged }: { booking: Booking; onChanged: () => 
           </Field>
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <label className="inline-flex min-h-12 cursor-pointer items-center gap-2 rounded-input border border-line-strong bg-surface px-4 text-sm font-semibold text-ink-900 hover:border-ink-500">
+            <label className="inline-flex h-11 cursor-pointer items-center gap-2 rounded-input border border-line-strong bg-surface px-4 text-sm font-medium text-ink-900 hover:bg-canvas">
               <CameraIcon size={18} />
               {photoKey ? 'Replace photo' : 'Attach a photo'}
               <input
@@ -1077,7 +1075,7 @@ function CasePanel({ booking, onChanged }: { booking: Booking; onChanged: () => 
             </label>
             {import.meta.env.DEV ? (
               <Button variant="tertiary" size="sm" loading={uploading} onClick={() => void attach(sampleImage('case.png'))}>
-                Use sample image (test mode)
+                Use sample image
               </Button>
             ) : null}
             {photoKey ? (

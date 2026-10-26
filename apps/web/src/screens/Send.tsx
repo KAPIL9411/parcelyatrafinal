@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
 import {
+  CATEGORIES,
   CATEGORY_HINTS,
   CATEGORY_LABELS,
   MATCH_REASON_LABELS,
@@ -34,7 +35,7 @@ import {
   TextInput,
   cn,
 } from '../components/ui';
-import { MatchBandChip, SandboxChip } from '../components/StatusChip';
+import { MatchBandChip } from '../components/StatusChip';
 import { RouteLine } from '../components/RouteLine';
 import {
   ArrowRightIcon,
@@ -108,6 +109,7 @@ export function Send() {
   const { user } = useSession();
   const online = useOnline();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   const config = useConfig();
   const cities = useCities();
@@ -115,8 +117,17 @@ export function Send() {
   const delhi = cities.data?.find((c) => c.name === 'Delhi');
 
   const [step, setStep] = useState(1);
-  const [item, setItem] = useState<ItemState>(defaultItem);
-  const [route, setRoute] = useState<RouteState>(() => defaultRoute(undefined, undefined));
+  const [item, setItem] = useState<ItemState>(() => {
+    const base = defaultItem();
+    const weight = Number(searchParams.get('weight'));
+    if (Number.isFinite(weight) && weight >= 0.1 && weight <= 5) base.weightKg = String(weight);
+    const category = searchParams.get('category');
+    if (category && CATEGORIES.includes(category as Category)) base.category = category as Category;
+    return base;
+  });
+  const [route, setRoute] = useState<RouteState>(() =>
+    defaultRoute(searchParams.get('origin') ?? undefined, searchParams.get('dest') ?? undefined),
+  );
   const [routeSeeded, setRouteSeeded] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -136,15 +147,17 @@ export function Send() {
   const destCity = cities.data?.find((c) => c.id === route.destCityId);
 
   // Seed the route once the catalogue arrives, without clobbering anything the user already chose.
+  // Prefilled IDs from the homepage must exist in the catalogue, or they fall back to the defaults.
   useEffect(() => {
     if (routeSeeded || !bareilly || !delhi) return;
+    const cityIds = new Set((cities.data ?? []).map((c) => c.id));
     setRoute((prev) => ({
       ...prev,
-      originCityId: prev.originCityId || bareilly.id,
-      destCityId: prev.destCityId || delhi.id,
+      originCityId: prev.originCityId && cityIds.has(prev.originCityId) ? prev.originCityId : bareilly.id,
+      destCityId: prev.destCityId && cityIds.has(prev.destCityId) ? prev.destCityId : delhi.id,
     }));
     setRouteSeeded(true);
-  }, [routeSeeded, bareilly, delhi]);
+  }, [routeSeeded, bareilly, delhi, cities.data]);
 
   const quoteRemaining = useCountdown(quote?.expires_at);
   const quoteExpired = Boolean(quote) && quoteRemaining <= 0;
@@ -167,7 +180,7 @@ export function Send() {
     if (!Number.isFinite(weight) || weight <= 0 || weight > 5) next.weight = 'Weight must be between 0.1 and 5 kg.';
     if (dims.some((d) => !Number.isFinite(d) || d < 1 || d > 45)) next.dims = 'Each side must be between 1 and 45 cm.';
     if (!Number.isFinite(value) || value < 1 || value > MAX_VALUE_RUPEES) {
-      next.value = 'We carry items worth up to ₹5,000 at pilot, because parcels are not insured yet.';
+      next.value = 'We carry items worth up to ₹5,000 at launch, because parcels are not insured yet.';
     }
     if (!item.photoKey) next.photo = 'Photograph the sealed parcel.';
     if (!item.packaging.sealed || !item.packaging.tamperEvident || !item.packaging.noLiquids) {
@@ -310,7 +323,9 @@ export function Send() {
     return (
       <Card className="mx-auto max-w-lg text-center">
         <h1 className="text-xl font-semibold text-ink-900">Sign in to send a parcel</h1>
-        <p className="mt-1 text-sm text-ink-500">We need a verified phone number before a parcel can be posted.</p>
+        <p className="mt-1 text-sm text-ink-500">
+          Sign in with Google, or with a phone number and a code, to post a parcel.
+        </p>
         <Link to="/login?next=/send" className="mt-5 inline-block">
           <Button>Sign in</Button>
         </Link>
@@ -321,8 +336,8 @@ export function Send() {
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
-        <p className="text-xs font-semibold tracking-wide text-brand-700 uppercase">New parcel</p>
-        <h1 className="mt-1 text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl">Send a parcel</h1>
+        <p className="text-xs font-medium tracking-wide text-ink-500 uppercase">New parcel</p>
+        <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-ink-900 sm:text-2xl">Send a parcel</h1>
         <p className="mt-1 text-sm text-ink-500">
           Three steps. Nothing is charged until a traveller accepts and you confirm the price.
         </p>
@@ -429,7 +444,7 @@ export function Send() {
               hint="Photograph the parcel after sealing it. We strip location data from the photo."
             >
               <div className="flex flex-wrap items-center gap-2">
-                <label className="inline-flex min-h-12 cursor-pointer items-center gap-2 rounded-input border border-line-strong bg-surface px-4 text-sm font-semibold text-ink-900 hover:border-ink-500">
+                <label className="inline-flex h-11 cursor-pointer items-center gap-2 rounded-input border border-line-strong bg-surface px-4 text-sm font-medium text-ink-900 hover:bg-canvas">
                   <CameraIcon size={18} />
                   {item.photoKey ? 'Replace photo' : 'Take or choose a photo'}
                   <input
@@ -447,7 +462,7 @@ export function Send() {
                     loading={uploading}
                     onClick={() => void handlePhoto(sampleImage('sealed-parcel.png'))}
                   >
-                    Use sample image (test mode)
+                    Use sample image
                   </Button>
                 ) : null}
                 {item.photoKey ? (
@@ -587,7 +602,7 @@ export function Send() {
             <SectionHeading
               eyebrow="Step 2"
               title="Where and when?"
-              description="We only run the corridors below at pilot. Pickup and drop use the area you choose — never GPS."
+              description="We only run the corridors below at launch. Pickup and drop use the area you choose — never GPS."
             />
 
             <div className="grid gap-4 sm:grid-cols-2">
@@ -763,7 +778,6 @@ export function Send() {
                     <h2 className="text-lg font-semibold text-ink-900">Price</h2>
                     <p className="text-sm text-ink-500">Every line is named. The server computed it.</p>
                   </div>
-                  <SandboxChip />
                 </div>
 
                 {quote ? (
@@ -942,6 +956,9 @@ function MatchCard({ match, selected, onSelect }: { match: Match; selected: bool
         <span className="inline-flex items-center gap-1">
           <ParcelIcon size={14} /> {kg(match.capacity_kg_remaining)} space left
         </span>
+        {match.pickup_distance_band_km && match.pickup_distance_band_km !== '<1' ? (
+          <span>Starts {match.pickup_distance_band_km} km away, as the crow flies</span>
+        ) : null}
         <span>Indicative {inr(match.indicative_price_paise)}</span>
         {match.accepts_documents_only ? <span>Documents only</span> : null}
       </div>

@@ -69,7 +69,7 @@ export interface TransitionContext {
   pickupConsumed?: boolean;
   payoutAmountPaise?: number;
   ledgerBalancePaise?: number;
-  supportRole?: 'support_lead' | 'trust_safety' | 'finance' | 'verification_reviewer' | 'admin_readonly' | null;
+  supportRole?: 'support_agent' | 'trust_safety' | 'finance' | 'verification_reviewer' | 'admin_readonly' | null;
 }
 
 export interface TransitionFailure {
@@ -244,14 +244,14 @@ const RULES: readonly Rule[] = [
     command: 'clear',
     to: 'confirmed',
     actors: ['support'],
-    guard: guard('TRANSITION_NOT_PERMITTED', 'Only a support lead can clear a locked booking.', (ctx) => ctx.supportRole === 'support_lead'),
+    guard: guard('TRANSITION_NOT_PERMITTED', 'Only a support agent can clear a locked booking.', (ctx) => ctx.supportRole === 'support_agent'),
   },
   {
     from: 'locked_for_review',
     command: 'cancel',
     to: 'cancelled_safety',
     actors: ['support'],
-    guard: guard('TRANSITION_NOT_PERMITTED', 'Only a support lead can cancel a locked booking.', (ctx) => ctx.supportRole === 'support_lead'),
+    guard: guard('TRANSITION_NOT_PERMITTED', 'Only a support agent can cancel a locked booking.', (ctx) => ctx.supportRole === 'support_agent'),
   },
 ];
 

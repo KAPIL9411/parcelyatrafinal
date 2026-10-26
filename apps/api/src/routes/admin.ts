@@ -66,22 +66,68 @@ const resolveDisputeSchema = z
   })
   .strict();
 
+// ---- querystring schemas (Fastify delivers these as raw strings; parse before they reach SQL)
+
+const isoDate = z
+  .string()
+  .datetime({ offset: true })
+  .or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'))
+  .transform((s) => new Date(s));
+
+const verificationQueueQuery = z
+  .object({
+    state: z.enum(['pending', 'verified', 'rejected', 'expired', 'awaiting_user']).optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+    offset: z.coerce.number().int().min(0).max(100_000).default(0),
+  })
+  .strict();
+
+const adminBookingsQuery = z
+  .object({
+    status: z.string().min(1).max(64).optional(),
+    phone_hash: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+    created_from: isoDate.optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+    offset: z.coerce.number().int().min(0).max(100_000).default(0),
+  })
+  .strict();
+
+const disputeQueueQuery = z
+  .object({
+    state: z.enum(['open', 'under_review', 'evidence_requested', 'resolved', 'escalated']).optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+    offset: z.coerce.number().int().min(0).max(100_000).default(0),
+  })
+  .strict();
+
+const auditQuery = z
+  .object({
+    resource: z.string().min(1).max(64).optional(),
+    resource_id: z.string().uuid().optional(),
+    from: isoDate.optional(),
+    to: isoDate.optional(),
+    limit: z.coerce.number().int().min(1).max(200).default(100),
+    offset: z.coerce.number().int().min(0).max(100_000).default(0),
+  })
+  .strict();
+
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
   const db = app.db;
   app.addHook('preHandler', makeAuthenticate(db));
 
   // ---------------------------------------------------------------- verification queue
 
-  app.get<{ Querystring: { state?: string; limit?: string } }>('/admin/verifications', async (req) => {
+  app.get('/admin/verifications', async (req) => {
     const auth = requireRole(req, 'verification_reviewer', 'trust_safety');
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 50) || 50));
+    const q = verificationQueueQuery.parse(req.query);
     const params: unknown[] = [];
     let where = '1=1';
-    if (req.query.state) {
-      params.push(req.query.state);
+    if (q.state) {
+      params.push(q.state);
       where += ` AND v.state = $${params.length}`;
     }
-    params.push(limit);
+    params.push(q.limit);
+    params.push(q.offset);
 
     const res = await db.query<{
       id: string;
@@ -96,7 +142,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       `SELECT v.id, v.user_id, v.state, v.id_type, v.reason_code, v.decided_at, v.created_at,
               (SELECT count(*)::text FROM verifications x WHERE x.user_id = v.user_id) AS attempts
        FROM verifications v WHERE ${where}
-       ORDER BY v.created_at ASC LIMIT $${params.length}`,
+       ORDER BY v.created_at ASC LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
     );
 
@@ -119,6 +165,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         decided_at: toIsoOrNull(r.decided_at),
         created_at: toIso(r.created_at),
       })),
+      page: { limit: q.limit, offset: q.offset },
     };
   });
 
@@ -188,29 +235,28 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
   // ---------------------------------------------------------------- bookings
 
-  app.get<{
-    Querystring: { status?: string; phone_hash?: string; created_from?: string; limit?: string };
-  }>('/admin/bookings', async (req) => {
+  app.get('/admin/bookings', async (req) => {
     const auth = requireRole(req, 'support_agent', 'trust_safety', 'finance', 'admin_readonly');
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 50) || 50));
+    const q = adminBookingsQuery.parse(req.query);
     const params: unknown[] = [];
     const clauses: string[] = [];
 
-    if (req.query.status) {
-      params.push(req.query.status);
+    if (q.status) {
+      params.push(q.status);
       clauses.push(`b.status = $${params.length}`);
     }
-    if (req.query.phone_hash) {
-      params.push(req.query.phone_hash);
+    if (q.phone_hash) {
+      params.push(q.phone_hash);
       clauses.push(
         `EXISTS (SELECT 1 FROM users u WHERE u.id IN (b.sender_id, b.traveller_id) AND u.phone_hash = $${params.length})`,
       );
     }
-    if (req.query.created_from) {
-      params.push(new Date(req.query.created_from));
+    if (q.created_from) {
+      params.push(q.created_from);
       clauses.push(`b.created_at >= $${params.length}`);
     }
-    params.push(limit);
+    params.push(q.limit);
+    params.push(q.offset);
 
     const res = await db.query<{
       id: string;
@@ -223,7 +269,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       `SELECT b.id, b.status, t.mode, b.agreed_total_paise, b.created_at, b.updated_at
        FROM bookings b JOIN trips t ON t.id = b.trip_id
        ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
-       ORDER BY b.created_at DESC LIMIT $${params.length}`,
+       ORDER BY b.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
     );
 
@@ -233,7 +279,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       action: 'admin.booking_search',
       resource: 'booking',
       resourceId: null,
-      after: { filters: { status: req.query.status ?? null, created_from: req.query.created_from ?? null } },
+      after: { filters: { status: q.status ?? null, created_from: q.created_from ? q.created_from.toISOString() : null } },
     });
 
     return {
@@ -245,10 +291,43 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         created_at: toIso(r.created_at),
         updated_at: toIso(r.updated_at),
       })),
+      page: { limit: q.limit, offset: q.offset },
     };
   });
 
   // ---------------------------------------------------------------- payouts
+
+  // Records a second-approver sign-off so a subsequent release of a payout above
+  // DUAL_APPROVAL_THRESHOLD_PAISE can reference it. The actor must already hold finance; the
+  // release path additionally checks that the actor at release time is a different user.
+  app.post<{ Params: { bookingId: string } }>('/admin/payouts/:bookingId/approve', async (req, reply) => {
+    const auth = requireRole(req, 'finance');
+    idempotencyKey(req);
+    const bookingRes = await db.query<{ id: string; status: string }>(
+      `SELECT id, status FROM bookings WHERE id = $1`,
+      [req.params.bookingId],
+    );
+    const booking = bookingRes.rows[0];
+    if (!booking) throw new AppError('NOT_FOUND');
+    const payout = await db.query<{ amount_paise: number; state: string }>(
+      `SELECT amount_paise, state FROM payouts WHERE booking_id = $1`,
+      [booking.id],
+    );
+    const p = payout.rows[0];
+    if (!p) throw new AppError('PAYOUT_NOT_ELIGIBLE', { reason: 'no_payout_row' });
+    if (p.state === 'released' || p.state === 'void') throw new AppError('PAYOUT_NOT_ELIGIBLE', { state: p.state });
+
+    await audit(db, {
+      actorId: auth.userId,
+      actorKind: 'support',
+      action: 'payout.approved',
+      resource: 'payout',
+      resourceId: booking.id,
+      after: { amount_paise: Number(p.amount_paise), approver_roles: auth.roles },
+    });
+
+    return reply.code(201).send({ booking_id: booking.id, approved_by: auth.userId, amount_paise: Number(p.amount_paise) });
+  });
 
   app.post<{ Params: { bookingId: string } }>('/admin/payouts/:bookingId/release', async (req, reply) => {
     const auth = requireRole(req, 'finance');
@@ -275,16 +354,38 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     const p = payout.rows[0];
     if (!p) throw new AppError('PAYOUT_NOT_ELIGIBLE', { reason: 'no_payout_row' });
 
-    if (p.amount_paise > config.DUAL_APPROVAL_THRESHOLD_PAISE && !body.approval_id) {
-      throw new AppError('APPROVAL_REQUIRED', { threshold_paise: config.DUAL_APPROVAL_THRESHOLD_PAISE });
-    }
-
     if (!config.PAYOUTS_ENABLED) {
       // Refuse before any state changes, so nothing in the system looks paid.
       throw new AppError('PAYOUTS_NOT_ENABLED', {
         reason: 'payouts_disabled_at_pilot',
         gate: 'GATE-3',
       });
+    }
+
+    if (p.amount_paise > config.DUAL_APPROVAL_THRESHOLD_PAISE) {
+      // The approval_id is the id of a *different* finance approver whose prior audit-log entry
+      // recorded a payout.approval event for this booking. A truthy string is not enough.
+      if (!body.approval_id) {
+        throw new AppError('APPROVAL_REQUIRED', { threshold_paise: config.DUAL_APPROVAL_THRESHOLD_PAISE });
+      }
+      if (body.approval_id === auth.userId) {
+        throw new AppError('SELF_APPROVAL_FORBIDDEN');
+      }
+      const approver = await db.query<{ id: string }>(
+        `SELECT u.id FROM users u JOIN user_roles r ON r.user_id = u.id
+          WHERE u.id = $1 AND r.role = 'finance' AND u.status = 'active'`,
+        [body.approval_id],
+      );
+      if (!approver.rows[0]) throw new AppError('NOT_FOUND', { reason: 'approver_not_finance', approval_id: body.approval_id });
+      const prior = await db.query(
+        `SELECT 1 FROM audit_log
+          WHERE resource = 'payout' AND resource_id = $1 AND actor_id = $2 AND action = 'payout.approved'
+          LIMIT 1`,
+        [booking.id, body.approval_id],
+      );
+      if (prior.rows.length === 0) {
+        throw new AppError('NOT_FOUND', { reason: 'no_prior_approval_event', booking_id: booking.id });
+      }
     }
 
     // Unreachable while the pilot rail holds. Kept as the documented seam for the day a provider
@@ -434,16 +535,17 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
   // ---------------------------------------------------------------- disputes (additive, DEFECT-008)
 
-  app.get<{ Querystring: { state?: string; limit?: string } }>('/admin/disputes', async (req) => {
+  app.get('/admin/disputes', async (req) => {
     const auth = requireRole(req, 'support_agent', 'trust_safety', 'finance', 'admin_readonly');
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 50) || 50));
+    const q = disputeQueueQuery.parse(req.query);
     const params: unknown[] = [];
     let where = '1=1';
-    if (req.query.state) {
-      params.push(req.query.state);
+    if (q.state) {
+      params.push(q.state);
       where += ` AND d.state = $${params.length}`;
     }
-    params.push(limit);
+    params.push(q.limit);
+    params.push(q.offset);
 
     const res = await db.query<{
       id: string;
@@ -458,7 +560,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     }>(
       `SELECT d.id, d.booking_id, d.category, d.description, d.state, d.outcome_code, d.raised_by,
               d.created_at, d.resolved_at
-       FROM disputes d WHERE ${where} ORDER BY d.created_at ASC LIMIT $${params.length}`,
+       FROM disputes d WHERE ${where} ORDER BY d.created_at ASC LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
     );
 
@@ -518,6 +620,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
             };
           }),
       })),
+      page: { limit: q.limit, offset: q.offset },
     };
   });
 
@@ -553,7 +656,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       await applyBookingTransition(withDb(app, tx), booking, command, 'support', {
         actorId: auth.userId,
         reasonCode: body.outcome_code,
-        supportRole: auth.roles.includes('trust_safety') ? 'trust_safety' : 'support_lead',
+        supportRole: auth.roles.includes('trust_safety') ? 'trust_safety' : 'support_agent',
         metadata: { dispute_id: dispute.id, outcome: body.outcome },
       });
 
@@ -594,9 +697,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
   // ---------------------------------------------------------------- audit log
 
-  app.get<{
-    Querystring: { resource?: string; resource_id?: string; from?: string; to?: string; limit?: string };
-  }>('/admin/audit-log', async (req) => {
+  app.get('/admin/audit-log', async (req) => {
     const auth = requireRole(
       req,
       'admin_readonly',
@@ -605,26 +706,27 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       'support_agent',
       'verification_reviewer',
     );
-    const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? 100) || 100));
+    const q = auditQuery.parse(req.query);
     const params: unknown[] = [];
     const clauses: string[] = [];
-    if (req.query.resource) {
-      params.push(req.query.resource);
+    if (q.resource) {
+      params.push(q.resource);
       clauses.push(`resource = $${params.length}`);
     }
-    if (req.query.resource_id) {
-      params.push(req.query.resource_id);
+    if (q.resource_id) {
+      params.push(q.resource_id);
       clauses.push(`resource_id = $${params.length}`);
     }
-    if (req.query.from) {
-      params.push(new Date(req.query.from));
+    if (q.from) {
+      params.push(q.from);
       clauses.push(`created_at >= $${params.length}`);
     }
-    if (req.query.to) {
-      params.push(new Date(req.query.to));
+    if (q.to) {
+      params.push(q.to);
       clauses.push(`created_at <= $${params.length}`);
     }
-    params.push(limit);
+    params.push(q.limit);
+    params.push(q.offset);
 
     const res = await db.query<{
       id: string;
@@ -640,7 +742,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       // `ORDER BY id` sorted 9 above 39. Order by the table's own columns instead.
       `SELECT id::text AS id, actor_id, actor_kind, action, resource, resource_id, reason_code, created_at
        FROM audit_log ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
-       ORDER BY audit_log.created_at DESC, audit_log.id DESC LIMIT $${params.length}`,
+       ORDER BY audit_log.created_at DESC, audit_log.id DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
     );
 
@@ -663,6 +765,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         reason_code: r.reason_code,
         created_at: toIso(r.created_at),
       })),
+      page: { limit: q.limit, offset: q.offset },
     };
   });
 }

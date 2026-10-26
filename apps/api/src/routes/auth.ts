@@ -10,6 +10,7 @@ import {
 } from '../lib/auth.ts';
 import { generateOtp, hashCode, maskPhone, phoneHash, phoneLast4, safeEqual, sha256 } from '../lib/crypto.ts';
 import { rememberCode } from '../lib/dev-store.ts';
+import { clearRefreshCookie, readRefreshCookie, setRefreshCookie } from '../lib/cookies.ts';
 import { deliverOtp } from '../lib/sms.ts';
 import { userProfile } from '../lib/serialize.ts';
 import { audit } from '../services/audit.ts';
@@ -31,8 +32,6 @@ const verifyOtpSchema = z
     device_id: z.string().max(128).optional(),
   })
   .strict();
-
-const refreshSchema = z.object({ refresh_token: z.string().min(32) }).strict();
 
 // ---------------------------------------------------------------------------
 // OTP rate-limit helpers (DB-based sliding-window counters).
@@ -228,13 +227,16 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   );
 
   // POST /auth/otp/verify
-  app.post('/auth/otp/verify', async (req, reply) => {
+  app.post(
+    '/auth/otp/verify',
+    { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    async (req, reply) => {
     const body = verifyOtpSchema.parse(req.body);
 
     const found = await db.query<{
       id: string;
       phone_hash: string;
-      phone_last4: string;
+      phone_last4: string | null;
       phone_masked: string;
       code_hash: string;
       attempts: number;
@@ -293,6 +295,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       userAgent: req.headers['user-agent'] ?? null,
     });
 
+    setRefreshCookie(reply, session.refreshToken);
+
     await audit(db, {
       actorId: user,
       actorKind: 'user',
@@ -304,16 +308,18 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const profile = await loadProfile(app, user);
     return reply.code(200).send({
       access_token: session.accessToken,
-      refresh_token: session.refreshToken,
       expires_in: session.expiresIn,
       user: profile,
     });
   });
 
   // POST /auth/refresh
-  app.post('/auth/refresh', async (req, reply) => {
-    const body = refreshSchema.parse(req.body);
-    const hash = sha256(body.refresh_token);
+  // Reads the refresh token from its HttpOnly cookie, so the client never holds the long-lived
+  // credential in script-readable storage.
+  app.post('/auth/refresh', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (req, reply) => {
+    const presented = readRefreshCookie(req);
+    if (!presented) throw new AppError('AUTH_REFRESH_INVALID');
+    const hash = sha256(presented);
 
     const found = await db.query<{
       id: string;
@@ -352,10 +358,11 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       familyId: session.family_id,
     });
 
+    setRefreshCookie(reply, next.refreshToken);
+
     const profile = await loadProfile(app, session.user_id);
     return reply.code(200).send({
       access_token: next.accessToken,
-      refresh_token: next.refreshToken,
       expires_in: next.expiresIn,
       user: profile,
     });
@@ -365,12 +372,34 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post('/auth/logout', { preHandler: authenticate }, async (req, reply) => {
     const auth = requireAuth(req);
     await db.query(`UPDATE sessions SET revoked_at = now() WHERE id = $1`, [auth.sessionId]);
+    clearRefreshCookie(reply);
     await audit(db, {
       actorId: auth.userId,
       actorKind: 'user',
       action: 'auth.logout',
       resource: 'session',
       resourceId: auth.sessionId,
+    });
+    return reply.code(204).send();
+  });
+
+  // POST /auth/logout-all
+  // Revokes every session for this account, for the "sign out everywhere" case after a device is
+  // lost. The current request's access token dies with its session row, so it stops working at once.
+  app.post('/auth/logout-all', { preHandler: authenticate }, async (req, reply) => {
+    const auth = requireAuth(req);
+    const revoked = await db.query(
+      `UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`,
+      [auth.userId],
+    );
+    clearRefreshCookie(reply);
+    await audit(db, {
+      actorId: auth.userId,
+      actorKind: 'user',
+      action: 'auth.logout_all',
+      resource: 'session',
+      resourceId: auth.sessionId,
+      after: { revoked: revoked.rowCount },
     });
     return reply.code(204).send();
   });
@@ -381,14 +410,18 @@ export async function loadProfile(app: FastifyInstance, userId: string) {
     id: string;
     name: string | null;
     email: string | null;
-    phone_last4: string;
+    phone_last4: string | null;
     status: 'active' | 'suspended' | 'deleted';
     risk_tier: number;
     locale: string;
     created_at: Date;
     verification_state: string | null;
+    phone_verified: boolean;
+    email_verified: boolean;
   }>(
     `SELECT u.id, u.name, u.email, u.phone_last4, u.status, u.risk_tier, u.locale, u.created_at,
+            u.phone_verified_at IS NOT NULL AS phone_verified,
+            u.email_verified_at IS NOT NULL AS email_verified,
             (SELECT v.state FROM verifications v WHERE v.user_id = u.id ORDER BY v.created_at DESC LIMIT 1) AS verification_state
      FROM users u WHERE u.id = $1`,
     [userId],

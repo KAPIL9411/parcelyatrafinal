@@ -111,7 +111,7 @@ text must match `legal/REFUND_CANCELLATION_POLICY_DRAFT.md`.
 | Receiver no-show | `DELIVERY_ATTEMPT_FAILED`; traveller may hold for 24 h, hand to support point, or return; compensation per policy |
 | Concurrent capacity acceptance | DB transaction + row lock; loser gets `CAPACITY_UNAVAILABLE` |
 | Payment provider timeout | Booking stays `PAYMENT_PENDING`; provider status polled; **never** assume failure or success; no duplicate capture |
-| OTP to recycled number | Receiver identity confirmed by callback before any override; override requires `support_lead` role |
+| OTP to recycled number | Receiver identity confirmed by callback before any override; override requires `support_agent` role |
 | Collusion to fake delivery | Delivery requires receiver OTP + photo + GPS-less timestamp consistency; anomaly scoring flags same-device pairs and rapid repeat pairs |
 | Weight exceeds declaration at handover | Traveller may refuse (`HANDOVER_REFUSED_OVERWEIGHT`) with no penalty; rebooking at correct weight; repeat offenders flagged |
 | Vehicle breakdown | Traveller declares `TRIP_DISRUPTED`; parcel custody reassigned only through support; sender chooses rebook/return |

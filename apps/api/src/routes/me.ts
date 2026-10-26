@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { AppError } from '../lib/errors.ts';
 import { requireAuth } from '../lib/auth.ts';
 import { userProfile } from '../lib/serialize.ts';
-import { audit, enqueueJob } from '../services/audit.ts';
+import { audit } from '../services/audit.ts';
 
 const patchSchema = z
   .object({
@@ -41,14 +41,18 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       id: string;
       name: string | null;
       email: string | null;
-      phone_last4: string;
+      phone_last4: string | null;
       status: 'active' | 'suspended' | 'deleted';
       risk_tier: number;
       locale: string;
       created_at: Date;
       verification_state: string | null;
+      phone_verified: boolean;
+      email_verified: boolean;
     }>(
       `SELECT u.id, u.name, u.email, u.phone_last4, u.status, u.risk_tier, u.locale, u.created_at,
+              u.phone_verified_at IS NOT NULL AS phone_verified,
+              u.email_verified_at IS NOT NULL AS email_verified,
               (SELECT v.state FROM verifications v WHERE v.user_id = u.id ORDER BY v.created_at DESC LIMIT 1) AS verification_state
        FROM users u WHERE u.id = $1`,
       [auth.userId],
@@ -62,41 +66,58 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     const auth = requireAuth(req);
     const body = patchSchema.parse(req.body);
 
-    const before = await db.query(`SELECT name, email, locale FROM users WHERE id = $1`, [auth.userId]);
-    if (before.rows.length === 0) throw new AppError('NOT_FOUND');
+    const before = await db.query<{ name: string | null; locale: string; google_sub: string | null }>(
+      `SELECT name, locale, google_sub FROM users WHERE id = $1`,
+      [auth.userId],
+    );
+    const account = before.rows[0];
+    if (!account) throw new AppError('NOT_FOUND');
+
+    const emailChanged = body.email !== undefined && body.email !== null;
+    // The address is the Google identity for an OAuth account, and it is what the staff policy and
+    // rule E2 trust. It is set by the provider at sign-in, never here.
+    if (emailChanged && account.google_sub) {
+      throw new AppError('FORBIDDEN', { field: 'email' }, 'Your sign-in address is managed by your Google account.');
+    }
 
     await db.query(
       `UPDATE users SET
          name = COALESCE($2, name),
          email = COALESCE($3, email),
          locale = COALESCE($4, locale),
+         email_verified_at = CASE WHEN $3 IS NULL THEN email_verified_at ELSE NULL END,
          updated_at = now()
        WHERE id = $1`,
       [auth.userId, body.name ?? null, body.email ?? null, body.locale ?? null],
     );
 
+    // A self-declared address is not a verified one: rule E2 stops counting it the moment it changes.
     await audit(db, {
       actorId: auth.userId,
       actorKind: 'user',
       action: 'me.update',
       resource: 'user',
       resourceId: auth.userId,
-      before: before.rows[0],
-      after: body,
+      before: { name: account.name, locale: account.locale },
+      after: { name: body.name, locale: body.locale, email_changed: emailChanged },
     });
 
     const res = await db.query<{
       id: string;
       name: string | null;
       email: string | null;
-      phone_last4: string;
+      phone_last4: string | null;
       status: 'active' | 'suspended' | 'deleted';
       risk_tier: number;
       locale: string;
       created_at: Date;
       verification_state: string | null;
+      phone_verified: boolean;
+      email_verified: boolean;
     }>(
       `SELECT u.id, u.name, u.email, u.phone_last4, u.status, u.risk_tier, u.locale, u.created_at,
+              u.phone_verified_at IS NOT NULL AS phone_verified,
+              u.email_verified_at IS NOT NULL AS email_verified,
               (SELECT v.state FROM verifications v WHERE v.user_id = u.id ORDER BY v.created_at DESC LIMIT 1) AS verification_state
        FROM users u WHERE u.id = $1`,
       [auth.userId],
@@ -106,8 +127,9 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/me/export', async (req, reply) => {
     const auth = requireAuth(req);
-    const requestId = crypto.randomUUID();
-    await enqueueJob(db, 'data_export', { user_id: auth.userId, request_id: requestId });
+    // The pilot runs no background worker. Enqueueing the job here would produce a
+    // `202 queued` response for work nothing ever does — a fake success message. Refuse
+    // honestly and point the user at a support path.
     await audit(db, {
       actorId: auth.userId,
       actorKind: 'user',
@@ -115,7 +137,11 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       resource: 'user',
       resourceId: auth.userId,
     });
-    return reply.code(202).send({ request_id: requestId, status: 'queued' });
+    throw new AppError(
+      'BACKGROUND_WORKER_UNAVAILABLE',
+      { reason: 'data_export' },
+      'Your data export needs a background worker that is not deployed here. Contact support and we will produce it manually.',
+    );
   });
 
   app.post('/me/deletion-request', async (req, reply) => {
@@ -145,9 +171,11 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       resourceId: auth.userId,
     });
 
-    return reply.code(202).send({
-      request_id: crypto.randomUUID(),
+    return reply.code(200).send({
+      deleted_at: new Date().toISOString(),
       hard_delete_after: hardDeleteAfter.toISOString(),
+      hard_delete_worker: false,
+      note: 'Your account is soft-deleted and no longer visible to you or to other users. The row-level purge after the retention window is a deploy-time job in this build: no background worker executes it here, so the timestamp above is a target, not a scheduled event.',
       retained_categories: [
         'payment and refund records (statutory retention)',
         'booking and dispute records tied to a financial event',

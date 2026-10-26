@@ -119,7 +119,7 @@ Legend: **AC** = acceptance criteria source, **FR** = requirement, **SR** = secu
 | `TC-HO-06` | OTP from another booking | `400 OTP_INVALID` | SR-A1 | P0 |
 | `TC-HO-07` | Delivery OTP + photo | `200`, `delivered`, dispute deadline set | US-D2 | P0 |
 | `TC-HO-08` | Receiver unavailable after 2 h | `receiver_unavailable` allowed; 3 options shown | §7 | P1 |
-| `TC-HO-09` | Support-assisted delivery | Override recorded with reason + audit; role `support_lead` only | FR-505 | P1 |
+| `TC-HO-09` | Support-assisted delivery | Override recorded with reason + audit; role `support_agent` only | FR-505 | P1 |
 | `TC-HO-10` | Regenerate OTP | Old code invalid, new code sent to the on-file number only | FR-503 | P0 |
 
 ## 8. Payments (sandbox)

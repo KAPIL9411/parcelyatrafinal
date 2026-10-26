@@ -6,7 +6,7 @@ import { config } from '../config.ts';
 import { AppError } from '../lib/errors.ts';
 import { requireAuth } from '../lib/auth.ts';
 import { toIso } from '../lib/serialize.ts';
-import { ensureStorage, getObject, isValidKey, putObject, verifySignedToken } from '../lib/storage.ts';
+import { ensureStorage, getObject, isValidKey, keyBelongsTo, putObject, verifySignedToken } from '../lib/storage.ts';
 import { audit } from '../services/audit.ts';
 
 /**
@@ -40,11 +40,6 @@ const requestSchema = z
     byte_size: z.number().int().min(1).max(MAX_BYTES),
   })
   .strict();
-
-function keyBelongsTo(key: string, userId: string): boolean {
-  // object keys are `<purpose>/<userId>/<uuid>.<ext>`
-  return key.split('/')[1] === userId;
-}
 
 export async function fileRoutes(app: FastifyInstance): Promise<void> {
   await ensureStorage();

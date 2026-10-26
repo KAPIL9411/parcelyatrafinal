@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
-import { MODE_LABELS } from '@py/domain';
+import { CATEGORY_LABELS, MODE_LABELS, type Category } from '@py/domain';
 
 import { api, type BookingSummary } from '../lib/api';
 import { formatDateTime, inr, timeAgo } from '../lib/format';
@@ -62,8 +62,8 @@ export function Bookings() {
     <div className="mx-auto max-w-3xl space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold tracking-wide text-brand-700 uppercase">Your account</p>
-          <h1 className="mt-1 text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl">My parcels</h1>
+          <p className="text-xs font-medium tracking-wide text-ink-500 uppercase">Your account</p>
+          <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-ink-900 sm:text-2xl">My parcels</h1>
           <p className="mt-1 text-sm text-ink-500">
             Everything you are sending and everything you are carrying, in one list.
           </p>
@@ -76,7 +76,7 @@ export function Bookings() {
         </Link>
       </div>
 
-      <div className="flex flex-wrap gap-2" role="tablist" aria-label="Filter bookings">
+      <div className="inline-flex flex-wrap gap-1 self-start" role="tablist" aria-label="Filter bookings">
         {FILTERS.map((option) => (
           <button
             key={option.value}
@@ -85,10 +85,10 @@ export function Bookings() {
             aria-selected={filter === option.value}
             onClick={() => setFilter(option.value)}
             className={cn(
-              'rounded-full border px-3.5 py-1.5 text-sm font-semibold',
+              'rounded-input px-3 py-1.5 text-sm font-medium transition-colors',
               filter === option.value
-                ? 'border-brand-600 bg-brand-50 text-brand-700'
-                : 'border-line-strong bg-surface text-ink-700 hover:border-ink-300',
+                ? 'bg-canvas text-ink-900'
+                : 'text-ink-500 hover:text-ink-900',
             )}
           >
             {option.label}
@@ -181,11 +181,12 @@ function BookingRow({ booking }: { booking: BookingSummary }) {
             </span>
           </div>
           <p className="mt-2 text-sm font-semibold text-ink-900">
-            {MODE_LABELS[booking.mode as keyof typeof MODE_LABELS] ?? booking.mode} ·{' '}
-            {booking.role === 'sender' ? 'you are sending' : 'you are carrying'}
+            {CATEGORY_LABELS[booking.category as Category] ?? booking.category} ·{' '}
+            {booking.origin_city} → {booking.dest_city}
           </p>
           <p className="tabular mt-0.5 text-xs text-ink-500">
-            Booking {booking.id.slice(0, 8)} · updated {timeAgo(booking.updated_at)}
+            {MODE_LABELS[booking.mode as keyof typeof MODE_LABELS] ?? booking.mode} · {booking.weight_kg} kg ·{' '}
+            {timeAgo(booking.updated_at)}
           </p>
         </div>
 

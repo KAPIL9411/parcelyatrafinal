@@ -5,17 +5,21 @@ import {
   CATEGORIES,
   corridorKm,
   evaluateEligibility,
+  haversineKm,
   rankMatches,
   quotePrice,
   type Category,
+  type TripCandidate,
   type TransportMode,
 } from '@py/domain';
 
 import { config, enabledModes } from '../config.ts';
+import { matchPolicy } from '../lib/matching-policy.ts';
 import { AppError } from '../lib/errors.ts';
 import { requireAuth } from '../lib/auth.ts';
 import { phoneHash, phoneLast4 } from '../lib/crypto.ts';
 import { num, parcelView, toIso } from '../lib/serialize.ts';
+import { keyBelongsTo } from '../lib/storage.ts';
 import { audit } from '../services/audit.ts';
 
 const createSchema = z
@@ -33,7 +37,7 @@ const createSchema = z
     window_end: z.string().datetime({ offset: true }).or(z.string().datetime()),
     receiver_name: z.string().min(2).max(80),
     receiver_phone: z.string().regex(/^\+91[6-9][0-9]{9}$/),
-    sealed_photo_key: z.string().max(256),
+    sealed_photo_key: z.string().min(1).max(256).optional(),
     declaration_accepted: z.literal(true),
     declaration_version: z.string().max(32).optional(),
   })
@@ -68,6 +72,11 @@ interface ParcelRowFull {
   created_at: Date;
 }
 
+/** Area names are free text; distances are only ever carried to one decimal. */
+function round1(v: number): number {
+  return Math.round(v * 10) / 10;
+}
+
 async function loadCity(app: FastifyInstance, id: string): Promise<CityRow> {
   const res = await app.db.query<CityRow>(`SELECT * FROM cities WHERE id = $1`, [id]);
   const row = res.rows[0];
@@ -90,10 +99,15 @@ export async function parcelRoutes(app: FastifyInstance): Promise<void> {
     const auth = requireAuth(req);
     if (config.FEATURE_APP_READONLY) throw new AppError('FORBIDDEN', { reason: 'readonly' });
     const body = createSchema.parse(req.body);
+    // The sealed photo must be an object this account uploaded; a borrowed key would attach
+    // somebody else's image to this shipment. An absent photo stays absent — it is not faked.
+    if (body.sealed_photo_key && !keyBelongsTo(body.sealed_photo_key, auth.userId)) {
+      throw new AppError('VALIDATION_FAILED', { field: 'sealed_photo_key' }, 'Upload the photo again from this account.');
+    }
 
     const [sender, origin, dest] = await Promise.all([
-      db.query<{ status: string; phone_verified_at: Date | null; fraud_flag: boolean }>(
-        `SELECT status, phone_verified_at, fraud_flag FROM users WHERE id = $1`,
+      db.query<{ status: string; phone_verified_at: Date | null; email_verified_at: Date | null; fraud_flag: boolean }>(
+        `SELECT status, phone_verified_at, email_verified_at, fraud_flag FROM users WHERE id = $1`,
         [auth.userId],
       ),
       loadCity(app, body.origin_city_id),
@@ -113,6 +127,8 @@ export async function parcelRoutes(app: FastifyInstance): Promise<void> {
     const decision = evaluateEligibility({
       accountStatus: user.status as 'active' | 'suspended' | 'deleted',
       phoneVerified: Boolean(user.phone_verified_at),
+      emailVerified: Boolean(user.email_verified_at),
+      phoneVerificationRequired: config.PHONE_VERIFICATION_REQUIRED,
       category: body.category,
       description: body.description,
       weightKg: body.weight_kg,
@@ -215,22 +231,15 @@ export async function parcelRoutes(app: FastifyInstance): Promise<void> {
     );
     if (existing.rows[0]) throw new AppError('CONFLICT', { quote_id: existing.rows[0].id }, 'A valid price already exists for this parcel.');
 
-    const [origin, dest] = await Promise.all([
-      loadCity(app, parcel.origin_city_id),
-      loadCity(app, parcel.dest_city_id),
-    ]);
-    const km = corridorKm(
-      { lat: Number(origin.lat), lng: Number(origin.lng) },
-      { lat: Number(dest.lat), lng: Number(dest.lng) },
-    );
+    const corridor = await loadCorridor(app, parcel);
 
-    const matches = await computeMatches(app, parcel, auth.userId, km);
+    const matches = await computeMatches(app, parcel, auth.userId, corridor);
     if (matches.matches.length === 0) {
       throw new AppError('NO_MATCH', { no_match_reasons: matches.no_match_reasons });
     }
 
     const priced = quotePrice({
-      corridorKm: km,
+      corridorKm: corridor.km,
       weightKg: num(parcel.weight_kg),
       category: parcel.category as Category,
     });
@@ -277,42 +286,106 @@ export async function parcelRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.get<{ Params: { parcelId: string }; Querystring: { limit?: string } }>(
+  app.get<{ Params: { parcelId: string } }>(
     '/parcels/:parcelId/matches',
     { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } },
     async (req) => {
       const auth = requireAuth(req);
+      const limitQ = z.object({ limit: z.coerce.number().int().min(1).max(20).default(10) }).strict().parse(req.query);
       const parcel = await loadOwnedParcel(app, req.params.parcelId, auth.userId);
       if (!config.FEATURE_MATCHING_ENABLED) {
         return { matches: [], low_confidence: false, no_match_reasons: [] };
       }
-      const [origin, dest] = await Promise.all([
-        loadCity(app, parcel.origin_city_id),
-        loadCity(app, parcel.dest_city_id),
-      ]);
-      const km = corridorKm(
-        { lat: Number(origin.lat), lng: Number(origin.lng) },
-        { lat: Number(dest.lat), lng: Number(dest.lng) },
-      );
-      const limit = Math.min(20, Math.max(1, Number(req.query.limit ?? 10) || 10));
-      const result = await computeMatches(app, parcel, auth.userId, km);
-      return { ...result, matches: result.matches.slice(0, limit) };
+      const corridor = await loadCorridor(app, parcel);
+      const limit = limitQ.limit;
+      const result = await computeMatches(app, parcel, auth.userId, corridor);
+      // `rejections` stays server-side: it names other users' trips and why they were withheld.
+      return {
+        matches: result.matches.slice(0, limit),
+        low_confidence: result.low_confidence,
+        no_match_reasons: result.no_match_reasons,
+      };
     },
   );
+}
+
+interface Corridor {
+  km: number;
+  origin: CityRow;
+  dest: CityRow;
+}
+
+async function loadCorridor(app: FastifyInstance, parcel: ParcelRowFull): Promise<Corridor> {
+  const res = await app.db.query<CityRow>(
+    `SELECT id, name, state, lat, lng, is_serviceable FROM cities WHERE id = ANY($1::uuid[])`,
+    [[parcel.origin_city_id, parcel.dest_city_id]],
+  );
+  const origin = res.rows.find((c) => c.id === parcel.origin_city_id);
+  const dest = res.rows.find((c) => c.id === parcel.dest_city_id);
+  if (!origin || !dest) throw new AppError('CITY_NOT_SERVICED', { parcel_id: parcel.id });
+  return {
+    origin,
+    dest,
+    km: corridorKm(
+      { lat: Number(origin.lat), lng: Number(origin.lng) },
+      { lat: Number(dest.lat), lng: Number(dest.lng) },
+    ),
+  };
+}
+
+/**
+ * Cities whose centroid lies within `km` of the parcel's origin city, by lat/lng box. The box is a
+ * cheap prefilter; the engine itself measures the great-circle distance and applies the limit again.
+ */
+async function nearbyCityIds(app: FastifyInstance, origin: CityRow, km: number): Promise<string[]> {
+  if (km <= 0) return [origin.id];
+  const lat = Number(origin.lat);
+  const lng = Number(origin.lng);
+  const dLat = km / 111;
+  const dLng = km / (111 * Math.max(0.2, Math.cos((lat * Math.PI) / 180)));
+  const res = await app.db.query<{ id: string }>(
+    `SELECT id FROM cities
+     WHERE is_serviceable AND (
+       id = $1
+       OR (lat BETWEEN $2 AND $3 AND lng BETWEEN $4 AND $5)
+     )
+     LIMIT 50`,
+    [origin.id, lat - dLat, lat + dLat, lng - dLng, lng + dLng],
+  );
+  return res.rows.map((r) => r.id);
 }
 
 export async function computeMatches(
   app: FastifyInstance,
   parcel: ParcelRowFull,
   senderId: string,
-  km: number,
+  corridor: Corridor,
 ) {
+  const policy = matchPolicy;
+  const [assigned, originIds] = await Promise.all([
+    // The status list is the predicate of the `bookings_one_active_per_parcel` partial index, written
+    // out verbatim so this existence check can use that index. It is a compile-time constant.
+    app.db.query<{ assigned: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM bookings
+         WHERE parcel_id = $1
+           AND status NOT IN ('cancelled_by_sender','cancelled_by_traveller','cancelled_ineligible',
+                              'cancelled_safety','expired','refunded','paid_out')
+       ) AS assigned`,
+      [parcel.id],
+    ),
+    nearbyCityIds(app, corridor.origin, policy.maxOriginDetourKm),
+  ]);
+
+  const windowEndMs = new Date(parcel.window_end).getTime() + policy.arrivalGraceHours * 3_600_000;
   const res = await app.db.query<{
     id: string;
     traveller_id: string;
     mode: TransportMode;
     origin_city_id: string;
     dest_city_id: string;
+    origin_area: string | null;
+    dest_area: string | null;
     departure_at: Date;
     arrival_estimate_at: Date;
     capacity_kg: unknown;
@@ -320,63 +393,116 @@ export async function computeMatches(
     status: string;
     accepts_documents_only: boolean;
     traveller_name: string | null;
-    verification_state: string | null;
+    origin_lat: string | number;
+    origin_lng: string | number;
   }>(
-    `SELECT t.id, t.traveller_id, t.mode, t.origin_city_id, t.dest_city_id, t.departure_at,
-            t.arrival_estimate_at, t.capacity_kg, t.capacity_kg_remaining, t.status,
-            t.accepts_documents_only, u.name AS traveller_name,
-            (SELECT v.state FROM verifications v WHERE v.user_id = t.traveller_id ORDER BY v.created_at DESC LIMIT 1) AS verification_state
-     FROM trips t JOIN users u ON u.id = t.traveller_id
-     WHERE t.origin_city_id = $1 AND t.dest_city_id = $2
+    `SELECT t.id, t.traveller_id, t.mode, t.origin_city_id, t.dest_city_id, t.origin_area, t.dest_area,
+            t.departure_at, t.arrival_estimate_at, t.capacity_kg, t.capacity_kg_remaining, t.status,
+            t.accepts_documents_only, u.name AS traveller_name, oc.lat AS origin_lat, oc.lng AS origin_lng
+     FROM trips t
+     JOIN cities oc ON oc.id = t.origin_city_id
+     JOIN users u ON u.id = t.traveller_id
+     WHERE t.dest_city_id = $1
+       AND t.origin_city_id = ANY($2::uuid[])
        AND t.status IN ('published','partially_booked')
-       AND t.departure_at > now()`,
-    [parcel.origin_city_id, parcel.dest_city_id],
+       AND t.departure_at > now()
+       AND t.departure_at <= $3
+       AND t.arrival_estimate_at <= $4
+     ORDER BY t.departure_at
+     LIMIT $5`,
+    [parcel.dest_city_id, originIds, new Date(parcel.window_end), new Date(windowEndMs), config.MATCH_CANDIDATE_SCAN_LIMIT],
   );
 
-  const completed = await app.db.query<{ traveller_id: string; done: string }>(
-    `SELECT traveller_id, count(*)::text AS done FROM bookings
-     WHERE status IN ('delivered','payout_eligible','paid_out')
+  const travellerIds = [...new Set(res.rows.map((r) => r.traveller_id))];
+  const verifications = await app.db.query<{ user_id: string; state: string }>(
+    `SELECT DISTINCT ON (user_id) user_id, state
+     FROM verifications
+     WHERE user_id = ANY($1::uuid[])
+     ORDER BY user_id, created_at DESC`,
+    [travellerIds],
+  );
+  const verificationByUser = new Map(verifications.rows.map((r) => [r.user_id, r.state]));
+
+  // docs/BUSINESS_LOGIC.md §9: reliability over the traveller's last 20 finished trips.
+  const history = await app.db.query<{ traveller_id: string; completed: number; cancelled: number }>(
+    `WITH recent AS (
+       SELECT traveller_id, status,
+              ROW_NUMBER() OVER (PARTITION BY traveller_id ORDER BY updated_at DESC, created_at DESC) AS rn
+       FROM bookings
+       WHERE traveller_id = ANY($1::uuid[])
+         AND status IN ('delivered','payout_eligible','paid_out','cancelled_by_traveller')
+     )
+     SELECT traveller_id,
+            count(*) FILTER (WHERE status IN ('delivered','payout_eligible','paid_out'))::int AS completed,
+            count(*) FILTER (WHERE status = 'cancelled_by_traveller')::int AS cancelled
+     FROM recent
+     WHERE rn <= 20
      GROUP BY traveller_id`,
+    [travellerIds],
   );
-  const doneMap = new Map(completed.rows.map((r) => [r.traveller_id, Number(r.done)]));
+  const historyByUser = new Map(history.rows.map((r) => [r.traveller_id, r]));
 
-  return rankMatches(
+  const originPoint = { lat: Number(corridor.origin.lat), lng: Number(corridor.origin.lng) };
+  const candidates: TripCandidate[] = res.rows.map((r) => {
+    const done = historyByUser.get(r.traveller_id);
+    return {
+      id: r.id,
+      travellerId: r.traveller_id,
+      mode: r.mode,
+      originCityId: r.origin_city_id,
+      destCityId: r.dest_city_id,
+      originArea: r.origin_area,
+      destArea: r.dest_area,
+      originDetourKm:
+        r.origin_city_id === parcel.origin_city_id
+          ? 0
+          : round1(haversineKm(originPoint, { lat: Number(r.origin_lat), lng: Number(r.origin_lng) })),
+      departureAt: new Date(r.departure_at),
+      arrivalEstimateAt: new Date(r.arrival_estimate_at),
+      capacityKg: num(r.capacity_kg),
+      capacityKgRemaining: num(r.capacity_kg_remaining),
+      status: r.status,
+      acceptsDocumentsOnly: r.accepts_documents_only,
+      travellerFirstName: r.traveller_name ? r.traveller_name.trim().split(/\s+/)[0] ?? null : null,
+      travellerInitial: r.traveller_name
+        ? (r.traveller_name.trim().split(/\s+/).slice(-1)[0]?.[0] ?? null)
+        : null,
+      verificationState: (verificationByUser.get(r.traveller_id) ?? 'not_started') as never,
+      completedTrips: done?.completed ?? 0,
+      travellerCancellations: done?.cancelled ?? 0,
+    };
+  });
+
+  const result = rankMatches(
     {
       senderId,
       originCityId: parcel.origin_city_id,
       destCityId: parcel.dest_city_id,
-      originServiceable: true,
-      destServiceable: true,
+      parcelOriginArea: parcel.origin_area,
+      parcelDestArea: parcel.dest_area,
+      originServiceable: corridor.origin.is_serviceable,
+      destServiceable: corridor.dest.is_serviceable,
       category: parcel.category as Category,
+      description: parcel.description,
       weightKg: num(parcel.weight_kg),
+      dimsCm: parcel.dims_cm,
       windowStart: new Date(parcel.window_start),
       windowEnd: new Date(parcel.window_end),
-      corridorKm: km,
+      corridorKm: corridor.km,
       enabledModes: enabledModes(config),
+      parcelStatus: parcel.status,
+      parcelAlreadyAssigned: Boolean(assigned.rows[0]?.assigned),
       now: new Date(),
+      policy,
     },
-    res.rows.map((r) => {
-      const done = doneMap.get(r.traveller_id) ?? 0;
-      return {
-        id: r.id,
-        travellerId: r.traveller_id,
-        mode: r.mode,
-        originCityId: r.origin_city_id,
-        destCityId: r.dest_city_id,
-        departureAt: new Date(r.departure_at),
-        arrivalEstimateAt: new Date(r.arrival_estimate_at),
-        capacityKg: num(r.capacity_kg),
-        capacityKgRemaining: num(r.capacity_kg_remaining),
-        status: r.status,
-        acceptsDocumentsOnly: r.accepts_documents_only,
-        travellerFirstName: r.traveller_name ? r.traveller_name.trim().split(/\s+/)[0] ?? null : null,
-        travellerInitial: r.traveller_name
-          ? (r.traveller_name.trim().split(/\s+/).slice(-1)[0]?.[0] ?? null)
-          : null,
-        verificationState: (r.verification_state ?? 'not_started') as never,
-        reliabilityBand: done >= 20 ? 'highly_reliable' : done >= 5 ? 'reliable' : done >= 1 ? 'building' : 'new',
-        completedTrips: done,
-      };
-    }),
+    candidates,
   );
+
+  if (result.rejections.length > 0) {
+    const byCode: Record<string, number> = {};
+    for (const r of result.rejections) byCode[r.code] = (byCode[r.code] ?? 0) + 1;
+    app.log.debug({ parcel_id: parcel.id, rejections: byCode }, 'matching rejections');
+  }
+
+  return result;
 }

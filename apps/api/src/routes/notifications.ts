@@ -1,21 +1,30 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 
 import { AppError } from '../lib/errors.ts';
 import { requireAuth } from '../lib/auth.ts';
 import { toIso } from '../lib/serialize.ts';
+
+const listQuery = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(100).default(30),
+    cursor: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}/)).optional(),
+  })
+  .strict();
 
 /**
  * Notification history. Rows carry a template id, never a rendered body: the body is resolved
  * server-side so no personal data lands in this table or this response.
  */
 export async function notificationRoutes(app: FastifyInstance): Promise<void> {
-  app.get<{ Querystring: { limit?: string; cursor?: string } }>('/notifications', async (req) => {
+  app.get('/notifications', async (req) => {
     const auth = requireAuth(req);
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 30) || 30));
+    const q = listQuery.parse(req.query);
+    const limit = q.limit;
     const params: unknown[] = [auth.userId];
     let where = `user_id = $1`;
-    if (req.query.cursor) {
-      params.push(new Date(req.query.cursor));
+    if (q.cursor) {
+      params.push(new Date(q.cursor));
       where += ` AND created_at < $${params.length}`;
     }
     params.push(limit + 1);
@@ -34,7 +43,7 @@ export async function notificationRoutes(app: FastifyInstance): Promise<void> {
     );
 
     const rows = res.rows.slice(0, limit);
-    if (rows.length === 0 && req.query.cursor) throw new AppError('NOT_FOUND', { reason: 'cursor' });
+    if (rows.length === 0 && q.cursor) throw new AppError('NOT_FOUND', { reason: 'cursor' });
 
     return {
       items: rows.map((r) => ({

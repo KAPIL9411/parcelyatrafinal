@@ -40,6 +40,13 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
 | DEFECT-012 | Additive | Booking view | A `dispute` summary on the booking. |
 | DEFECT-013 | Additive | Admin | Evidence entries on the admin dispute list. |
 | DEFECT-014 | Gap | Settlement | Split outcome returns `501 SPLIT_SETTLEMENT_NOT_ENABLED`. |
+| DEFECT-015 | Divergence | Matching | Engine rebuilt on `match-p1.0`: hard gates then a weighted 0–100 score; distances are straight-line, never road. |
+| DEFECT-016 | Additive | Booking list | `GET /v1/bookings` items carry `parcel_id`, category, weight and the two city names. |
+| DEFECT-017 | Security | Sweep | Webhook / dev / admin / auth / file-ownership hardening (see §1 DEFECT-017). |
+| DEFECT-018 | Additive | Performance & honesty | `0005_phase_d_indexes.sql` adds eight hot indexes; admin list routes gain `offset` and a `page` block; `/me/export` refuses with 501 because no worker is deployed; `/me/deletion-request` says so; `queueNotification` labels in-app rows `delivered` (the write IS the delivery) and other channels `queued`. |
+| DEFECT-019 | Presentation | Web UI | Sandbox badge and seeded demo numbers removed from the chrome; tokens and type scale retuned for a calmer launch look; landing limits read from `GET /v1/config`. |
+| DEFECT-020 | Presentation | Web UI | Homepage rebuilt around a functional booking panel (live cities, weight, category) that hands off to `/send` via query-param prefill; Porter/Rapido investigation summarised with evidence and stated limits; tracking and driver-onboarding paths surfaced on the landing page. |
+| DEFECT-021 | Presentation | Web UI | Sign-in page: the two auth cards now stretch to equal height on desktop (grid `align-items` default instead of `items-start`, `h-full` navy panel) and stack on mobile; the placeholder Google glyph was replaced with the official four-colour Google G mark (`#EA4335`/`#4285F4`/`#FBBC05`/`#34A853`). |
 
 ### DEFECT-001 — traveller-share cap basis
 
@@ -191,6 +198,211 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
 - **Consequence:** a real gap. A split needs an amount, a refund path, a payout adjustment, a ledger
   entry and an audit trail. None of that exists. The 501 is honest; it is not a feature.
 
+### DEFECT-015 — matching engine rewritten around `match-p1.0`
+
+- **PUBLISHED** (`docs/BUSINESS_LOGIC.md` §3, `docs/MATCHING_ENGINE.md` §3–§9): hard eligibility
+  filters first, then a weighted score with the documented weights, a closed reason-code set, privacy
+  bands for pickup distance, a low-confidence fallback, and reliability handling for thin records.
+- **OBSERVED** (`packages/domain/src/matching.ts`): the engine is now two explicit stages. Fourteen
+  hard constraints run first and each one is terminal — a score can never lift a trip that failed a
+  gate. Eligible trips get `score = Σ(wᵢ·fitᵢ) × 100 / Σwᵢ` with `fitᵢ ∈ [0,1]`, weights
+  `time 30 / departure 20 / detour 20 / reliability 15 / capacity 10 / preference 5`, and the formula
+  version (`match-p1.0`), every fit and every point contribution are returned in
+  `score_breakdown`, so the points add up to the score on the wire. Ties break
+  `score → arrival → departure → trip id`, so ranking is deterministic.
+- **Divergences worth naming:**
+  - `BUSINESS_LOGIC.md` §3.2 allows a trip whose origin is a *different* city inside the detour limit
+    (pilot 10 km). The engine accepts those and prices the detour down; it does not reject them.
+  - Trips whose reliability is below 0.7 after ≥10 samples go to manual review in the pack (§9).
+    There is no matching review queue in this build, so they are excluded and reported as
+    `TRAVELLER_RELIABILITY_REVIEW` in the server-side rejection list rather than ranked into view.
+  - There is no routing provider. Distances are great-circle between city centroids, which is a
+    lower bound on road distance and is labelled as such in the UI and the contract. Within a city,
+    proximity is area-**name** agreement, never a converted distance, because `areas` has no
+    coordinates (see DEFECT-003).
+  - `SMALL_DETOUR` and `HIGH_RELIABILITY` are only emitted when their underlying numbers support
+    them; a reason code is a claim, not decoration.
+- **Config:** `MATCH_MAX_ORIGIN_DETOUR_KM`, `MATCH_ARRIVAL_GRACE_HOURS`, `MATCH_MIN_SCORE`,
+  `MATCH_MAX_RESULTS`, `MATCH_WEIGHTS` (`time=30,departure=20,…`), `MATCH_CANDIDATE_SCAN_LIMIT`.
+  A malformed weight fails at boot, not at the first matching request.
+- **Consequence:** the per-trip rejection list (`rejections`) is kept server-side and logged at debug
+  only. It names other users' trips and why they were withheld, so it is not returned to the sender.
+
+### DEFECT-016 — booking list carries parcel identity
+
+- **PUBLISHED:** `openapi.yaml` `BookingSummary` has id, status, role, mode, amounts and timestamps.
+- **OBSERVED:** `GET /v1/bookings` items also return `parcel_id`, `category`, `weight_kg`,
+  `origin_city` and `dest_city` (one extra join, no N+1). The list screen used to render
+  "Booking 1a2b3c4d · you are sending", which is not something a returning sender can act on; it now
+  shows the parcel and the route.
+- **Consequence:** additive contract surface; the pack's `BookingSummary` must gain these fields
+  before freeze.
+
+### DEFECT-017 — Phase C security sweep
+
+- **PUBLISHED:** the pack lists webhook signature validation, admin/OTP exposure rules and file
+  ownership as "assumed". Nothing in the pack says which routes are unauthenticated or which
+  object keys may be referenced cross-account.
+- **OBSERVED:** the audit walked every route and fixed the following in this build:
+  - `keyBelongsTo(key, userId)` in `lib/storage.ts` (strict UUID-segment pattern) is enforced on
+    every write path that persists an object key: parcels, booking pickup/delivery handovers,
+    disputes, verification documents. A key that syntactically matches another user's segment is
+    refused with `VALIDATION_FAILED (photo_key)`.
+  - `verification.ts` no longer writes fabricated KYC metadata. The stored row now carries the
+    real SHA-256 of the uploaded bytes, the object's actual MIME type and the actual byte size.
+  - `google-auth.ts` revokes every active session of a phone account the moment it is linked to
+    a Google identity, closing the "attacker's still-live session inherits the linked account"
+    window.
+  - `webhooks.ts`: only `payment.captured` moves the booking to `confirmed`. `payment.authorised`
+    now updates the payment row to `authorised` and leaves the booking in `payment_pending`. The
+    contract table in `api/WEBHOOK_CONTRACTS.md` matches this.
+  - `webhooks.ts`: the public `GET /webhooks/payments/health` probe is gone. It leaked
+    `PAYMENT_PROVIDER`, `PAYMENTS_LIVE` and `PAYOUTS_ENABLED` to any caller without auth.
+  - `dev.ts`: `POST /dev/webhooks/simulate` now requires auth and checks that the caller is a
+    party to the payment (or staff). `GET /dev/otp/:challengeId` carries a 20/min rate limit so a
+    stray client cannot enumerate challenge ids.
+  - `admin.ts`: dual-approval release now validates `approval_id` as a distinct finance user who
+    wrote a prior `payout.approved` audit entry for the same booking. A new
+    `POST /v1/admin/payouts/:bookingId/approve` records the second sign-off. Truthy strings are
+    no longer accepted.
+  - `admin.ts`: the "support_lead" role that used to be synthesized for anyone not trust & safety
+    has been removed. Real role labels (`support_agent`, `trust_safety`, …) flow from `user_roles`
+    into the transition context. Domain guards in `packages/domain/src/booking-machine.ts` match.
+  - `admin.ts`: `/admin/verifications`, `/admin/bookings`, `/admin/disputes` and `/admin/audit-log`
+    now validate their query strings with zod; date filters must be ISO-8601, `phone_hash` must be
+    a lowercase 64-hex, state filters are enums. Malformed queries return 400 instead of producing
+    `Invalid Date` rows or unbounded `WHERE` clauses.
+  - `app.ts`: writes are rate limited at `RATE_LIMIT_WRITE_PER_MINUTE` per IP via a `preHandler`
+    hook built on the plugin's manual `createRateLimit` API. Health and webhook routes are exempt.
+  - `app.ts`: pino redact paths extended to `*.email`, `*.user_email`, `*.recovery_email`,
+    `req.body.email`, `req.body.receiver_email`.
+  - `auth.ts`: `/auth/otp/verify` capped at 10/min, `/auth/refresh` capped at 30/min.
+  - `config.ts`: `assertSafetyRails` refuses to start in production with `SMS_PROVIDER=log` — that
+    config prints OTP codes to stdout.
+  - `apps/web/vite.config.ts`: `build.sourcemap` is true only outside production. Published bundles
+    no longer ship `.ts` sources.
+  - `bookings.ts`: `GET /bookings` list response carries `parcel_id`, `category`, weight and the
+    two city names (also under DEFECT-016) — the list screen previously used to leak raw UUIDs.
+- **Consequence:** the public OpenAPI surface is unchanged apart from the removal of the health
+  probe (`GET /v1/webhooks/payments/health`) and the additive `POST /v1/admin/payouts/:bookingId/approve`.
+  Smoke (44/44) and concurrency (11/11) both pass with these changes; `scripts/concurrency.mjs`
+  no longer fakes `sealed_photo_key`.
+
+### DEFECT-018 — Phase D: indexes, admin pagination, worker honesty
+
+- **PUBLISHED:** the pack's `SCHEMA.md` shows indexes on hot foreign keys, and the API contract
+  says list routes return "the current page" and "next cursor". The pack does not say whether
+  `/me/export` and `/me/deletion-request` are backed by a worker, but the response shape
+  (`status: 'queued'`, `hard_delete_after: <30d>`) implies they are.
+- **OBSERVED:**
+  - `migrations/0005_phase_d_indexes.sql` adds eight indexes: `payments(provider_ref)` — every
+    webhook was doing a sequential scan on this lookup; `refunds(payment_id, created_at)` — the
+    eligibility check on every refund; `audit_log(action, created_at)` and `audit_log(actor_id,
+    created_at)` — the two filters the admin console actually applies; `bookings(status,
+    created_at)`, `verifications(state, created_at)`, `disputes(state, created_at)` — admin
+    queue filters; `notifications(user_id, status, created_at)` — the unread badge.
+  - All four admin list routes (`/admin/verifications`, `/admin/bookings`, `/admin/disputes`,
+    `/admin/audit-log`) accept `offset` and return `{ items, page: { limit, offset } }`. Prior
+    to this they silently truncated to the head of the table, so a queue longer than 100 was
+    not fully reachable. User-side list routes (`/bookings`, `/trips`, `/notifications`) already
+    cursor-paginate; `parcels` has no list route to fix.
+  - `/me/export` now returns `501 BACKGROUND_WORKER_UNAVAILABLE` with a plain-language message.
+    It used to return `202 queued` and drop a `jobs` row that nothing reads. That was a fake
+    success message; the honest answer here is "no".
+  - `/me/deletion-request` still soft-deletes synchronously (that part is real), but the response
+    no longer says `202 accepted / hard_delete_after`. It returns `200` with `hard_delete_worker:
+    false` and a `note` explaining that the row-level purge after the retention window is a
+    deploy-time job in this build. The timestamp is a target, not a scheduled event.
+  - `queueNotification` no longer writes `status='sent'`. `in_app` rows are marked `delivered`
+    (the write IS the delivery — GET /v1/notifications reads them back), other channels stay
+    `queued` with `sent_at = NULL`. `enqueueJob` and `emitOutbox` gained doc comments that say
+    plainly: "no consumer reads these rows in this build".
+- **Consequence:** the OpenAPI contract needs `offset` and `page` on the four admin list routes,
+  `501` on `/me/export`, and the new response body on `/me/deletion-request`. The pack's
+  `queueNotification` description ("delivery is dispatched by the worker") is a HYPOTHESIS this
+  build does not satisfy and now says so.
+
+---
+
+### DEFECT-019 — Launch UI pass (chrome, tokens, sandbox wording)
+
+- **PUBLISHED:** the pack's UI copy refers to "the pilot" throughout. Nothing in the pack asks for
+  a persistent "Test mode" badge in the application header.
+- **CHANGED:**
+  - The header no longer carries a sandbox badge and no longer falls back to the masked phone
+    fragment (`…0001`) as the account label; it shows the account name or "Account". The seeded
+    demo numbers were removed from the sign-in screen, which is now Google-first with the phone
+    route as the alternative beneath it.
+  - `SandboxChip` is gone. Where the sandbox actually matters — the money card and the pay panel —
+    the build states it in one plain sentence ("Payments run through a sandbox provider in this
+    build") instead of repeating a badge. Dev-only affordances (OTP peek, sample photo, advance-
+    pickup) remain behind `import.meta.env.DEV` and no longer say "test mode" in their labels.
+  - Landing dropped the mock "typical booking" panel and the hardcoded limits grid. The limits
+    strip now reads `limits` from `GET /v1/config`, so the numbers cannot drift from the server.
+  - Design tokens: the acid yellow accent is muted (`#e8b33c` / `#a9761a`), `brand-900` is a deep
+    navy rather than electric blue, and the hero gradient moved with it. Button/control heights
+    settled at 44px (`h-11`) and `h-12` for the primary CTA; cards use one padding rhythm
+    (`p-5 sm:p-6`); section headings and page titles dropped a step; selection pills became
+    underline tabs on the operations console and neutral segmented tabs on the parcel list.
+  - Copy: "at pilot" reads as "at launch" in user-facing screens; legal pages still disclose the
+    real limits (no insurance, no live tracking, payouts disabled) in the same place as before.
+- **Consequence:** presentation only. No API surface, no state machine, no auth behaviour moved.
+  Typecheck and `vite build` both pass; the smoke and concurrency suites are unaffected because
+  they drive the API, not the DOM.
+
+---
+
+### DEFECT-020 — Booking-first homepage (Porter/Rapido study)
+
+- **EVIDENCE LIMITATION:** REA's browser automation was refused by REA's own classifier for the
+  third-party commercial targets (porter.in), so no pixel-level capture of the reference products
+  exists in this build's evidence. Structural facts below come from the official sites' public
+  pages and app-store listings; visual details (exact hex values, spacing) are stated as inferences.
+- **REFERENCE FINDINGS (verified):**
+  - Porter: the homepage hero is a booking panel — pickup, drop, vehicle type, one primary CTA —
+    beside the value proposition; the top nav is thin (driver partner / support / enterprise);
+    flow is pickup → drop → optional stops → vehicle class → price → book.
+  - Rapido: one headline, two CTAs (ride / drive), scale-and-safety stats; driver onboarding is a
+    first-class homepage path; yellow is the brand accent (hex not officially published).
+- **CHANGED:**
+  - `Landing.tsx` rebuilt: the navy hero now contains a white booking card — pickup city and
+    destination city (serviceable cities only, from `GET /v1/cities`), a swap control, weight and
+    category fields, client-side validation (both cities, different cities, 0.1–max kg from
+    `GET /v1/config`), and one primary CTA that hands off to `/send` with `origin`, `dest`,
+    `weight` and `category` query parameters. Signed-out visitors are routed through
+    `/login?next=/send?…` and land back on the prefilled flow after sign-in.
+  - `Send.tsx` now reads those query parameters: item state seeds weight/category (validated
+    against domain `CATEGORIES` and the weight cap) and the route seeds origin/dest city IDs
+    (validated against the city catalogue before the default Bareilly⇄Delhi seeding applies).
+  - New `SwapIcon` in `icons.tsx`; how-it-works steps gained icons; two new landing cards surface
+    the tracking path (`/bookings`) and the driver-onboarding path (`/trips/new`) with honest
+    microcopy (no insurance claims, no live tracking claims).
+- **Consequence:** no API or state-machine changes. Verified in the running app: panel submit with
+  valid inputs reaches `/send` prefilled (cities, weight, category); swap and same-city validation
+  behave; signed-out submit lands on `/login?next=/send?…` and returns prefilled after the dev-OTP
+  sign-in. Typecheck, `vite build`, unit tests, smoke (44) and concurrency (11) all pass.
+
+---
+
+### DEFECT-021 — Sign-in page: balanced cards, official Google mark
+
+- **OBSERVED:** the auth page grid used `lg:items-start`, so the shorter navy information card
+  ended well above the form card's bottom edge, leaving an empty strip beside the form (the
+  green-marked area in the reference screenshot). The Google button used a home-drawn placeholder
+  glyph (circle + squiggle) rather than the Google mark.
+- **CHANGED:**
+  - `Login.tsx`: the grid now uses the default `align-items: stretch` and the navy card fills its
+    column (`h-full`), so both cards share one height at `lg`. The information panel is no longer
+    `hidden` below `lg` — the two cards stack vertically on mobile with the existing `gap-6`
+    spacing. Content stays top-aligned inside both cards; no padding or typography changed.
+  - `icons.tsx`: `GoogleIcon` now renders the official Google "G" mark (48px viewBox, the four
+    brand colours `#EA4335`, `#4285F4`, `#FBBC05`, `#34A853`) instead of the placeholder glyph;
+    the login button renders it at 20px to the left of the label. The icon is only used there.
+- **Consequence:** presentation only — no auth, OTP, routing, or API behaviour moved. Verified by
+  pixel-profiling a 1280px headless-Chrome capture of `/login` (both card bottom edges at the same
+  row, no horizontal overflow) and by DOM checks of the four G fills at 530px (stacked layout,
+  24px gap). Typecheck and `vite build` pass.
+
 ---
 
 ## 2. Other deviations
@@ -203,6 +415,12 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
 - **Consequence:** single process, single writer, no connection pool, no `LISTEN/NOTIFY`, no
   concurrent-write testing. **A pooled `pg` client and a real migration run are required before any
   shared environment.** `db/client.ts` is the only file that should need to change.
+- **OBSERVED twice on the build machine:** a development API killed with `taskkill /F` leaves
+  `data/pgdata` unopenable — the next boot aborts inside the WASM Postgres (`RuntimeError: Aborted()`)
+  and removing `postmaster.pid` does not help. The recovery is to move the directory aside and let
+  migrations plus `AUTO_SEED` rebuild it. Two such quarantined directories are sitting in
+  `apps/api/data/`. Treat this as a reason not to put anything real in the embedded engine, and as
+  a second reason to stop two `dev:api` processes from racing for the same data directory.
 
 ### Build and run tooling
 
@@ -288,17 +506,27 @@ undefined here on purpose rather than being invented.
 **OBSERVED**, on the machine that built it:
 
 - `npm run typecheck` — domain, API and web all clean.
-- `npm run test -w @py/domain` — 15/15 pricing and state-machine tests pass.
-- `node scripts/smoke.mjs --reset` — 43 checks pass, 0 fail. Covers sign-in, parcel creation,
+- `npm test` — 63/63 domain tests pass (money, pricing, eligibility, the booking state machine,
+  refunds, and the matching engine: hard gates, score arithmetic, tie-breaks, policy validation,
+  low-confidence fallback, truthfulness of the reason codes) plus 3/3 API tests
+  (`npm run test:api`): the `ADMIN_EMAILS` address receives every staff role in `user_roles`, an
+  unlisted address receives none, and removing the address revokes the grant at the next sign-in.
+  **The Google leg is not tested here**: it needs a real ID token from a configured OAuth client,
+  and this build has no credentials. What is proven is the function that sign-in calls.
+- `node scripts/smoke.mjs --reset` — 44 checks pass, 0 fail. Covers sign-in, parcel creation,
   prohibited-item refusal, matching, quote arithmetic, booking, acceptance, sandbox payment and
   signed webhook, pickup OTP (wrong then right), transit, arrival, delivery OTP, settlement, payout
   refusal (`PAYOUTS_NOT_ENABLED`), review, dispute creation, payout freeze, and evidence.
+- `node scripts/concurrency.mjs` — 11 checks pass, 0 fail. Five simultaneous `POST /bookings` for
+  one parcel: exactly one 201, four clean 409s, one booking row, capacity reserved once. Three
+  simultaneous requests sharing one `Idempotency-Key` return the same booking and leave one row.
+  A cancelled parcel can be booked again, so the "one active booking" index is genuinely partial.
 - Browser walkthrough of the sender and traveller happy path, the dispute path, verification
   submission and staff approval, the admin case queue, refund/payout refusal, and the audit log.
 - `npm run build -w @py/web` — production bundle builds.
 
-**Not verified:** concurrent writers, load, failover, backup/restore, real provider behaviour,
-accessibility audit, penetration test, or anything on a second machine.
+**Not verified:** load, failover, backup/restore, real provider behaviour, accessibility audit,
+penetration test, or anything on a second machine.
 
 ---
 

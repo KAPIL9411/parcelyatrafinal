@@ -18,8 +18,8 @@ function PageShell({
   return (
     <div className="mx-auto max-w-3xl space-y-5">
       <div>
-        <p className="text-xs font-semibold tracking-wide text-brand-700 uppercase">{eyebrow}</p>
-        <h1 className="mt-1 text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl">{title}</h1>
+        <p className="text-xs font-medium tracking-wide text-ink-500 uppercase">{eyebrow}</p>
+        <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-ink-900 sm:text-2xl">{title}</h1>
         <p className="mt-2 text-base text-ink-700">{intro}</p>
       </div>
       {children}
@@ -48,7 +48,7 @@ export function Pricing() {
       intro="The server computes one price for your parcel from the route, the weight and the category. You see every line before you book, and the price is held for a short window."
     >
       <Banner tone="info" title="The amounts below are a pricing hypothesis, not a market rate">
-        This is a pilot formula. It has not been validated against real demand, and it may change. The price you see
+        This is a launch formula. It has not been validated against real demand, and it may change. The price you see
         in the app is the one that applies to your booking.
       </Banner>
 
@@ -84,8 +84,8 @@ export function Pricing() {
       <Card>
         <h2 className="text-lg font-semibold text-ink-900">What changes the price</h2>
         <ul className="mt-3 space-y-2 text-sm text-ink-700">
-          <li>Weight above 1 kg, up to the 5 kg pilot limit.</li>
-          <li>The corridor distance. Bareilly ⇄ Delhi NCR and Bareilly ⇄ Lucknow are open at pilot.</li>
+          <li>Weight above 1 kg, up to the 5 kg launch limit.</li>
+          <li>The corridor distance. Bareilly ⇄ Delhi NCR and Bareilly ⇄ Lucknow are open at launch.</li>
           <li>The category, through the handling multiplier.</li>
           <li>
             A named surge multiplier, never applied silently. It is capped, and the quote shows it as its own line.
@@ -174,7 +174,7 @@ export function Prohibited() {
       </Card>
 
       <Card>
-        <h2 className="text-lg font-semibold text-ink-900">What we do carry at pilot</h2>
+        <h2 className="text-lg font-semibold text-ink-900">What we do carry at launch</h2>
         <ul className="mt-3 space-y-2 text-sm text-ink-700">
           <li>Documents and property or court papers, sealed and photographed.</li>
           <li>Educational certificates.</li>
@@ -254,7 +254,7 @@ export function Safety() {
           <li>We do not track the traveller’s live location. Status updates come from the people involved.</li>
           <li>We do not insure your parcel in this build.</li>
           <li>We do not carry cash, jewellery or documents we cannot replace.</li>
-          <li>We do not hold your money. A payment provider does, and payouts are disabled at pilot.</li>
+          <li>We do not hold your money. A payment provider does, and payouts are disabled at launch.</li>
         </ul>
       </Card>
 
@@ -307,7 +307,7 @@ export function Help() {
           },
           {
             q: 'How do I get paid as a traveller?',
-            a: 'Your share becomes eligible 72 hours after delivery, if no case is open. Payouts are disabled at pilot, so nothing is released in this build.',
+            a: 'Your share becomes eligible 72 hours after delivery, if no case is open. Payouts are disabled at launch, so nothing is released in this build.',
           },
           {
             q: 'Why do you need my ID?',
@@ -328,8 +328,8 @@ export function Help() {
       <Card>
         <h2 className="text-lg font-semibold text-ink-900">Still stuck?</h2>
         <p className="mt-2 text-sm text-ink-700">
-          Write to the grievance officer with your booking reference. We respond within 48 hours. This is a pilot,
-          so support hours are limited and published separately.
+          Write to the grievance officer with your booking reference. We respond within 48 hours. We’re a small
+          team at launch, so support hours are limited and published separately.
         </p>
         <Link to="/grievance" className="mt-3 inline-block">
           <Button variant="secondary">Contact the grievance officer</Button>
@@ -377,7 +377,7 @@ export function Terms() {
           <li>That a traveller will be available for your route or window.</li>
           <li>That a parcel is insured. It is not, in this build.</li>
           <li>That delivery will happen at an exact minute. Arrival times are estimates given by the traveller.</li>
-          <li>That money can be paid out. Payouts are disabled at pilot.</li>
+          <li>That money can be paid out. Payouts are disabled at launch.</li>
         </ul>
       </Card>
 

@@ -48,14 +48,14 @@ export function Admin() {
   return (
     <div className="space-y-5">
       <div>
-        <p className="text-xs font-semibold tracking-wide text-brand-700 uppercase">Operations</p>
-        <h1 className="mt-1 text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl">Staff console</h1>
+        <p className="text-xs font-medium tracking-wide text-ink-500 uppercase">Operations</p>
+        <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-ink-900 sm:text-2xl">Staff console</h1>
         <p className="mt-1 text-sm text-ink-500">
           Every read and write here is written to the audit log with your account id.
         </p>
       </div>
 
-      <div className="flex flex-wrap gap-2" role="tablist" aria-label="Operations sections">
+      <div className="-mt-2 flex flex-wrap gap-6 border-b border-line" role="tablist" aria-label="Operations sections">
         {TABS.map((option) => (
           <button
             key={option.value}
@@ -64,10 +64,10 @@ export function Admin() {
             aria-selected={tab === option.value}
             onClick={() => setTab(option.value)}
             className={cn(
-              'rounded-full border px-3.5 py-1.5 text-sm font-semibold',
+              '-mb-px border-b-2 px-1 py-2.5 text-sm font-medium transition-colors',
               tab === option.value
-                ? 'border-brand-600 bg-brand-50 text-brand-700'
-                : 'border-line-strong bg-surface text-ink-700 hover:border-ink-300',
+                ? 'border-brand-600 text-ink-900'
+                : 'border-transparent text-ink-500 hover:text-ink-900',
             )}
           >
             {option.label}
@@ -411,7 +411,7 @@ function BookingSearch() {
           </>
         }
       >
-        <Banner tone="danger" title="Payouts are disabled at pilot" icon>
+        <Banner tone="danger" title="Payouts are disabled at launch" icon>
           This button exists so the refusal is visible, not so money can move. The server answers
           PAYOUTS_NOT_ENABLED before any state changes.
         </Banner>

@@ -1,16 +1,16 @@
 import { BOOKING_STATUS_LABELS, type BookingStatus } from '@py/domain';
 
 import { cn } from './ui';
-import { AlertTriangleIcon, CheckCircleIcon, ClockIcon, InfoIcon, XCircleIcon } from './icons';
+import { CheckCircleIcon, ClockIcon, InfoIcon, XCircleIcon } from './icons';
 
 type ChipTone = 'success' | 'warn' | 'danger' | 'brand' | 'neutral';
 
 const TONES: Record<ChipTone, string> = {
-  success: 'bg-success-50 text-success-600 border-success-600/25',
-  warn: 'bg-warn-50 text-warn-600 border-warn-600/30',
-  danger: 'bg-danger-50 text-danger-600 border-danger-600/30',
-  brand: 'bg-brand-50 text-brand-700 border-brand-600/20',
-  neutral: 'bg-canvas text-ink-700 border-line-strong',
+  success: 'bg-success-50 text-success-600',
+  warn: 'bg-warn-50 text-warn-600',
+  danger: 'bg-danger-50 text-danger-600',
+  brand: 'bg-brand-50 text-brand-700',
+  neutral: 'bg-canvas text-ink-700',
 };
 
 const TONE_ICON: Record<ChipTone, typeof InfoIcon> = {
@@ -36,7 +36,7 @@ export function Chip({
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold whitespace-nowrap',
+        'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium whitespace-nowrap',
         TONES[tone],
         className,
       )}
@@ -128,13 +128,4 @@ export function PayoutChip({ state }: { state: string }) {
     default:
       return <Chip tone="neutral">Payout not yet due</Chip>;
   }
-}
-
-export function SandboxChip() {
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-accent-600/50 bg-accent-500/15 px-2.5 py-1 text-xs font-semibold text-warn-600">
-      <AlertTriangleIcon size={14} aria-hidden="true" />
-      Test mode
-    </span>
-  );
 }

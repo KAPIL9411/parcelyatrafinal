@@ -6,7 +6,14 @@ import { quotePrice, corridorKm, PRICING_V1, indicativePricePaise } from '../src
 import { evaluateEligibility, detectProhibitedContent } from '../src/eligibility.ts';
 import { applyTransition, allowedCommands } from '../src/booking-machine.ts';
 import { computeRefund } from '../src/refunds.ts';
-import { rankMatches } from '../src/matching.ts';
+import {
+  rankMatches,
+  matchingPolicy,
+  reliabilityBandOf,
+  reliabilityRatioOf,
+  type MatchInput,
+  type TripCandidate,
+} from '../src/matching.ts';
 
 test('money: Indian grouping and paise formatting', () => {
   assert.equal(groupIndian(123456), '1,23,456');
@@ -74,6 +81,8 @@ test('eligibility: prohibited content is a hard block', () => {
 const baseInput = {
   accountStatus: 'active' as const,
   phoneVerified: true,
+  emailVerified: false,
+  phoneVerificationRequired: true,
   category: 'documents' as const,
   description: 'A4 envelope with property papers',
   weightKg: 1,
@@ -99,6 +108,21 @@ test('eligibility: happy path passes E1-E10', () => {
 test('eligibility: each hard rule fails with its documented code', () => {
   assert.equal(evaluateEligibility({ ...baseInput, accountStatus: 'suspended' }).code, 'ACCOUNT_SUSPENDED');
   assert.equal(evaluateEligibility({ ...baseInput, phoneVerified: false }).code, 'PHONE_NOT_VERIFIED');
+  // With phone verification switched off, a provider-vouched email carries rule E2 on its own.
+  assert.equal(
+    evaluateEligibility({ ...baseInput, phoneVerified: false, phoneVerificationRequired: false, emailVerified: true }).ok,
+    true,
+  );
+  // Neither channel verified is still a hard failure — the flag relaxes SMS, not accountability.
+  assert.equal(
+    evaluateEligibility({ ...baseInput, phoneVerified: false, phoneVerificationRequired: false, emailVerified: false }).code,
+    'CONTACT_NOT_VERIFIED',
+  );
+  // A required phone is not satisfied by a verified email.
+  assert.equal(
+    evaluateEligibility({ ...baseInput, phoneVerified: false, emailVerified: true }).code,
+    'PHONE_NOT_VERIFIED',
+  );
   assert.equal(evaluateEligibility({ ...baseInput, description: 'cash in envelope' }).code, 'ITEM_PROHIBITED');
   assert.equal(evaluateEligibility({ ...baseInput, weightKg: 6 }).code, 'PARCEL_TOO_LARGE');
   assert.equal(evaluateEligibility({ ...baseInput, dimsCm: [50, 10, 10] }).code, 'PARCEL_TOO_LARGE');
@@ -181,14 +205,42 @@ test('refunds: documented outcomes', () => {
   assert.equal(computeRefund({ actor: 'traveller', accepted: true, pickedUp: false, hoursUntilWindowStart: 1, capturedPaise: 89_900 }).refundPaise, 89_900);
 });
 
-test('matching: ranks a good trip and explains why', () => {
-  const now = new Date('2026-10-24T10:00:00Z');
-  const trip = {
-    id: 't1',
-    travellerId: 'u2',
-    mode: 'car' as const,
+const MATCH_NOW = new Date('2026-10-24T10:00:00Z');
+
+function matchInput(over: Partial<MatchInput> = {}): MatchInput {
+  return {
+    senderId: 'u1',
     originCityId: 'bareilly',
     destCityId: 'delhi',
+    parcelOriginArea: 'Civil Lines',
+    parcelDestArea: 'Karol Bagh',
+    originServiceable: true,
+    destServiceable: true,
+    category: 'documents',
+    description: 'A4 envelope with a signed property agreement',
+    weightKg: 3,
+    dimsCm: [30, 20, 2],
+    windowStart: new Date('2026-10-25T00:00:00Z'),
+    windowEnd: new Date('2026-10-25T12:00:00Z'),
+    corridorKm: 250,
+    enabledModes: ['car'],
+    parcelStatus: 'posted',
+    parcelAlreadyAssigned: false,
+    now: MATCH_NOW,
+    ...over,
+  };
+}
+
+function trip(over: Partial<TripCandidate> = {}): TripCandidate {
+  return {
+    id: 't1',
+    travellerId: 'u2',
+    mode: 'car',
+    originCityId: 'bareilly',
+    destCityId: 'delhi',
+    originArea: null,
+    destArea: null,
+    originDetourKm: 0,
     departureAt: new Date('2026-10-25T01:30:00Z'),
     arrivalEstimateAt: new Date('2026-10-25T07:00:00Z'),
     capacityKg: 10,
@@ -197,60 +249,216 @@ test('matching: ranks a good trip and explains why', () => {
     acceptsDocumentsOnly: true,
     travellerFirstName: 'Imran',
     travellerInitial: 'S',
-    verificationState: 'verified' as const,
-    reliabilityBand: 'reliable' as const,
+    verificationState: 'verified',
     completedTrips: 12,
+    travellerCancellations: 0,
+    ...over,
   };
-  const res = rankMatches(
-    {
-      senderId: 'u1',
-      originCityId: 'bareilly',
-      destCityId: 'delhi',
-      originServiceable: true,
-      destServiceable: true,
-      category: 'documents',
-      weightKg: 3,
-      windowStart: new Date('2026-10-25T00:00:00Z'),
-      windowEnd: new Date('2026-10-25T12:00:00Z'),
-      corridorKm: 250,
-      enabledModes: ['car'],
-      now,
-    },
-    [trip],
-  );
+}
+
+const rejectionOf = (res: ReturnType<typeof rankMatches>, tripId = 't1') =>
+  res.rejections.find((r) => r.trip_id === tripId)?.code;
+
+test('matching: an eligible trip is ranked, explained, and its points add up to its score', () => {
+  const res = rankMatches(matchInput(), [trip()]);
   assert.equal(res.matches.length, 1);
-  assert.equal(res.matches[0]!.band, 'excellent');
-  assert.ok(res.matches[0]!.reasons.includes('ON_ROUTE'));
-  assert.ok(res.matches[0]!.reasons.includes('ARRIVES_IN_WINDOW'));
+  const m = res.matches[0]!;
+  // time 30 + departure 20 + detour 20 + reliability 15 + capacity 10 + preference 5×0.8 = 99.
+  assert.equal(m.score, 99);
+  assert.equal(m.band, 'excellent');
+  assert.equal(m.reliability_band, 'highly_reliable');
+  assert.equal(m.reliability_ratio, 1);
+  assert.equal(m.pickup_distance_band_km, '<1');
+  assert.ok(m.reasons.includes('ON_ROUTE'));
+  assert.ok(m.reasons.includes('ARRIVES_IN_WINDOW'));
+  assert.ok(m.reasons.includes('HIGH_RELIABILITY'));
+  assert.ok(m.reasons.includes('VERIFIED_ID'));
+  assert.ok(!m.reasons.includes('SMALL_DETOUR'), 'the traveller never named a pickup area');
+  const b = m.score_breakdown;
+  assert.equal(b.formula_version, 'match-p1.0');
+  assert.equal(Math.round(Object.values(b.points).reduce((a, x) => a + x, 0)), m.score);
+  assert.ok(Object.values(b.fit).every((f) => f >= 0 && f <= 1));
 });
 
-test('matching: capacity shortfall produces a reason, never a price', () => {
-  const now = new Date('2026-10-24T10:00:00Z');
-  const res = rankMatches(
-    {
-      senderId: 'u1',
-      originCityId: 'bareilly',
-      destCityId: 'delhi',
-      originServiceable: true,
-      destServiceable: true,
-      category: 'documents',
-      weightKg: 5,
-      windowStart: new Date('2026-10-25T00:00:00Z'),
-      windowEnd: new Date('2026-10-25T12:00:00Z'),
-      corridorKm: 250,
-      enabledModes: ['car'],
-      now,
-    },
-    [
-      {
-        id: 't1', travellerId: 'u2', mode: 'car', originCityId: 'bareilly', destCityId: 'delhi',
-        departureAt: new Date('2026-10-25T01:30:00Z'), arrivalEstimateAt: new Date('2026-10-25T07:00:00Z'),
-        capacityKg: 3, capacityKgRemaining: 3, status: 'published', acceptsDocumentsOnly: true,
-        travellerFirstName: 'A', travellerInitial: 'B', verificationState: 'verified',
-        reliabilityBand: 'new', completedTrips: 0,
-      },
-    ],
-  );
+test('matching: a failed hard constraint is never outscored', () => {
+  // Perfect on every weighted factor, 0.1 kg short of the packaging allowance.
+  const res = rankMatches(matchInput({ weightKg: 3 }), [trip({ capacityKgRemaining: 3.2 })]);
   assert.equal(res.matches.length, 0);
+  assert.equal(rejectionOf(res), 'NO_CAPACITY');
   assert.ok(res.no_match_reasons.includes('NO_CAPACITY'));
+  assert.equal(res.low_confidence, false);
+});
+
+test('matching: route, timing, trust and handling constraints each reject on their own', () => {
+  const cases: Array<[{ category?: MatchInput['category'] } & Partial<TripCandidate>, string]> = [
+    [{ destCityId: 'lucknow' }, 'DESTINATION_NOT_SERVED'],
+    [{ originCityId: 'meerut', originDetourKm: 40 }, 'ORIGIN_NOT_SERVED'],
+    [{ originCityId: 'meerut', originDetourKm: Number.NaN }, 'ORIGIN_NOT_SERVED'],
+    [{ mode: 'bike' }, 'MODE_DISABLED'],
+    [{ status: 'full' }, 'TRIP_NOT_ACTIVE'],
+    [{ departureAt: new Date('2026-10-24T09:00:00Z') }, 'TRIP_DEPARTED'],
+    [{ travellerId: 'u1' }, 'SELF_TRIP'],
+    [{ verificationState: 'pending' }, 'TRAVELLER_NOT_VERIFIED'],
+    [{ completedTrips: 6, travellerCancellations: 8 }, 'TRAVELLER_RELIABILITY_REVIEW'],
+    [{ category: 'spare_parts_dry' }, 'CATEGORY_NOT_ACCEPTED'],
+    [{ departureAt: new Date('2026-10-25T13:00:00Z') }, 'DEPARTS_AFTER_WINDOW'],
+    [{ arrivalEstimateAt: new Date('2026-10-25T14:30:00Z') }, 'ARRIVES_TOO_LATE'],
+  ];
+  for (const [over, expected] of cases) {
+    const { category, ...tripOver } = over as { category?: MatchInput['category'] } & Partial<TripCandidate>;
+    const res = rankMatches(matchInput(category ? { category } : {}), [trip(tripOver)]);
+    assert.equal(res.matches.length, 0, `${expected} must exclude the candidate`);
+    assert.equal(rejectionOf(res), expected);
+  }
+});
+
+test('matching: a nearby origin city is allowed and priced down for the detour', () => {
+  const near = trip({ id: 't2', travellerId: 'u3', originCityId: 'greater-noida', originDetourKm: 8 });
+  const res = rankMatches(matchInput(), [trip(), near]);
+  assert.equal(res.matches.length, 2);
+  assert.equal(res.matches[0]!.trip_id, 't1');
+  assert.equal(res.matches[1]!.pickup_distance_band_km, '5-10');
+  assert.equal(res.matches[1]!.score_breakdown.fit.detour, 0.2);
+  assert.ok(res.matches[1]!.score < res.matches[0]!.score);
+});
+
+test('matching: an unknown contact or closed parcel stops the search before any trip is read', () => {
+  assert.deepEqual(rankMatches(matchInput({ parcelStatus: 'cancelled' }), [trip()]).no_match_reasons, ['PARCEL_NOT_OPEN']);
+  assert.deepEqual(rankMatches(matchInput({ parcelAlreadyAssigned: true }), [trip()]).no_match_reasons, [
+    'PARCEL_ALREADY_ASSIGNED',
+  ]);
+  assert.deepEqual(rankMatches(matchInput({ originServiceable: false }), [trip()]).no_match_reasons, ['ORIGIN_NOT_SERVED']);
+  assert.equal(rankMatches(matchInput({ parcelStatus: 'cancelled' }), [trip()]).rejections.length, 0);
+});
+
+test('matching: the parcel itself can be the reason nothing matches', () => {
+  const tooBig = rankMatches(matchInput({ dimsCm: [60, 10, 10] }), [trip()]);
+  assert.equal(rejectionOf(tooBig), 'PARCEL_TOO_LARGE');
+  assert.ok(tooBig.no_match_reasons.includes('PARCEL_TOO_LARGE'));
+
+  const prohibited = rankMatches(matchInput({ description: 'envelope with 50000 cash inside' }), [trip()]);
+  assert.equal(rejectionOf(prohibited), 'ITEM_PROHIBITED');
+  // Reporting a route shortage here would describe the wrong problem to the sender.
+  assert.deepEqual(prohibited.no_match_reasons, []);
+});
+
+test('matching: a thin record is not punished twice, a bad one is', () => {
+  // 3 finished trips is below the §9 sample of 10, so the ratio gate does not fire yet.
+  const thin = rankMatches(matchInput(), [trip({ completedTrips: 2, travellerCancellations: 1 })]);
+  assert.equal(thin.matches.length, 1);
+  assert.equal(thin.matches[0]!.reliability_band, 'building');
+  assert.ok(!thin.matches[0]!.reasons.includes('HIGH_RELIABILITY'));
+});
+
+test('matching: low-confidence fallback shows at most three weak trips, honestly labelled', () => {
+  const weak = (id: string, travellerId: string): TripCandidate =>
+    trip({
+      id,
+      travellerId,
+      capacityKgRemaining: 5.6,
+      departureAt: new Date('2026-10-24T10:01:00Z'),
+      arrivalEstimateAt: new Date('2026-11-01T13:54:00Z'),
+      originDetourKm: 9.9,
+      completedTrips: 0,
+    });
+  const res = rankMatches(
+    matchInput({
+      weightKg: 5,
+      windowStart: new Date('2026-11-01T00:00:00Z'),
+      windowEnd: new Date('2026-11-01T12:00:00Z'),
+    }),
+    [weak('a', 'u2'), weak('b', 'u3'), weak('c', 'u4'), weak('d', 'u5'), weak('e', 'u6')],
+  );
+  assert.equal(res.matches.length, 3);
+  assert.equal(res.low_confidence, true);
+  assert.deepEqual(
+    res.matches.map((m) => m.trip_id),
+    ['a', 'b', 'c'],
+  );
+  assert.ok(res.matches.every((m) => m.score < 50));
+});
+
+test('matching: ordering is deterministic, ties broken by arrival then departure then id', () => {
+  const a = trip({ id: 'bbb', travellerId: 'u2', arrivalEstimateAt: new Date('2026-10-25T08:00:00Z') });
+  const b = trip({ id: 'aaa', travellerId: 'u3', arrivalEstimateAt: new Date('2026-10-25T08:00:00Z') });
+  const c = trip({ id: 'ccc', travellerId: 'u4', arrivalEstimateAt: new Date('2026-10-25T06:00:00Z') });
+  const first = rankMatches(matchInput(), [a, b, c]);
+  const second = rankMatches(matchInput(), [c, b, a]);
+  assert.deepEqual(
+    first.matches.map((m) => m.trip_id),
+    ['ccc', 'aaa', 'bbb'],
+  );
+  assert.deepEqual(
+    second.matches.map((m) => m.trip_id),
+    first.matches.map((m) => m.trip_id),
+  );
+});
+
+test('matching: weights are configurable and validated', () => {
+  // Reliability-only weighting puts the experienced traveller first despite a later arrival.
+  // The floor is lowered so the weaker trip is visible as an ordering proof rather than hidden.
+  const policy = matchingPolicy({
+    minScoreToShow: 0,
+    weights: { time: 0, departure: 0, detour: 0, reliability: 100, capacity: 0, preference: 0 },
+  });
+  const green = trip({ id: 'green', travellerId: 'u2', completedTrips: 0, arrivalEstimateAt: new Date('2026-10-25T05:00:00Z') });
+  const seasoned = trip({ id: 'seasoned', travellerId: 'u3', completedTrips: 30, travellerCancellations: 1 });
+  const res = rankMatches(matchInput({ policy }), [green, seasoned]);
+  assert.equal(res.matches[0]!.trip_id, 'seasoned');
+  assert.equal(res.matches[0]!.score, 97);
+  assert.equal(res.matches[1]!.score, 25);
+
+  assert.throws(() => matchingPolicy({ weights: { time: -1 } }), /non-negative/);
+  assert.throws(
+    () => matchingPolicy({ weights: { time: 0, departure: 0, detour: 0, reliability: 0, capacity: 0, preference: 0 } }),
+    /at least one weight/,
+  );
+  assert.throws(() => matchingPolicy({ minScoreToShow: 140 }), /must be within/);
+});
+
+test('matching: grace hours and the detour limit are policy, not constants', () => {
+  const tight = rankMatches(matchInput({ policy: matchingPolicy({ arrivalGraceHours: 0 }) }), [
+    trip({ arrivalEstimateAt: new Date('2026-10-25T12:30:00Z') }),
+  ]);
+  assert.equal(rejectionOf(tight), 'ARRIVES_TOO_LATE');
+
+  const generous = rankMatches(matchInput({ policy: matchingPolicy({ maxOriginDetourKm: 50 }) }), [
+    trip({ id: 't2', travellerId: 'u3', originCityId: 'lucknow', originDetourKm: 40 }),
+  ]);
+  assert.equal(generous.matches.length, 1);
+  assert.equal(generous.matches[0]!.score_breakdown.fit.detour, 0.2);
+});
+
+test('matching: SMALL_DETOUR is only claimed when the pickup areas actually agree', () => {
+  const sameArea = rankMatches(matchInput(), [trip({ originArea: 'civil lines', destArea: 'Karol Bagh' })]);
+  assert.ok(sameArea.matches[0]!.reasons.includes('SMALL_DETOUR'));
+  assert.equal(sameArea.matches[0]!.score_breakdown.fit.preference, 1);
+
+  const otherArea = rankMatches(matchInput(), [trip({ originArea: 'Sadar Bazaar' })]);
+  assert.ok(!otherArea.matches[0]!.reasons.includes('SMALL_DETOUR'));
+  assert.equal(otherArea.matches[0]!.score_breakdown.fit.preference, 0.65);
+});
+
+test('matching: reliability band and ratio follow the §9 definition', () => {
+  assert.equal(reliabilityRatioOf(0, 0), null);
+  assert.equal(reliabilityRatioOf(9, 1), 0.9);
+  assert.equal(reliabilityBandOf(0, null), 'new');
+  assert.equal(reliabilityBandOf(3, 1), 'building');
+  assert.equal(reliabilityBandOf(6, 0.85), 'reliable');
+  assert.equal(reliabilityBandOf(12, 0.95), 'highly_reliable');
+});
+
+test('matching: a rejected candidate never appears in the shown set and scores stay in range', () => {
+  const res = rankMatches(matchInput({ weightKg: 5 }), [
+    trip({ id: 'ok', travellerId: 'u2', capacityKgRemaining: 20 }),
+    trip({ id: 'bad', travellerId: 'u3', capacityKgRemaining: 1 }),
+  ]);
+  assert.deepEqual(
+    res.matches.map((m) => m.trip_id),
+    ['ok'],
+  );
+  for (const m of res.matches) {
+    assert.ok(Number.isInteger(m.score) && m.score >= 0 && m.score <= 100);
+    assert.equal(m.indicative_price_paise > 0, true);
+  }
 });

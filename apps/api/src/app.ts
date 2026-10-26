@@ -4,7 +4,7 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { ZodError } from 'zod';
 
-import { config } from './config.ts';
+import { assertSafetyRails, config, corsOrigins } from './config.ts';
 import { getDb, type Db } from './db/client.ts';
 import { AppError, errorEnvelope } from './lib/errors.ts';
 import { makeAuthenticate } from './lib/auth.ts';
@@ -33,6 +33,9 @@ declare module 'fastify' {
 }
 
 export async function buildApp(): Promise<FastifyInstance> {
+  // Checked here as well as at the process entry point: any other caller of buildApp() — a test, a
+  // worker, a future second entry — must hit the same rails.
+  assertSafetyRails(config);
   const db = await getDb();
 
   const app = Fastify({
@@ -51,6 +54,11 @@ export async function buildApp(): Promise<FastifyInstance> {
           '*.code',
           '*.refresh_token',
           '*.access_token',
+          '*.email',
+          '*.user_email',
+          '*.recovery_email',
+          'req.body.email',
+          'req.body.receiver_email',
         ],
         censor: '[redacted]',
       },
@@ -88,9 +96,11 @@ export async function buildApp(): Promise<FastifyInstance> {
         : false,
   });
   await app.register(cors, {
-    origin: [config.PUBLIC_WEB_URL, config.ADMIN_WEB_URL, /\.vercel\.app$/],
+    // An exact allowlist, and credentials on: the session refresh cookie only travels to origins we
+    // name. A suffix match such as /\.vercel\.app$/ would hand every Vercel tenant that trust.
+    origin: corsOrigins,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    credentials: false,
+    credentials: true,
     exposedHeaders: ['Retry-After', 'X-Request-Id'],
   });
   await app.register(rateLimit, {
@@ -100,6 +110,28 @@ export async function buildApp(): Promise<FastifyInstance> {
     errorResponseBuilder: (req) =>
       errorEnvelope('RATE_LIMITED', 'Too many requests. Please slow down.', String(req.id)),
   });
+
+  // Writes get a stricter budget than reads. The global limit above is read-shaped; this hook
+  // layers the write limit on top by calling the plugin's manual API. Health checks and webhooks
+  // opt out — the former is polled by the container, the latter is signed and provider-driven.
+  if (config.RATE_LIMIT_ENABLED) {
+    const writeBudget = app.createRateLimit({
+      keyGenerator: (req) => `w:${req.ip}`,
+      max: config.RATE_LIMIT_WRITE_PER_MINUTE,
+      timeWindow: '1 minute',
+    });
+    app.addHook('preHandler', async (req, reply) => {
+      if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return;
+      const url = req.url.split('?')[0] ?? req.url;
+      if (url.startsWith('/v1/health') || url.startsWith('/v1/readiness')) return;
+      if (url.startsWith('/v1/webhooks/')) return;
+      const result = await writeBudget(req);
+      if (!result.isAllowed) {
+        reply.code(429);
+        return errorEnvelope('RATE_LIMITED', 'Too many requests. Please slow down.', String(req.id));
+      }
+    });
+  }
 
   // ---- error envelope (api/ERROR_CATALOG.md) ----
   app.setErrorHandler((err, req, reply) => {
@@ -122,6 +154,9 @@ export async function buildApp(): Promise<FastifyInstance> {
     }
 
     const statusCode = (err as { statusCode?: number }).statusCode;
+    if (statusCode === 429) {
+      return reply.code(429).send(errorEnvelope('RATE_LIMITED', 'Too many requests. Please slow down.', requestId));
+    }
     if (statusCode === 413) {
       return reply.code(413).send(errorEnvelope('PAYLOAD_TOO_LARGE', 'That request is too large.', requestId));
     }

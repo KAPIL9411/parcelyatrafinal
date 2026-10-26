@@ -93,7 +93,7 @@ export function useHandoverCode(bookingId: string, phase: 'pickup' | 'delivery',
  *
  * The database stores only HMACs, so the code is unreadable by design. When the API runs with
  * ENABLE_DEV_ENDPOINTS the process keeps the code in memory and exposes it here. The hook returns
- * null in every other configuration, and the UI labels anything it finds as test mode.
+ * null in every other configuration, so nothing is shown in a production build.
  */
 export function useDevCode(path: string | null, options: { enabled?: boolean; auth?: boolean } = {}): string | null {
   const { enabled = true, auth = false } = options;

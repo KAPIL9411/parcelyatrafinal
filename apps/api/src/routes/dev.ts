@@ -33,11 +33,15 @@ export async function devRoutes(app: FastifyInstance): Promise<void> {
 
   // ---- OTP peek. Only the in-memory dev store is read; the database holds HMACs only.
 
-  app.get<{ Params: { challengeId: string } }>('/dev/otp/:challengeId', async (req) => {
-    const hit = recallCode(req.params.challengeId);
-    if (!hit) throw new AppError('NOT_FOUND', { reason: 'code_not_in_dev_store' });
-    return { challenge_id: req.params.challengeId, code: hit.code, kind: hit.kind, sandbox: true };
-  });
+  app.get<{ Params: { challengeId: string } }>(
+    '/dev/otp/:challengeId',
+    { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
+    async (req) => {
+      const hit = recallCode(req.params.challengeId);
+      if (!hit) throw new AppError('NOT_FOUND', { reason: 'code_not_in_dev_store' });
+      return { challenge_id: req.params.challengeId, code: hit.code, kind: hit.kind, sandbox: true };
+    },
+  );
 
   app.get<{ Params: { bookingId: string; phase: string } }>(
     '/dev/handover-otp/:bookingId/:phase',
@@ -53,8 +57,25 @@ export async function devRoutes(app: FastifyInstance): Promise<void> {
 
   // ---- Webhook simulation: signs the exact body and calls the real webhook route.
 
-  app.post('/dev/webhooks/simulate', async (req, reply) => {
+  app.post('/dev/webhooks/simulate', { preHandler: authenticate }, async (req, reply) => {
+    const auth = requireAuth(req);
     const body = simulateSchema.parse(req.body);
+
+    // Only a party to the payment (or staff) may drive its lifecycle in the sandbox.
+    const match = await db.query<{ sender_id: string; traveller_id: string }>(
+      `SELECT b.sender_id, b.traveller_id
+         FROM payments p JOIN bookings b ON b.id = p.booking_id
+        WHERE p.provider_ref = $1`,
+      [body.provider_ref],
+    );
+    const owner = match.rows[0];
+    if (!owner) throw new AppError('NOT_FOUND', { reason: 'unknown_provider_ref' });
+    const isParty = owner.sender_id === auth.userId || owner.traveller_id === auth.userId;
+    const isStaff = auth.roles.some((r) =>
+      ['support_agent', 'trust_safety', 'finance', 'admin_readonly', 'verification_reviewer'].includes(r),
+    );
+    if (!isParty && !isStaff) throw new AppError('NOT_FOUND');
+
     const eventId = body.event_id ?? `evt_dev_${randomUUID()}`;
     const payload = {
       id: eventId,

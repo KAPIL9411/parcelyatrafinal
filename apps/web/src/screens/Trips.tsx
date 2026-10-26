@@ -80,8 +80,8 @@ export function Trips() {
     <div className="mx-auto max-w-3xl space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold tracking-wide text-brand-700 uppercase">Travelling</p>
-          <h1 className="mt-1 text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl">Your trips</h1>
+          <p className="text-xs font-medium tracking-wide text-ink-500 uppercase">Travelling</p>
+          <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-ink-900 sm:text-2xl">Your trips</h1>
           <p className="mt-1 text-sm text-ink-500">
             A trip tells us where you are going and how much space you have. Senders choose you from there.
           </p>

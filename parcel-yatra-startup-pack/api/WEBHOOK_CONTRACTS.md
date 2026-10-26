@@ -41,8 +41,8 @@ overlap window so in-flight events still verify.
 
 | Event type | Meaning | Our effect |
 |---|---|---|
-| `payment.authorised` | Funds authorised/hold placed | Booking `payment_pending` → `confirmed` (after amount check) |
-| `payment.captured` | Capture settled | Ledger `capture` entry; idempotent |
+| `payment.authorised` | Funds authorised/hold placed | Payment state → `authorised`; booking stays `payment_pending` (an authorisation is not settled money) |
+| `payment.captured` | Capture settled | Booking `payment_pending` → `confirmed`; Ledger `capture` entry; idempotent |
 | `payment.failed` | Definitive failure | Booking → `cancelled_by_sender`, capacity released |
 | `payment.refunded` | Refund completed | Ledger `refund` entry; refund row → `processed` |
 | `payout.succeeded` | Traveller paid | Payout → `released`, booking → `paid_out` |
