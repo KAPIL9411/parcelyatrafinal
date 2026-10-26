@@ -47,6 +47,7 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
 | DEFECT-019 | Presentation | Web UI | Sandbox badge and seeded demo numbers removed from the chrome; tokens and type scale retuned for a calmer launch look; landing limits read from `GET /v1/config`. |
 | DEFECT-020 | Presentation | Web UI | Homepage rebuilt around a functional booking panel (live cities, weight, category) that hands off to `/send` via query-param prefill; Porter/Rapido investigation summarised with evidence and stated limits; tracking and driver-onboarding paths surfaced on the landing page. |
 | DEFECT-021 | Presentation | Web UI | Sign-in page: the two auth cards now stretch to equal height on desktop (grid `align-items` default instead of `items-start`, `h-full` navy panel) and stack on mobile; the placeholder Google glyph was replaced with the official four-colour Google G mark (`#EA4335`/`#4285F4`/`#FBBC05`/`#34A853`). |
+| DEFECT-022 | Presentation | Web UI | Landing hero: the user-supplied cityscape image (`hero-background.png`) is the hero background (`cover`/`center`/`no-repeat`, subtle 25% navy overlay), visible on both sides of the navy card; the card is flush with the hero's bottom edge so the grey strip below it is gone; `overflow-x: clip` on `html` absorbs the scrollbar-width overflow of the full-bleed breakout. |
 
 ### DEFECT-001 — traveller-share cap basis
 
@@ -402,6 +403,39 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
   pixel-profiling a 1280px headless-Chrome capture of `/login` (both card bottom edges at the same
   row, no horizontal overflow) and by DOM checks of the four G fills at 530px (stacked layout,
   24px gap). Typecheck and `vite build` pass.
+
+---
+
+### DEFECT-022 — Landing hero: cityscape background, navy flush to the section edge
+
+- **OBSERVED:** the hero was a self-contained `hero-gradient` card with rounded corners on all
+  four sides, so the grey `bg-canvas` page background showed as a strip below the card and beside
+  it — the red-marked bottom area in the reference screenshot. The user-supplied cityscape image
+  was not part of the hero at all.
+- **CHANGED:**
+  - `Landing.tsx`: the hero `<section>` is now full-bleed (it breaks out of the centered
+    `max-w-6xl` main via `-mx-[calc((100svw-100%)/2)]` and cancels main's top padding with
+    `-mt-8`). The section carries the supplied image as `background-size: cover`,
+    `background-position: center`, `background-repeat: no-repeat` (`public/hero-background.png`,
+    copied from the user's asset — no generated replacement), with a subtle
+    `bg-brand-900/25` overlay for text legibility. Inside it, the original content is wrapped in
+    a centered `max-w-6xl hero-gradient rounded-t-sheet` card: rounded corners at the TOP only,
+    bottom edge flush with the section's bottom edge. The card's bottom edge *is* the section's
+    bottom edge, so there is no strip to fill and no separate navy rectangle was added. All hero
+    content (eyebrow, headline, trust `<dl>`, booking form with swap and CTA, microcopy) is
+    unchanged; handlers and routing untouched.
+  - `index.css`: `overflow-x: clip` on `html`. The full-bleed breakout uses viewport units,
+    which in Chrome include the classic scrollbar width (verified: every vw/svw/dvw unit
+    resolved to 638.4 while `clientWidth` was 623), so the breakout overflowed horizontally by
+    the scrollbar width. `clip` swallows that overflow without creating a scroll container, so
+    sticky positioning and normal scrolling are unaffected.
+- **Consequence:** presentation only — no booking, validation, routing, or API behaviour moved.
+  Verified by pixel-profiling a 1280px headless-Chrome capture: navy from y=65 to y=691 flush
+  with the section's bottom edge, canvas starting at y=692, image bands visible on both sides of
+  the card (delivery van left, Hawa Mahal right), and no horizontal scrollbar track. A 390px
+  capture confirms the stacked layout with the image visible at the frame edges. In-browser
+  checks confirm the swap control and the signed-out submit → `/login?next=/send?…` prefill flow
+  still work. Typecheck and `vite build` pass.
 
 ---
 

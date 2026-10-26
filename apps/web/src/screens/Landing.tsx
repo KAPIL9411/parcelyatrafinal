@@ -94,141 +94,147 @@ export function Landing() {
 
   return (
     <div className="space-y-12">
-      <section className="hero-gradient rounded-sheet px-6 py-10 text-white sm:px-10 sm:py-14 lg:grid lg:grid-cols-[1.05fr_1fr] lg:items-center lg:gap-12">
-        <div>
-          <p className="text-xs font-medium tracking-wide text-white/60 uppercase">
-            Bareilly ⇄ Delhi NCR · Bareilly ⇄ Lucknow
-          </p>
-          <h1 className="mt-3 max-w-2xl text-[34px] leading-[1.12] font-bold tracking-tight text-balance sm:text-5xl">
-            Send it with someone already going.
-          </h1>
-          <p className="mt-4 max-w-xl text-base leading-relaxed text-white/75 sm:text-lg">
-            A small sealed parcel, carried by a verified traveller on a journey they were making anyway. You see the
-            price, the person and the handover record before anything moves.
-          </p>
+      <section
+        className="relative -mx-[calc((100svw-100%)/2)] -mt-8 bg-brand-900 bg-cover bg-center bg-no-repeat px-4 sm:px-6"
+        style={{ backgroundImage: 'url("/hero-background.png")' }}
+      >
+        <div aria-hidden="true" className="absolute inset-0 bg-brand-900/25" />
+        <div className="relative mx-auto w-full max-w-6xl hero-gradient rounded-t-sheet px-6 py-10 text-white sm:px-10 sm:py-14 lg:grid lg:grid-cols-[1.05fr_1fr] lg:items-center lg:gap-12">
+          <div>
+            <p className="text-xs font-medium tracking-wide text-white/60 uppercase">
+              Bareilly ⇄ Delhi NCR · Bareilly ⇄ Lucknow
+            </p>
+            <h1 className="mt-3 max-w-2xl text-[34px] leading-[1.12] font-bold tracking-tight text-balance sm:text-5xl">
+              Send it with someone already going.
+            </h1>
+            <p className="mt-4 max-w-xl text-base leading-relaxed text-white/75 sm:text-lg">
+              A small sealed parcel, carried by a verified traveller on a journey they were making anyway. You see the
+              price, the person and the handover record before anything moves.
+            </p>
 
-          {limits ? (
-            <dl className="mt-8 grid max-w-2xl grid-cols-2 gap-x-8 gap-y-4 border-t border-white/12 pt-6 text-sm sm:grid-cols-4">
-              {[
-                ['Weight', `${limits.max_weight_kg} kg`],
-                ['Each side', `${limits.max_dimension_cm} cm`],
-                ['Declared value', inr(limits.max_declared_value_paise)],
-                ['Travel mode', 'Car'],
-              ].map(([label, value]) => (
-                <div key={label}>
-                  <dt className="text-xs text-white/55">{label}</dt>
-                  <dd className="mt-1 font-semibold text-white tabular">{value}</dd>
-                </div>
-              ))}
-            </dl>
-          ) : null}
-        </div>
-
-        <form
-          onSubmit={submit}
-          aria-label="Quick booking"
-          className="mt-10 rounded-card bg-surface p-5 text-ink-900 shadow-card sm:p-6 lg:mt-0"
-        >
-          <p className="text-xs font-medium tracking-wide text-ink-500 uppercase">Book in under a minute</p>
-          <h2 className="mt-1 text-lg font-semibold">Where is it going?</h2>
-
-          <div className="mt-4 space-y-4">
-            <Field label="Pickup city" htmlFor="hp-origin">
-              <Select
-                id="hp-origin"
-                value={originCityId}
-                onChange={(event) => {
-                  setOriginCityId(event.target.value);
-                  setError('');
-                }}
-              >
-                <option value="">Choose a city</option>
-                {serviceable.map((city) => (
-                  <option key={city.id} value={city.id}>
-                    {city.name}
-                  </option>
+            {limits ? (
+              <dl className="mt-8 grid max-w-2xl grid-cols-2 gap-x-8 gap-y-4 border-t border-white/12 pt-6 text-sm sm:grid-cols-4">
+                {[
+                  ['Weight', `${limits.max_weight_kg} kg`],
+                  ['Each side', `${limits.max_dimension_cm} cm`],
+                  ['Declared value', inr(limits.max_declared_value_paise)],
+                  ['Travel mode', 'Car'],
+                ].map(([label, value]) => (
+                  <div key={label}>
+                    <dt className="text-xs text-white/55">{label}</dt>
+                    <dd className="mt-1 font-semibold text-white tabular">{value}</dd>
+                  </div>
                 ))}
-              </Select>
-            </Field>
+              </dl>
+            ) : null}
+          </div>
 
-            <div className="flex items-center gap-3" aria-hidden="true">
-              <span className="h-px flex-1 bg-line" />
-              <button
-                type="button"
-                onClick={swapCities}
-                className="inline-flex items-center gap-1.5 rounded-full border border-line-strong bg-canvas px-2.5 py-1 text-xs font-semibold text-ink-700 hover:border-ink-300 hover:text-ink-900"
-              >
-                <SwapIcon size={14} />
-                Swap
-              </button>
-            </div>
+          <form
+            onSubmit={submit}
+            aria-label="Quick booking"
+            className="mt-10 rounded-card bg-surface p-5 text-ink-900 shadow-card sm:p-6 lg:mt-0"
+          >
+            <p className="text-xs font-medium tracking-wide text-ink-500 uppercase">Book in under a minute</p>
+            <h2 className="mt-1 text-lg font-semibold">Where is it going?</h2>
 
-            <Field label="Destination city" htmlFor="hp-dest">
-              <Select
-                id="hp-dest"
-                value={destCityId}
-                onChange={(event) => {
-                  setDestCityId(event.target.value);
-                  setError('');
-                }}
-              >
-                <option value="">Choose a city</option>
-                {serviceable.map((city) => (
-                  <option key={city.id} value={city.id}>
-                    {city.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Weight (kg)" htmlFor="hp-weight">
-                <TextInput
-                  id="hp-weight"
-                  type="number"
-                  inputMode="decimal"
-                  min={0.1}
-                  max={maxWeight}
-                  step={0.1}
-                  value={weight}
+            <div className="mt-4 space-y-4">
+              <Field label="Pickup city" htmlFor="hp-origin">
+                <Select
+                  id="hp-origin"
+                  value={originCityId}
                   onChange={(event) => {
-                    setWeight(event.target.value);
+                    setOriginCityId(event.target.value);
                     setError('');
                   }}
-                />
-              </Field>
-              <Field label="Category" htmlFor="hp-category">
-                <Select
-                  id="hp-category"
-                  value={category}
-                  onChange={(event) => setCategory(event.target.value as Category)}
                 >
-                  {(config?.categories ?? []).map((value) => (
-                    <option key={value} value={value}>
-                      {CATEGORY_LABELS[value as Category]}
+                  <option value="">Choose a city</option>
+                  {serviceable.map((city) => (
+                    <option key={city.id} value={city.id}>
+                      {city.name}
                     </option>
                   ))}
                 </Select>
               </Field>
-            </div>
 
-            {error ? (
-              <p className="text-sm text-danger-600" role="alert">
-                {error}
+              <div className="flex items-center gap-3" aria-hidden="true">
+                <span className="h-px flex-1 bg-line" />
+                <button
+                  type="button"
+                  onClick={swapCities}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-line-strong bg-canvas px-2.5 py-1 text-xs font-semibold text-ink-700 hover:border-ink-300 hover:text-ink-900"
+                >
+                  <SwapIcon size={14} />
+                  Swap
+                </button>
+              </div>
+
+              <Field label="Destination city" htmlFor="hp-dest">
+                <Select
+                  id="hp-dest"
+                  value={destCityId}
+                  onChange={(event) => {
+                    setDestCityId(event.target.value);
+                    setError('');
+                  }}
+                >
+                  <option value="">Choose a city</option>
+                  {serviceable.map((city) => (
+                    <option key={city.id} value={city.id}>
+                      {city.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Weight (kg)" htmlFor="hp-weight">
+                  <TextInput
+                    id="hp-weight"
+                    type="number"
+                    inputMode="decimal"
+                    min={0.1}
+                    max={maxWeight}
+                    step={0.1}
+                    value={weight}
+                    onChange={(event) => {
+                      setWeight(event.target.value);
+                      setError('');
+                    }}
+                  />
+                </Field>
+                <Field label="Category" htmlFor="hp-category">
+                  <Select
+                    id="hp-category"
+                    value={category}
+                    onChange={(event) => setCategory(event.target.value as Category)}
+                  >
+                    {(config?.categories ?? []).map((value) => (
+                      <option key={value} value={value}>
+                        {CATEGORY_LABELS[value as Category]}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              </div>
+
+              {error ? (
+                <p className="text-sm text-danger-600" role="alert">
+                  {error}
+                </p>
+              ) : null}
+
+              <Button type="submit" size="lg" fullWidth disabled={cities.isLoading || cities.isError}>
+                See price and travellers
+                <ArrowRightIcon size={18} />
+              </Button>
+
+              <p className="text-center text-xs leading-relaxed text-ink-500">
+                Nothing is charged until you confirm a price. Next: the parcel photo, the time window, then a
+                verified traveller.
               </p>
-            ) : null}
-
-            <Button type="submit" size="lg" fullWidth disabled={cities.isLoading || cities.isError}>
-              See price and travellers
-              <ArrowRightIcon size={18} />
-            </Button>
-
-            <p className="text-center text-xs leading-relaxed text-ink-500">
-              Nothing is charged until you confirm a price. Next: the parcel photo, the time window, then a verified
-              traveller.
-            </p>
-          </div>
-        </form>
+            </div>
+          </form>
+        </div>
       </section>
 
       <section aria-labelledby="how-it-works">

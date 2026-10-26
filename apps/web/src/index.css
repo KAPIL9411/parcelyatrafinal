@@ -60,6 +60,8 @@
 @layer base {
   html {
     -webkit-text-size-adjust: 100%;
+    /* Full-bleed hero breakouts use viewport units, which include the scrollbar in Chrome. */
+    overflow-x: clip;
   }
 
   body {
