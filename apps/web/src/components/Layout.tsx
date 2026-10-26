@@ -74,7 +74,7 @@ function UnreadBadge({ total, className }: { total: number; className?: string }
 }
 
 export function Layout() {
-  const { user, isStaff, signOut } = useSession();
+  const { user, status, isStaff, signOut } = useSession();
   const online = useOnline();
   const unread = useUnreadTotal(Boolean(user));
   const navigate = useNavigate();
@@ -131,7 +131,15 @@ export function Layout() {
           </nav>
 
           <div className="ml-auto flex items-center gap-1">
-            {user ? (
+            {status === 'loading' ? (
+              // The shape of the signed-in cluster, so the header does not change width when the
+              // answer arrives. A Sign In button here would be a promise the session may break.
+              <div className="flex items-center gap-2" aria-busy="true" aria-live="polite">
+                <span className="sr-only">Checking your session</span>
+                <span className="skeleton hidden h-9 w-24 rounded-input sm:block" aria-hidden="true" />
+                <span className="skeleton h-10 w-10 rounded-full" aria-hidden="true" />
+              </div>
+            ) : user ? (
               <>
                 <Link
                   to="/profile"

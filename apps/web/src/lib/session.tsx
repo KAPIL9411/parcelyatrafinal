@@ -9,9 +9,16 @@ import {
   type Profile,
 } from './api';
 
+/**
+ * Three states, because "still finding out" and "nobody is signed in" are different answers and the
+ * UI has to be able to tell them apart. Anything that treats `loading` as signed out shows a Sign In
+ * button for a second and then yanks it away.
+ */
+type SessionStatus = 'loading' | 'authenticated' | 'unauthenticated';
+
 interface SessionValue {
   user: Profile | null;
-  loading: boolean;
+  status: SessionStatus;
   /** True when the signed-in account holds any staff role. */
   isStaff: boolean;
   requestOtp: (phone: string) => Promise<OtpChallenge>;
@@ -37,30 +44,46 @@ function isStaffProfile(user: Profile | null): boolean {
   return (user.roles ?? []).some((role) => STAFF_ROLES.includes(role));
 }
 
+/**
+ * The restore is memoised for the page load rather than per component mount. The provider mounts
+ * twice under React's StrictMode in development, and a second `POST /auth/refresh` rotates the pair
+ * the first one is still waiting on. One promise, one answer, reused.
+ */
+let restoreInFlight: Promise<Profile | null> | null = null;
+
+function restoreSession(): Promise<Profile | null> {
+  restoreInFlight ??= (async () => {
+    // The refresh cookie is the only durable credential the browser keeps, so a returning visitor is
+    // signed in again without ever typing anything.
+    if (!(await bootstrap())) return null;
+    try {
+      return await api.get<Profile>('/me');
+    } catch {
+      setAccessToken(null);
+      return null;
+    }
+  })().catch(() => {
+    // A failed request is "not signed in right now", not "keep the visitor on a skeleton for the rest
+    // of the page load". `fetch` rejects outright with no connection, and nothing here may hang.
+    setAccessToken(null);
+    return null;
+  });
+  return restoreInFlight;
+}
+
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [restoring, setRestoring] = useState(true);
+  const status: SessionStatus = restoring ? 'loading' : user ? 'authenticated' : 'unauthenticated';
   const isStaff = isStaffProfile(user);
 
-  // One restore per page load. The refresh cookie is the only durable credential the browser keeps,
-  // so a returning visitor is signed in again without ever typing anything.
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      const restored = await bootstrap();
-      if (!restored) {
-        if (!cancelled) setLoading(false);
-        return;
-      }
-      try {
-        const profile = await api.get<Profile>('/me');
-        if (!cancelled) setUser(profile);
-      } catch {
-        setAccessToken(null);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
+    void restoreSession().then((profile) => {
+      if (cancelled) return;
+      if (profile) setUser(profile);
+      setRestoring(false);
+    });
     return () => {
       cancelled = true;
     };
@@ -84,6 +107,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const adoptSession = useCallback((res: AuthResponse) => {
     setAccessToken(res.access_token);
     setUser(res.user);
+    // The signed-in answer for this page load is now this session, not whatever the cookie said
+    // before it was exchanged.
+    restoreInFlight = Promise.resolve(res.user);
     return res.user;
   }, []);
 
@@ -103,11 +129,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
     setAccessToken(null);
     setUser(null);
+    restoreInFlight = Promise.resolve(null);
   }, []);
 
   const value = useMemo<SessionValue>(
-    () => ({ user, loading, isStaff, requestOtp, verifyOtp, adoptSession, signOut, reload, setUser }),
-    [user, loading, isStaff, requestOtp, verifyOtp, adoptSession, signOut, reload],
+    () => ({ user, status, isStaff, requestOtp, verifyOtp, adoptSession, signOut, reload, setUser }),
+    [user, status, isStaff, requestOtp, verifyOtp, adoptSession, signOut, reload],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

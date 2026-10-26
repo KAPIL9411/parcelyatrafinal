@@ -4,7 +4,6 @@ import { Link, useNavigate } from "react-router-dom";
 import { CATEGORY_LABELS, type Category } from "@py/domain";
 
 import { useCities, useConfig, useDocumentTitle } from "../lib/hooks";
-import { useSession } from "../lib/session";
 import { inr } from "../lib/format";
 import { Button, Card, Field, Select, TextInput } from "../components/ui";
 import { HeroBackdrop } from "../components/HeroBackdrop";
@@ -140,7 +139,6 @@ const QUICK_LINKS: Array<{
 
 export function Landing() {
   useDocumentTitle("");
-  const { user } = useSession();
   const navigate = useNavigate();
   const { data: config } = useConfig();
   const cities = useCities();
@@ -155,9 +153,6 @@ export function Landing() {
   const [error, setError] = useState("");
 
   const maxWeight = limits?.max_weight_kg ?? 5;
-
-  const viaAuth = (target: string) =>
-    user ? target : `/login?next=${encodeURIComponent(target)}`;
 
   function swapCities() {
     setOriginCityId(destCityId);
@@ -190,7 +185,9 @@ export function Landing() {
       category,
     });
     const target = `/send?${query.toString()}`;
-    navigate(user ? target : `/login?next=${encodeURIComponent(target)}`);
+    // Always head for the real screen and let `RequireAuth` decide. Guessing here from a session that
+    // may still be loading is what sends a returning visitor to the sign-in page for a second.
+    navigate(target);
   }
 
   return (
@@ -361,7 +358,7 @@ export function Landing() {
                 className="w-[15rem] shrink-0 snap-start sm:w-auto"
               >
                 <Link
-                  to={viaAuth(link.to)}
+                  to={link.to}
                   className="flex h-full flex-col rounded-card border border-line bg-surface p-4 shadow-card transition-shadow hover:border-brand-200 hover:shadow-float"
                 >
                   <span className="grid h-10 w-10 place-items-center rounded-full bg-brand-50 text-brand-700">
@@ -526,7 +523,7 @@ export function Landing() {
                 </p>
               </div>
             </div>
-            <Link to={viaAuth("/bookings")} className="shrink-0">
+            <Link to="/bookings" className="shrink-0">
               <Button variant="secondary">Track a parcel</Button>
             </Link>
           </Card>
@@ -545,7 +542,7 @@ export function Landing() {
                 </p>
               </div>
             </div>
-            <Link to={viaAuth("/trips/new")} className="shrink-0">
+            <Link to="/trips/new" className="shrink-0">
               <Button variant="secondary" size="lg">
                 Post a trip
               </Button>

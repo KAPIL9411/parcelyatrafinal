@@ -45,10 +45,10 @@ function PageFallback() {
 }
 
 function RequireAuth({ children }: { children: ReactNode }) {
-  const { user, loading } = useSession();
+  const { user, status } = useSession();
   const location = useLocation();
 
-  if (loading) return <PageFallback />;
+  if (status === 'loading') return <PageFallback />;
   if (!user) {
     const next = `${location.pathname}${location.search}`;
     return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />;
@@ -57,9 +57,9 @@ function RequireAuth({ children }: { children: ReactNode }) {
 }
 
 function RequireStaff({ children }: { children: ReactNode }) {
-  const { user, loading, isStaff } = useSession();
+  const { user, status, isStaff } = useSession();
 
-  if (loading) return <PageFallback />;
+  if (status === 'loading') return <PageFallback />;
   if (!user) return <Navigate to="/login?next=%2Fadmin" replace />;
   if (!isStaff) {
     return (

@@ -7,13 +7,13 @@ import { normaliseIndianPhone } from '../lib/format';
 import { safeNext } from '../lib/nav';
 import { useDocumentTitle } from '../lib/hooks';
 import { useSession } from '../lib/session';
-import { Banner, Button, Card, ErrorPanel, Field, TextInput } from '../components/ui';
+import { Banner, Button, Card, ErrorPanel, Field, Skeleton, TextInput } from '../components/ui';
 import { OtpInput } from '../components/OtpInput';
 import { LockIcon, PhoneIcon, ShieldCheckIcon, GoogleIcon } from '../components/icons';
 
 export function Login() {
   useDocumentTitle('Sign in');
-  const { user, requestOtp, verifyOtp } = useSession();
+  const { user, status, requestOtp, verifyOtp } = useSession();
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const next = safeNext(params.get('next'));
@@ -143,7 +143,9 @@ export function Login() {
       </div>
 
       <Card>
-        {stage === 'phone' ? (
+        {status === 'loading' ? (
+          <SignInPending />
+        ) : stage === 'phone' ? (
           <div className="space-y-5">
             <div>
               <h1 className="text-2xl font-bold tracking-tight text-ink-900">Sign in or create an account</h1>
@@ -297,6 +299,37 @@ export function Login() {
           </div>
         )}
       </Card>
+    </div>
+  );
+}
+
+/**
+ * Stands in for the phone stage while the session check runs, so a returning visitor is never shown
+ * the form they are about to be redirected away from. It mirrors the phone stage block for block —
+ * heading, Google button, divider, labelled field with its hint, submit button, legal line — so the
+ * card does not change height when the real form replaces it.
+ */
+function SignInPending() {
+  return (
+    <div className="space-y-5" aria-busy="true" aria-live="polite">
+      <span className="sr-only">Checking whether you are already signed in</span>
+      <div>
+        <Skeleton className="h-8 w-4/5" />
+        <Skeleton className="mt-2 h-4 w-3/5" />
+      </div>
+      <Skeleton className="h-12 w-full rounded-input" />
+      <Skeleton className="mx-auto h-4 w-2/5" />
+      <div className="space-y-2">
+        <Skeleton className="h-3 w-20" />
+        <Skeleton className="h-11 w-full rounded-input" />
+        <Skeleton className="h-3 w-full" />
+        <Skeleton className="h-3 w-2/3" />
+      </div>
+      <Skeleton className="h-12 w-full rounded-input" />
+      <div className="space-y-2">
+        <Skeleton className="h-3 w-full" />
+        <Skeleton className="h-3 w-3/4" />
+      </div>
     </div>
   );
 }
