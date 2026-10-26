@@ -120,14 +120,39 @@
    * The landing hero: the supplied cityscape exactly as it is — no scrim, no darkening — with a
    * curved bottom edge so the light section below flows out of it. The curve is elliptical (`50vw`
    * horizontal radius) so it stays shallow and smooth at every viewport width.
+   *
+   * The photograph cannot paint before the bundle has run, so `.hero-backdrop` holds the system
+   * skeleton in that space and the photo fades over it once it has decoded.
    */
   .hero-panel {
-    background-image: url("/hero-background.webp");
-    background-size: cover;
-    background-position: center;
-    background-repeat: no-repeat;
+    background-color: var(--color-canvas);
     border-bottom-left-radius: 50vw 2.5rem;
     border-bottom-right-radius: 50vw 2.5rem;
+  }
+
+  .hero-backdrop {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    background-color: var(--color-line);
+    /* The elliptical corners belong to the section, so the photo is clipped by them as well. */
+    border-bottom-left-radius: inherit;
+    border-bottom-right-radius: inherit;
+  }
+
+  .hero-photo {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
+    opacity: 0;
+    transition: opacity 600ms ease;
+  }
+
+  .hero-backdrop[data-photo-ready="true"] .hero-photo {
+    opacity: 1;
   }
 
   @media (min-width: 40rem) {
@@ -149,7 +174,9 @@
   }
 }
 
-/* The one looping animation in the system: a skeleton shimmer, disabled by reduced motion. */
+/* The one looping animation in the system: a skeleton shimmer, disabled by reduced motion. The hero
+   photograph fades over this shimmer while it loads, and the global rule above makes that fade
+   instant for anyone who asks for no motion. */
 @keyframes py-shimmer {
   0% {
     background-position: -200% 0;

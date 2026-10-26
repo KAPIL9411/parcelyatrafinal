@@ -10,6 +10,16 @@
     />
     <link rel="icon" type="image/png" href="/logo.png" />
     <link rel="apple-touch-icon" href="/logo.png" />
+    <!--
+      The hero photograph is the entry page's largest element, and without this the request cannot
+      start until React has mounted. Preloaded here it is in flight while the bundle parses.
+    -->
+    <link
+      rel="preload"
+      as="image"
+      href="/hero-background.webp"
+      fetchpriority="high"
+    />
     <title>Parcel Yatra — send it with someone already going</title>
   </head>
   <body>

@@ -320,7 +320,9 @@ export function assertSafetyRails(c: Config): void {
   }
   if (c.GOOGLE_OAUTH_ENABLED) {
     for (const key of ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI'] as const) {
-      if (!c[key]) problems.push(`GOOGLE_OAUTH_ENABLED=true requires ${key}.`);
+      // The shipped template value counts as missing: Google answers a `CHANGE_ME` client id with an
+      // opaque redirect_uri_mismatch, and boot is the last place an operator can be told plainly.
+      if (!c[key] || c[key] === 'CHANGE_ME') problems.push(`GOOGLE_OAUTH_ENABLED=true requires ${key}.`);
     }
   }
   if (c.OTP_KILL_SWITCH) {

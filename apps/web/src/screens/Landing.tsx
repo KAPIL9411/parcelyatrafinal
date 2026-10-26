@@ -7,6 +7,7 @@ import { useCities, useConfig, useDocumentTitle } from "../lib/hooks";
 import { useSession } from "../lib/session";
 import { inr } from "../lib/format";
 import { Button, Card, Field, Select, TextInput } from "../components/ui";
+import { HeroBackdrop } from "../components/HeroBackdrop";
 import {
   ArrowRightIcon,
   AwardIcon,
@@ -195,7 +196,8 @@ export function Landing() {
   return (
     <div>
       <section className="hero-panel relative w-full px-4 pt-12 pb-28 sm:px-6 sm:pt-16 sm:pb-36">
-        <div className="mx-auto w-full max-w-3xl text-center text-brand-900">
+        <HeroBackdrop />
+        <div className="relative mx-auto w-full max-w-3xl text-center text-brand-900">
           <p className="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold tracking-wide uppercase">
             Bareilly ⇄ Delhi NCR · Bareilly ⇄ Lucknow
           </p>
@@ -231,7 +233,7 @@ export function Landing() {
         <form
           onSubmit={submit}
           aria-label="Quick booking"
-          className="mx-auto mt-9 w-full max-w-4xl rounded-sheet bg-surface p-4 text-ink-900 shadow-float sm:p-6"
+          className="relative mx-auto mt-9 w-full max-w-4xl rounded-sheet bg-surface p-4 text-ink-900 shadow-float sm:p-6"
         >
           <p className="text-xs font-semibold tracking-wide text-ink-500 uppercase">
             Book in under a minute
