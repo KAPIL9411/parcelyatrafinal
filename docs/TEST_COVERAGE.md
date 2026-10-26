@@ -25,6 +25,7 @@ broken" and stops rather than printing a pass it did not earn.
 | `node scripts/trips.mjs --reset` | B | 40 passed, 0 failed |
 | `node scripts/messaging.mjs` | C | 33 passed, 0 failed, 1 skipped |
 | `node scripts/journeys.mjs --reset` | D, E, F + staff incident API | 52 passed, 0 failed |
+| `node scripts/kyc-review.mjs` | supporting (staff identity review) | 25 passed, 0 failed |
 | `node scripts/concurrency.mjs` | supporting (booking atomicity) | 11 passed, 0 failed |
 | `node scripts/ratelimit.mjs` | supporting (limiters) | 14 passed, 0 failed |
 | `npm test` | unit: domain + api | 64 passed + 3 passed, 0 failed |
@@ -89,6 +90,21 @@ total to the paisa; `payout_eligible` still cannot move money on its own; a forg
 Payouts themselves are disabled in this configuration, so the release path answers
 `PAYOUTS_NOT_ENABLED` (501) and the suite asserts that instead of pretending a transfer happened.
 
+## Staff review of an identity document
+
+`scripts/kyc-review.mjs`. A traveller uploads three real PNGs and submits them; the queue row carries
+no images; a reviewer opening them gets one short-lived URL per file plus the account details that
+make a name comparison possible, with the phone still masked and the raw storage keys never leaving
+the server. Each URL is then fetched with no credentials at all and the served bytes are hashed and
+compared to the upload, so a truncated or collapsed object cannot pass quietly. One changed character
+in a token is a 404, the applicant is refused the staff read, a missing record is a 404, the read
+lands in the audit log against the reviewer's own id, and approving grants the traveller role and
+clears the queue.
+
+It caught a live defect while being written: Fastify's default `maxParamLength` is 100 and a signed
+file token is ~190 characters, so every `GET /files/signed/:token` answered `FST_ERR_MAX_PARAM_LENGTH`
+before the route ran. See `maxParamLength` in [apps/api/src/app.ts](../apps/api/src/app.ts).
+
 ## What these suites do not cover
 
 * Real payment capture, real SMS/WhatsApp/email delivery, real image storage and real managed
@@ -108,3 +124,15 @@ Payouts themselves are disabled in this configuration, so the release path answe
   removal → resolve → empty state.
 * Sign-in through the SPA restores the session from the HttpOnly cookie with no token in
   `localStorage`.
+* The auth lifecycle in DEFECT-024, driven against a temporary proxy that stretched `POST
+  /auth/refresh` to 45 s so the restore window could be sampled at all (it is ~35 ms against the
+  local API). With the window open: the header held its placeholder at the same box it ends at, no
+  "Sign in" string existed anywhere in the document, the landing call-to-actions already pointed at
+  `/send?category=…`, `/trips/new` and `/bookings`, the sign-in card measured 446 px against the
+  445 px it swaps to, and a direct `/bookings` load painted no protected content before deciding.
+  Across the swap the buffered `layout-shift` total was 0.00000 with no entries, and exactly one
+  refresh plus one `/me` ran per page load. Signed-out, revoked-cookie and offline loads each
+  resolved to `/login?next=…` once instead of hanging on the placeholder.
+* The verification decision sheet rendering all three identity captures: opened as the seeded
+  reviewer, each `<img>` reached `naturalWidth` 240 with the shimmer removed, and the full-size
+  overlay opened on click with the file's size, type, capture time and hash, then closed on Escape.

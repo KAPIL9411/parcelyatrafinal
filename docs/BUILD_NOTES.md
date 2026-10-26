@@ -49,6 +49,7 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
 | DEFECT-021 | Presentation | Web UI | Sign-in page: the two auth cards now stretch to equal height on desktop (grid `align-items` default instead of `items-start`, `h-full` navy panel) and stack on mobile; the placeholder Google glyph was replaced with the official four-colour Google G mark (`#EA4335`/`#4285F4`/`#FBBC05`/`#34A853`). |
 | DEFECT-022 | Presentation | Web UI | Landing hero: the user-supplied cityscape image (`hero-background.png`) is the hero background (`cover`/`center`/`no-repeat`, subtle 25% navy overlay), visible on both sides of the navy card; the card is flush with the hero's bottom edge so the grey strip below it is gone; `overflow-x: clip` on `html` absorbs the scrollbar-width overflow of the full-bleed breakout. **Superseded by DEFECT-023**, which removed the viewport-unit breakout entirely. |
 | DEFECT-023 | Presentation | Web UI | Homepage redesigned around a reference visual language: curved full-bleed navy hero with the cityscape layered under a navy scrim, centred headline, pill booking bar, and a row of six floating category cards straddling the curve; below-the-fold re-rhythmed with a centred section heading and four feature cards. Full-bleed is now achieved by giving the `/` route its own un-boxed `<main>` instead of viewport-unit negative margins. |
+| DEFECT-024 | Presentation / Auth lifecycle | Web UI | Signed-out UI was rendered while the session was still being restored, so a returning visitor saw a Sign In button, a sign-in form and `/login?next=` call-to-action links that were then pulled away. The session context now carries `loading` / `authenticated` / `unauthenticated`, every consumer waits for the answer, and the restore runs once per page load. |
 
 ### DEFECT-001 — traveller-share cap basis
 
@@ -128,10 +129,11 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
   The PUT is authenticated and scoped to the caller's own object key; JPEG/PNG only; 10 MB limit.
 - **Why:** there is no object storage in this build, and pretending a presigned URL exists would be
   a false claim in the response.
-- **Consequence:** the local PUT route is registered only when `ENABLE_DEV_ENDPOINTS` is on, so a
-  production-configured build fails closed (the URL it issues does not exist). Uploads are not
-  durable, not scanned, not encrypted beyond the disk, and not served through a signed viewer.
-  Replace the sink before any real document is collected.
+- **Consequence:** the local PUT route is authenticated and scoped to the caller's own key, and reads
+  go through `GET /v1/files/signed/:token` — an HMAC token that opens one object for one TTL — which is
+  what the staff console hands an `<img>` for an identity document. What the local sink still is not:
+  durable across a host rebuild, scanned, or encrypted beyond the disk. Replace the sink before any
+  real document is collected, or set `STORAGE_PROVIDER=cloudinary` so the objects outlive the process.
 
 ### DEFECT-008 — admin endpoints
 
@@ -488,6 +490,65 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
   the captured image when a classic scrollbar is reserved, so pixel measurements taken from a 390px
   screenshot overstate right-edge clipping. Geometry was therefore confirmed from live DOM
   metrics, with screenshots used only for appearance.
+
+---
+
+### DEFECT-024 — authentication lifecycle (the sign-in flicker)
+
+- **OBSERVED:** a returning visitor was shown the signed-out interface for as long as the session
+  restore took, then yanked back to the signed-in one. Four independent places treated an unknown
+  session as "signed out":
+  - `components/Layout.tsx` branched the header cluster on `user` alone, so the Sign In button was
+    painted during the restore and replaced by the account chip when it finished;
+  - `screens/Login.tsx` rendered the whole sign-in form while the restore was in flight, then
+    navigated away — a signed-in visitor saw a form they had not asked for;
+  - `screens/Landing.tsx` built every call-to-action href through `viaAuth()`, so the links pointed
+    at `/login?next=…` and were rewritten a moment later;
+  - the context exposed `loading: boolean` next to `user: Profile | null`, which is two booleans
+    where one three-state value belongs. `loading` was simply not consulted in the header or on the
+    landing page, so "not yet known" silently meant "signed out".
+- **Why it is visible in production but not on a laptop:** restoring is two sequential round trips —
+  `POST /v1/auth/refresh` (the HttpOnly cookie is the only durable credential) then `GET /v1/me`.
+  Measured against the deployed API, a single unauthenticated `refresh` takes 313–358 ms, so the
+  wrong-state window is roughly 0.7–1 s and longer on a cold instance or a phone; on the local API
+  the same pair measured 14 ms + 11 ms, i.e. invisible. Nothing was broken locally, which is why the
+  defect survived development.
+- **A second, quieter defect:** the provider mounts twice under React StrictMode in development, and
+  each mount ran its own restore. Two `POST /auth/refresh` calls rotate the refresh pair twice, so
+  the answer the first one waits for is already spent.
+- **CHANGED:**
+  - `lib/session.tsx` — `loading: boolean` became `status: 'loading' | 'authenticated' |
+    'unauthenticated'`, derived from one restore flag plus the profile, so no consumer has to guess.
+    The restore is memoised at module level (`restoreSession()`), which is what caps a page load at
+    one refresh regardless of how many times the provider mounts; `adoptSession()` and `signOut()`
+    replace that memo, because after either one the answer for this page load is no longer what the
+    cookie said. A restore that throws (no connection at all) resolves to "not signed in right now"
+    instead of leaving the visitor on a skeleton for the rest of the page load.
+  - `components/Layout.tsx` — while `status === 'loading'` the header reserves the signed-in cluster's
+    own shape (a `h-9 w-24` chip plus a `h-10 w-10` circle, `aria-busy`, sr-only "Checking your
+    session") instead of a Sign In button. The cluster is `ml-auto`, so a width difference moves only
+    its own left edge and nothing else on the page.
+  - `screens/Login.tsx` — the card shows `SignInPending`, block for block the shape of the phone
+    stage (heading, Google button, divider, labelled field with hint, submit, legal line), so the
+    card height does not change when the real form arrives.
+  - `screens/Landing.tsx` — `viaAuth()` is gone. The links and the form submit target the real
+    routes and `RequireAuth` decides, which is also where `next` is preserved. This removes a
+    client-side duplicate of the router's own rule rather than adding a loading check to it.
+  - `App.tsx` — `RequireAuth` / `RequireStaff` gate on `status === 'loading'` (they already rendered
+    a fallback, so only the state name changed). No route, provider, token handling or server
+    endpoint changed; the access token is still a module variable and the refresh token is still only
+    ever in the HttpOnly cookie.
+- **Consequence / verification:** measured in the running app with the restore deliberately stretched
+  (a throwaway local proxy delaying `/auth/refresh`, since a 35 ms window cannot be observed), then
+  with the normal API. Header cluster box identical while loading and after (40×40 at the same x);
+  login card 446 px loading vs 445 px resolved; no "Sign in" string anywhere in the document during
+  the restore; landing CTAs already carry their final `/send?category=…`, `/trips/new`, `/bookings`
+  hrefs before the session resolves; buffered `layout-shift` total 0.00000 with zero entries across
+  the swap; exactly one `POST /auth/refresh` and one `GET /me` per page load. Signed-out, revoked-
+  cookie and direct-protected-URL loads each resolve to `/login?next=…` once, with no protected
+  content painted first. Typecheck (all three workspaces), `vite build`, 64 domain tests and 3 API
+  tests pass. The delay proxy and the second dev server were scratch tooling and have been removed;
+  no test-only code or environment flag is left in the app.
 
 ---
 

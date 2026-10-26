@@ -65,7 +65,7 @@ brief's Journeys A–F and records the run that produced the counts quoted here.
 | 35 | Reporting a violation / trust-and-safety escalation | "Zero tolerance" copy (E-05/06) | `trust_safety` role, message removal reasons, dispute flow, grievance page (`/grievance`) | Their flow unknown | partial — no user-facing "report this user" endpoint |
 | 36 | Rate limiting on auth, search, messaging, PIN and writes | Unknown | Global read limiter 300/min; manual write budget 60/min per address (`app.ts`); per-route limits on OTP, refresh, trips CRUD, messages; attempt budgets on handover codes | — | done, but **in-memory only**: per process, wiped on restart, multiplied per replica |
 | 37 | Data export and deletion (privacy) | Unknown | `POST /v1/me/export`, `POST /v1/me/deletion-request` | Their compliance pages unread | done, request-based; no automated erasure job |
-| 38 | Admin visibility into identity documents | Unknown | Staff see verification status and reviewer decisions; document objects are served through `GET /v1/files/object/*` only to an authorized party… | Whether a reviewer can pull the raw image is a live risk | partial — open finding: do not expose documents beyond the reviewer role, and `verifications/me` placeholder id needs fixing |
+| 38 | Admin visibility into identity documents | Unknown | `GET /v1/admin/verifications/:id/documents` — role-gated to `verification_reviewer`/`trust_safety`, one audited read per submission, returning a short-lived single-object URL per capture plus the account name and masked phone to compare against; rendered in the decision sheet with a full-size viewer | Their process unknown | done — `test:kyc-review` 25/0. `verifications/me` placeholder id remains an open finding |
 
 ---
 
@@ -115,7 +115,9 @@ Nothing below is implemented, and none of it is claimed anywhere in the product:
 - a payment provider's live checkout + webhook secret (capture and payout rails);
 - an SMS/WhatsApp provider for OTP, and an email/push provider for notifications — today OTP is sandbox
   only and notifications are in-app rows;
-- Cloudinary credentials for real photo storage (the local sink works for tests);
+- Cloudinary credentials for real photo storage (the local sink works for tests). This is load-bearing
+  for identity review: on a host whose disk is rebuilt per deploy, an uploaded ID document disappears
+  and the reviewer's console honestly says the file is no longer in storage;
 - a real Postgres instance and a reviewed migration path (the pilot runs on PGlite);
 - **a scheduler or worker** for the four system edges listed above and an outbox consumer.
 
