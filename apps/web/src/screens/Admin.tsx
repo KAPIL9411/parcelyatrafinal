@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -13,9 +14,10 @@ import {
   type AdminThreadMessage,
   type AdminVerification,
   type AuditEntry,
+  type VerificationDocumentBundle,
 } from '../lib/api';
 import { errorCopy, verificationReason } from '../lib/copy';
-import { formatDateTime, inr, shortId, timeAgo } from '../lib/format';
+import { formatDate, formatDateTime, inr, shortId, timeAgo } from '../lib/format';
 import { useDocumentTitle } from '../lib/hooks';
 import { useSession } from '../lib/session';
 import {
@@ -25,9 +27,11 @@ import {
   EmptyState,
   ErrorPanel,
   Field,
+  LoadingBlock,
   SectionHeading,
   Select,
   Sheet,
+  Skeleton,
   SuccessPanel,
   TextInput,
   cn,
@@ -174,7 +178,7 @@ function VerificationQueue() {
                     {timeAgo(item.created_at)}
                   </p>
                   <p className="mt-1 text-xs text-ink-500">
-                    Documents are not rendered in this console. A production build needs a signed, audited viewer.
+                    The selfie and the document photos open in the decision sheet, one submission at a time.
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -221,6 +225,8 @@ function VerificationQueue() {
           </>
         }
       >
+        {selected ? <VerificationDocuments verificationId={selected.id} /> : null}
+
         <Banner tone="warn" title="Do not approve on a verbal assurance" icon>
           If the classification is uncertain, reject and escalate. The reason code is shown to the traveller.
         </Banner>
@@ -260,6 +266,166 @@ function VerificationQueue() {
         {error ? <ErrorPanel error={error} /> : null}
       </Sheet>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- the documents under review
+
+type VerificationDocument = VerificationDocumentBundle['documents'][number];
+
+/**
+ * What a reviewer decides on.
+ *
+ * The photos are fetched when the sheet opens, not with the queue: each read is its own audited
+ * event, and each URL it returns works for one file for a couple of minutes. So this query is never
+ * kept fresh — reopening has to issue new links rather than reuse ones that already stopped working.
+ */
+function VerificationDocuments({ verificationId }: { verificationId: string }) {
+  const query = useQuery({
+    queryKey: ['admin', 'verification-documents', verificationId],
+    queryFn: () => api.get<VerificationDocumentBundle>(`/admin/verifications/${verificationId}/documents`),
+    staleTime: 0,
+    gcTime: 0,
+  });
+  const [zoomed, setZoomed] = useState<VerificationDocument | null>(null);
+
+  if (query.isPending) return <LoadingBlock lines={4} />;
+  if (query.isError) return <ErrorPanel error={query.error} onRetry={() => void query.refetch()} />;
+
+  const { verification, applicant, documents } = query.data;
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-input border border-line bg-canvas px-3 py-2">
+        <p className="text-sm font-semibold text-ink-900">{applicant.name ?? 'No name on the account'}</p>
+        <p className="tabular mt-0.5 text-xs text-ink-500">
+          {applicant.phone_masked}
+          {applicant.email ? ` · ${applicant.email}` : ''}
+        </p>
+        <p className="tabular mt-0.5 text-xs text-ink-500">
+          {verification.id_type?.replaceAll('_', ' ') ?? 'identity document'} · attempt {verification.attempts} of 3 ·
+          submitted {timeAgo(verification.created_at)} · account since {formatDate(applicant.member_since)}
+          {applicant.fraud_flag ? ' · flagged for fraud' : ''}
+        </p>
+      </div>
+
+      {documents.length === 0 ? (
+        <Banner tone="warn" title="Nothing was stored with this submission" icon>
+          The record exists but has no documents attached, so there is nothing to read. Reject it and ask the
+          traveller to submit again.
+        </Banner>
+      ) : (
+        <ul className="grid gap-3 sm:grid-cols-2">
+          {documents.map((doc) => (
+            <li key={doc.id}>
+              <DocumentTile doc={doc} onZoom={() => setZoomed(doc)} />
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <p className="text-xs text-ink-500">
+        These links open one file each and stop working in a few minutes — close and reopen the sheet for fresh
+        ones. Every issue is written to the audit log against your account.
+      </p>
+
+      {zoomed ? <DocumentZoom doc={zoomed} onClose={() => setZoomed(null)} /> : null}
+    </div>
+  );
+}
+
+function DocumentTile({ doc, onZoom }: { doc: VerificationDocument; onZoom: () => void }) {
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  if (!doc.view_url) {
+    // The submission promised the traveller their images would not be kept past this date.
+    return (
+      <Frame label={doc.label}>
+        <p className="px-3 py-6 text-center text-xs text-ink-500">
+          Past its retention date, so this console will not open it any more.
+        </p>
+      </Frame>
+    );
+  }
+
+  return (
+    <Frame label={doc.label}>
+      <button type="button" onClick={onZoom} className="relative block h-44 w-full overflow-hidden">
+        {loaded ? null : <Skeleton className="absolute inset-0 rounded-none" />}
+        <img
+          src={doc.view_url}
+          alt={doc.label}
+          onLoad={() => setLoaded(true)}
+          onError={() => setFailed(true)}
+          className={cn('h-full w-full bg-canvas object-contain transition-opacity', loaded ? 'opacity-100' : 'opacity-0')}
+        />
+      </button>
+      {failed ? (
+        <p className="px-3 py-2 text-center text-xs text-ink-500">
+          The file is no longer in storage. Reject and ask the traveller to submit again.
+        </p>
+      ) : null}
+    </Frame>
+  );
+}
+
+function Frame({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <figure className="overflow-hidden rounded-input border border-line bg-surface">
+      {children}
+      <figcaption className="px-3 py-2 text-xs font-semibold text-ink-700">{label}</figcaption>
+    </figure>
+  );
+}
+
+/** Full-size reading of one document, rendered into `body` so the sheet's scroll box cannot clip it. */
+function DocumentZoom({ doc, onClose }: { doc: VerificationDocument; onClose: () => void }) {
+  const [actualSize, setActualSize] = useState(false);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[60] flex flex-col bg-ink-900/95"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${doc.label}, full size`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <p className="text-sm font-semibold text-white">{doc.label}</p>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="secondary" onClick={() => setActualSize((on) => !on)}>
+            {actualSize ? 'Fit to screen' : 'Actual size'}
+          </Button>
+          <Button size="sm" variant="secondary" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        <img
+          src={doc.view_url!}
+          alt={doc.label}
+          onClick={() => setActualSize((on) => !on)}
+          className={cn(
+            'mx-auto rounded-input bg-surface',
+            actualSize ? 'max-w-none cursor-zoom-out' : 'max-h-full max-w-full cursor-zoom-in object-contain',
+          )}
+        />
+      </div>
+      <p className="tabular px-4 pb-3 text-xs text-white/70">
+        {Math.round(doc.byte_size / 1024)} KB · {doc.mime_type} · captured {timeAgo(doc.captured_at)} · SHA-256{' '}
+        {doc.content_sha256.slice(0, 12)}…
+      </p>
+    </div>,
+    document.body,
   );
 }
 

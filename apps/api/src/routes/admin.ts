@@ -242,6 +242,121 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // ---------------------------------------------------------------- the documents themselves
+  //
+  // A reviewer cannot judge an identity without looking at it, and an identity document is the most
+  // sensitive object this system holds. So the images are deliberately absent from the queue
+  // payload: opening them is its own role-gated request, it writes its own audit entry, and what
+  // comes back is a short-lived URL that grants one object for one TTL and nothing else.
+
+  const DOCUMENT_KIND_LABELS: Record<string, string> = {
+    id_front: 'ID document, front',
+    id_back: 'ID document, back',
+    selfie: 'Selfie with the document',
+  };
+
+  app.get<{ Params: { verificationId: string } }>('/admin/verifications/:verificationId/documents', async (req) => {
+    const auth = requireRole(req, 'verification_reviewer', 'trust_safety');
+
+    const found = await db.query<{
+      id: string;
+      user_id: string;
+      state: string;
+      id_type: string | null;
+      reason_code: string | null;
+      created_at: Date;
+      attempts: string;
+      name: string | null;
+      email: string | null;
+      phone_masked: string;
+      risk_tier: number;
+      fraud_flag: boolean;
+      member_since: Date;
+    }>(
+      `SELECT v.id, v.user_id, v.state, v.id_type, v.reason_code, v.created_at,
+              (SELECT count(*)::text FROM verifications x WHERE x.user_id = v.user_id) AS attempts,
+              u.name, u.email, u.phone_masked, u.risk_tier, u.fraud_flag, u.created_at AS member_since
+       FROM verifications v JOIN users u ON u.id = v.user_id
+       WHERE v.id = $1`,
+      [req.params.verificationId],
+    );
+    const v = found.rows[0];
+    if (!v) throw new AppError('NOT_FOUND');
+
+    const stored = await db.query<{
+      id: string;
+      kind: string;
+      object_key: string;
+      content_sha256: string;
+      mime_type: string;
+      byte_size: number;
+      created_at: Date;
+      purge_after: Date;
+    }>(
+      `SELECT id, kind, object_key, content_sha256, mime_type, byte_size, created_at, purge_after
+       FROM verification_documents WHERE verification_id = $1 ORDER BY created_at ASC`,
+      [v.id],
+    );
+
+    const documents = stored.rows.map((d) => {
+      // The submission told the person their images would not be kept past this date. Once that
+      // date has passed the console stops handing out reads, whether or not the bytes are still on
+      // the volume — a retention promise the reviewer can quietly ignore is not a promise.
+      const retained = d.purge_after.getTime() > Date.now();
+      const signed = retained ? signObjectKey(d.object_key) : null;
+      return {
+        id: d.id,
+        kind: d.kind,
+        label: DOCUMENT_KIND_LABELS[d.kind] ?? 'Document',
+        mime_type: d.mime_type,
+        byte_size: d.byte_size,
+        content_sha256: d.content_sha256,
+        captured_at: toIso(d.created_at),
+        purge_after: toIso(d.purge_after),
+        view_url: signed?.url ?? null,
+        view_expires_at: signed ? toIso(signed.expiresAt) : null,
+      };
+    });
+
+    await audit(db, {
+      actorId: auth.userId,
+      actorKind: 'support',
+      action: 'admin.verification_documents_read',
+      resource: 'verification',
+      resourceId: v.id,
+      // Kinds and counts, never object keys: the audit log is readable by more staff than the
+      // documents are, and a key is a pointer into somebody's identity file.
+      after: {
+        owner: v.user_id,
+        kinds: documents.map((d) => d.kind),
+        withheld_past_retention: documents.filter((d) => !d.view_url).length,
+      },
+    });
+
+    return {
+      verification: {
+        id: v.id,
+        state: v.state,
+        id_type: v.id_type,
+        reason_code: v.reason_code,
+        attempts: Math.min(3, Number(v.attempts)),
+        created_at: toIso(v.created_at),
+      },
+      // What a reviewer is actually comparing: the name on the document against the name on the
+      // account. The phone stays masked, because the reviewer never needs to reach the person.
+      applicant: {
+        user_id: v.user_id,
+        name: v.name,
+        email: v.email,
+        phone_masked: v.phone_masked,
+        risk_tier: v.risk_tier,
+        fraud_flag: v.fraud_flag,
+        member_since: toIso(v.member_since),
+      },
+      documents,
+    };
+  });
+
   // ---------------------------------------------------------------- bookings
 
   app.get('/admin/bookings', async (req) => {

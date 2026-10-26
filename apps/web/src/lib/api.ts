@@ -548,6 +548,42 @@ export interface AdminVerification {
   created_at: string;
 }
 
+/**
+ * One submission opened by a reviewer. `view_url` is short-lived and scoped to that single file, so
+ * it is fetched when the decision sheet opens rather than carried in the queue.
+ */
+export interface VerificationDocumentBundle {
+  verification: {
+    id: string;
+    state: string;
+    id_type: string | null;
+    reason_code: string | null;
+    attempts: number;
+    created_at: string;
+  };
+  applicant: {
+    user_id: string;
+    name: string | null;
+    email: string | null;
+    phone_masked: string;
+    risk_tier: number;
+    fraud_flag: boolean;
+    member_since: string;
+  };
+  documents: Array<{
+    id: string;
+    kind: string;
+    label: string;
+    mime_type: string;
+    byte_size: number;
+    content_sha256: string;
+    captured_at: string;
+    purge_after: string;
+    view_url: string | null;
+    view_expires_at: string | null;
+  }>;
+}
+
 export interface AdminBookingRow {
   id: string;
   status: string;

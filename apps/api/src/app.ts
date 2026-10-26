@@ -40,6 +40,12 @@ export async function buildApp(): Promise<FastifyInstance> {
   const db = await getDb();
 
   const app = Fastify({
+    // Fastify's default is 100, and a signed file token is longer than that: the object key, the
+    // expiry and a 43-character signature, base64url-encoded. Left at the default, every
+    // `/files/signed/:token` read — the one the staff console hands to an `<img>` — answers
+    // FST_ERR_MAX_PARAM_LENGTH before the route ever runs. 512 covers a key up to the 256 characters
+    // the submission schema allows.
+    maxParamLength: 512,
     logger: {
       level: config.LOG_LEVEL,
       // Structured logs only. Never log request bodies: they contain names, phones and addresses.
