@@ -11,6 +11,8 @@ import {
 import { generateOtp, hashCode, maskPhone, phoneHash, phoneLast4, safeEqual, sha256 } from '../lib/crypto.ts';
 import { rememberCode } from '../lib/dev-store.ts';
 import { clearRefreshCookie, readRefreshCookie, setRefreshCookie } from '../lib/cookies.ts';
+import { isUniqueViolation } from '../lib/db-errors.ts';
+import { isNativeClient } from '../lib/session-transport.ts';
 import { deliverOtp } from '../lib/sms.ts';
 import { userProfile } from '../lib/serialize.ts';
 import { audit } from '../services/audit.ts';
@@ -71,6 +73,61 @@ async function incrementOtpCounter(
     [key, scope, windowEnd],
   );
   return result.rows[0]?.count ?? 1;
+}
+
+/**
+ * The account behind a verified phone number.
+ *
+ * Soft-deleted rows are tombstones: deletion frees `phone_hash`, so the same number gets a fresh
+ * account rather than signing into the deleted one. A suspended account is refused instead of being
+ * handed a session that every other route would reject.
+ *
+ * Two verifications for one number can race; the unique constraint decides, and the loser reads the
+ * winner's row rather than answering 500.
+ */
+async function findOrCreatePhoneUser(
+  db: Db,
+  challenge: { phone_hash: string; phone_last4: string | null; phone_masked: string },
+): Promise<string> {
+  const resolve = () =>
+    db.transaction(async (tx) => {
+      const existing = await tx.query<{ id: string; status: 'active' | 'suspended' | 'deleted' }>(
+        `SELECT id, status FROM users WHERE phone_hash = $1 AND deleted_at IS NULL`,
+        [challenge.phone_hash],
+      );
+      const row = existing.rows[0];
+      if (row) {
+        if (row.status === 'suspended') throw new AppError('ACCOUNT_SUSPENDED');
+        await tx.query(
+          `UPDATE users SET phone_verified_at = now(), phone_masked = $2, updated_at = now() WHERE id = $1`,
+          [row.id, challenge.phone_masked],
+        );
+        return row.id;
+      }
+
+      const created = await tx.query<{ id: string }>(
+        `INSERT INTO users (phone_hash, phone_last4, phone_masked, phone_verified_at)
+         VALUES ($1,$2,$3,now()) RETURNING id`,
+        [challenge.phone_hash, challenge.phone_last4, challenge.phone_masked],
+      );
+      const id = created.rows[0]!.id;
+      await tx.query(`INSERT INTO user_roles (user_id, role) VALUES ($1,'sender') ON CONFLICT DO NOTHING`, [id]);
+      return id;
+    });
+
+  try {
+    return await resolve();
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    const again = await db.query<{ id: string; status: 'active' | 'suspended' | 'deleted' }>(
+      `SELECT id, status FROM users WHERE phone_hash = $1 AND deleted_at IS NULL`,
+      [challenge.phone_hash],
+    );
+    const row = again.rows[0];
+    if (!row) throw err;
+    if (row.status === 'suspended') throw new AppError('ACCOUNT_SUSPENDED');
+    return row.id;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -268,27 +325,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     );
     if (consumed.rowCount === 0) throw new AppError('OTP_ALREADY_USED');
 
-    const user = await db.transaction(async (tx) => {
-      const existing = await tx.query<{ id: string }>(`SELECT id FROM users WHERE phone_hash = $1`, [
-        challenge.phone_hash,
-      ]);
-      let userId = existing.rows[0]?.id;
-      if (!userId) {
-        const created = await tx.query<{ id: string }>(
-          `INSERT INTO users (phone_hash, phone_last4, phone_masked, phone_verified_at)
-           VALUES ($1,$2,$3,now()) RETURNING id`,
-          [challenge.phone_hash, challenge.phone_last4, challenge.phone_masked],
-        );
-        userId = created.rows[0]!.id;
-        await tx.query(`INSERT INTO user_roles (user_id, role) VALUES ($1,'sender') ON CONFLICT DO NOTHING`, [userId]);
-      } else {
-        await tx.query(
-          `UPDATE users SET phone_verified_at = now(), phone_masked = $2, updated_at = now() WHERE id = $1`,
-          [userId, challenge.phone_masked],
-        );
-      }
-      return userId;
-    });
+    const user = await findOrCreatePhoneUser(db, challenge);
 
     const session = await createSession(db, user, {
       deviceId: body.device_id ?? null,
@@ -310,14 +347,21 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       access_token: session.accessToken,
       expires_in: session.expiresIn,
       user: profile,
+      // See lib/session-transport.ts: the mobile client keeps this in the platform keystore.
+      ...(isNativeClient(req) ? { refresh_token: session.refreshToken } : {}),
     });
   });
 
   // POST /auth/refresh
-  // Reads the refresh token from its HttpOnly cookie, so the client never holds the long-lived
-  // credential in script-readable storage.
+  // The web reads the refresh token from its HttpOnly cookie, so the client never holds the
+  // long-lived credential in script-readable storage. A native app declares itself with
+  // `x-py-client: native` and presents the token from the platform keystore instead; the rotation
+  // and reuse-detection rules below are identical either way.
   app.post('/auth/refresh', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (req, reply) => {
-    const presented = readRefreshCookie(req);
+    const native = isNativeClient(req);
+    const body = (req.body ?? {}) as { refresh_token?: unknown };
+    const fromBody = native && typeof body.refresh_token === 'string' ? body.refresh_token : null;
+    const presented = readRefreshCookie(req) ?? fromBody;
     if (!presented) throw new AppError('AUTH_REFRESH_INVALID');
     const hash = sha256(presented);
 
@@ -328,10 +372,31 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       expires_at: Date;
       revoked_at: Date | null;
       device_id: string | null;
-    }>(`SELECT id, user_id, family_id, expires_at, revoked_at, device_id FROM sessions WHERE refresh_hash = $1`, [hash]);
+      status: 'active' | 'suspended' | 'deleted';
+      deleted_at: Date | null;
+    }>(
+      `SELECT s.id, s.user_id, s.family_id, s.expires_at, s.revoked_at, s.device_id, u.status, u.deleted_at
+         FROM sessions s JOIN users u ON u.id = s.user_id
+        WHERE s.refresh_hash = $1`,
+      [hash],
+    );
 
     const session = found.rows[0];
     if (!session) throw new AppError('AUTH_REFRESH_INVALID');
+
+    // A deleted or suspended account must not receive a new access token. Checked before the reuse
+    // branch on purpose: deletion revokes its sessions, and a revoked token reaching this route
+    // after deletion is not evidence of a replayed credential. The cookie is cleared so the browser
+    // stops presenting a credential that can never work again.
+    if (session.status === 'deleted' || session.deleted_at) {
+      await db.query(`UPDATE sessions SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL`, [session.id]);
+      clearRefreshCookie(reply);
+      throw new AppError('AUTH_REFRESH_INVALID');
+    }
+    if (session.status === 'suspended') {
+      clearRefreshCookie(reply);
+      throw new AppError('ACCOUNT_SUSPENDED');
+    }
 
     if (session.revoked_at) {
       // A rotated token was replayed. Kill the whole family (reuse detection).
@@ -365,6 +430,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       access_token: next.accessToken,
       expires_in: next.expiresIn,
       user: profile,
+      ...(native ? { refresh_token: next.refreshToken } : {}),
     });
   });
 

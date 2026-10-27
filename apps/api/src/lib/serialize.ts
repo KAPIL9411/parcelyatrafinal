@@ -182,7 +182,7 @@ export interface BookingRow {
   open_dispute?: { id: string; state: string; category: string; created_at: Date | string } | null;
 }
 
-export function bookingView(row: BookingRow, allowedCommands: string[]) {
+export function bookingView(row: BookingRow, allowedCommands: string[], viewerRole: 'sender' | 'traveller') {
   const counterparty =
     row.counterparty_name || row.counterparty_phone_masked
       ? {
@@ -197,6 +197,9 @@ export function bookingView(row: BookingRow, allowedCommands: string[]) {
     parcel_id: row.parcel_id,
     trip_id: row.trip_id,
     status: row.status,
+    // Additive: the mobile app needs to know which side of the booking the caller is on without a
+    // second list request. The view is only ever served to a party (loadForViewer enforces it).
+    viewer_role: viewerRole,
     agreed_total_paise: Number(row.agreed_total_paise),
     traveller_share_paise: Number(row.traveller_share_paise),
     accept_by: toIsoOrNull(row.accept_by),

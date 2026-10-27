@@ -1,0 +1,53 @@
+{
+  "expo": {
+    "name": "Parcel Yatra",
+    "slug": "parcel-yatra",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "parcelyatra",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a1730"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "in.parcelyatra.app"
+    },
+    "android": {
+      "package": "in.parcelyatra.app",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#0a1730",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-web-browser",
+      "expo-font",
+      "expo-splash-screen",
+      "expo-router",
+      "@react-native-community/datetimepicker",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Parcel Yatra needs access to your photos so you can attach a sealed-parcel photo or an identity document.",
+          "cameraPermission": "Parcel Yatra uses the camera to photograph a sealed parcel or an identity document."
+        }
+      ]
+    ],
+    "extra": {
+      "apiBase": "https://parcelyatrafinal.onrender.com/v1"
+    }
+  }
+}

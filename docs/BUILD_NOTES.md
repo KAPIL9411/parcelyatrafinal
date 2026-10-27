@@ -618,6 +618,59 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
   API's `.strict()` schema rejects; the old bundle has no such field and keeps working against the
   new API through the cookie, so OTP sign-in and Google sign-in stay usable during the window.
 
+### DEFECT-026 — a deleted account blocks its own Google sign-in, and its sessions keep refreshing
+
+- **OBSERVED (production Render log):** `POST /v1/auth/google/callback` logged "Google OAuth
+  successful" and then failed with
+  `DatabaseError: duplicate key value violates unique constraint "users_google_sub_idx"`,
+  `Key (google_sub)=(102010256565828400439) already exists.`, answering **500**. In the same session,
+  `POST /v1/auth/refresh` answered **200** repeatedly while `GET /v1/me` answered **403**.
+- **Cause:** the deleted row still owned the identity. `POST /me/deletion-request` set only
+  `status='deleted'` and `deleted_at`:
+  - `users_google_sub_idx` is `UNIQUE (google_sub) WHERE google_sub IS NOT NULL` — the predicate does
+    not mention `deleted_at`, so the tombstone kept the subject and the next sign-in tried to insert a
+    second row for it. The email index *is* filtered on `deleted_at IS NULL`, which is why only the
+    subject collided.
+  - `phone_hash` is plain `UNIQUE`, so the same number could never register again either.
+  - Sessions were not revoked, so `/auth/refresh` kept minting access tokens for an account that
+    `authenticate` refuses with `ACCOUNT_DELETED` (403) — the exact 200/403 pair in the log.
+- **CHANGED — one policy, applied everywhere:** a deletion turns the row into a tombstone whose login
+  identifiers are freed; signing in again creates a fresh account (the pack's deletion intent), while
+  booking and payment rows stay attached to the tombstone.
+  - `routes/me.ts` — the deletion is one transaction: `google_sub = NULL`, `phone_hash =
+    'deleted:' || id`, `status/deleted_at` set, and every live session revoked.
+  - `migrations/0009_free_deleted_identifiers.sql` — repairs rows deleted before this change
+    (idempotent: the tombstone derives from the row id) and revokes their sessions.
+  - `routes/google-auth.ts` — `upsertUserFromGoogle` retries once on a unique violation: the winner's
+    row is returned, so two first sign-ins that race settle on one account; a legacy tombstone still
+    holding the subject is freed and the person gets a fresh account. `finishSignIn` refuses
+    `ACCOUNT_SUSPENDED`/`ACCOUNT_DELETED` before opening a session.
+  - `routes/auth.ts` — `findOrCreatePhoneUser` does the same for OTP: live-only lookup, suspended
+    refused (`ACCOUNT_SUSPENDED`), unique-violation loser re-reads the winner, deleted rows are never
+    resurrected. `/auth/refresh` joins `users` and refuses a deleted account (`401
+    AUTH_REFRESH_INVALID`, cookie cleared, session revoked) or a suspended one (`403
+    ACCOUNT_SUSPENDED`) instead of issuing a token.
+  - `lib/db-errors.ts` — `isUniqueViolation` (SQLSTATE 23505, optional constraint name).
+- **Consequence / verification:** `apps/api/test/identity-recovery.test.ts` (8 tests) drives the real
+  routes: deletion frees both identifiers and revokes every session; refresh refuses a deleted and a
+  suspended account; the same Google subject signs in again on a fresh account; a pre-migration
+  tombstone is self-healed; two concurrent first sign-ins resolve to one row; a deleted phone number
+  registers again; a suspended number is refused at verify. The migration SQL was also executed
+  against a hand-built legacy tombstone (subject attached, real phone hash, live session) and repaired
+  it; a second execution changed nothing. Full run: 25/25 API tests, 64/64 domain, 8/8 mobile,
+  typecheck clean, and the E2E harnesses against an isolated API — smoke 57, discovery 46, trips 40,
+  messaging 33 (1 skip), journeys 52, concurrency 11, ratelimit 14, all 0 failed.
+- **Not covered:** no real Google credential exists here, so the Google leg is exercised through
+  `upsertUserFromGoogle` with a supplied identity, not through a live token exchange.
+- **Deploy order:** migration 0009 must be applied. With `MIGRATE_ON_BOOT=true` (the value
+  `.env.production.example` already asks for) a redeploy applies it before listening; otherwise run
+  `npm run db:migrate` against the production `DATABASE_URL` first. A production boot with the
+  migration pending and `MIGRATE_ON_BOOT` unset refuses to start by design.
+- **Data consequence, stated plainly:** the account that triggered this is a tombstone. Signing in
+  with the same Google account now creates a new account; bookings and payments made by the old one
+  remain on the tombstone and are not transferred. The day-7 anonymisation and day-30 purge in
+  `database/RETENTION_AND_DELETION.md` are still not automated (no worker in this build).
+
 ---
 
 ## 2. Other deviations
@@ -720,15 +773,16 @@ undefined here on purpose rather than being invented.
 
 **OBSERVED**, on the machine that built it:
 
-- `npm run typecheck` — domain, API and web all clean.
-- `npm test` — 63/63 domain tests pass (money, pricing, eligibility, the booking state machine,
+- `npm run typecheck` — domain, API, web and mobile all clean.
+- `npm test` — 64/64 domain tests pass (money, pricing, eligibility, the booking state machine,
   refunds, and the matching engine: hard gates, score arithmetic, tie-breaks, policy validation,
-  low-confidence fallback, truthfulness of the reason codes) plus 3/3 API tests
-  (`npm run test:api`): the `ADMIN_EMAILS` address receives every staff role in `user_roles`, an
-  unlisted address receives none, and removing the address revokes the grant at the next sign-in.
-  **The Google leg is not tested here**: it needs a real ID token from a configured OAuth client,
-  and this build has no credentials. What is proven is the function that sign-in calls.
-- `node scripts/smoke.mjs --reset` — 44 checks pass, 0 fail. Covers sign-in, parcel creation,
+  low-confidence fallback, truthfulness of the reason codes), 25/25 API tests (the `ADMIN_EMAILS`
+  grant, the Google handshake short of the call to Google, the native session transport, and the
+  deletion/recovery identity cases in DEFECT-026), and 8/8 mobile transport tests. **The Google leg
+  is not tested here**: it needs a real ID token from a configured OAuth client, and this build has
+  no credentials. What is proven is the function that sign-in calls.
+- `node scripts/smoke.mjs --reset` — 57 checks pass, 0 fail. Covers sign-in, upload ownership,
+  parcel creation,
   prohibited-item refusal, matching, quote arithmetic, booking, acceptance, sandbox payment and
   signed webhook, pickup OTP (wrong then right), transit, arrival, delivery OTP, settlement, payout
   refusal (`PAYOUTS_NOT_ENABLED`), review, dispute creation, payout freeze, and evidence.
@@ -739,9 +793,12 @@ undefined here on purpose rather than being invented.
 - Browser walkthrough of the sender and traveller happy path, the dispute path, verification
   submission and staff approval, the admin case queue, refund/payout refusal, and the audit log.
 - `npm run build -w @py/web` — production bundle builds.
+- `npm run export:android -w @py/mobile` — Metro produced the Android bundle, 56 assets and a
+  metadata file. This proves the app compiles for the platform; it is not an installable APK.
 
 **Not verified:** load, failover, backup/restore, real provider behaviour, accessibility audit,
-penetration test, or anything on a second machine.
+penetration test, anything on a second machine, and any mobile UI on a real device or emulator
+(no Android SDK, JDK or iOS toolchain on the build machine — see §6).
 
 ---
 
@@ -756,3 +813,156 @@ penetration test, or anything on a second machine.
 - It does **not** prove demand, unit economics, or any market claim. Prices are **HYPOTHESIS** from
   the pack; no figure here is measured.
 - It does **not** store Aadhaar, track location continuously, or store raw phone numbers.
+
+---
+
+## 6. Mobile app (Expo) — what exists and what it refuses to fake
+
+`apps/mobile` is an Expo SDK 58 / React Native 0.88 / TypeScript app in the same workspace as the
+API and web client. It talks to the **same** deployed API (`https://parcelyatrafinal.onrender.com/v1`
+by default); there is no second backend, no mock server and no seeded demo data in the app.
+
+### Route inventory
+
+| Route | File | Auth | Purpose |
+| --- | --- | --- | --- |
+| Home | `app/(tabs)/index.tsx` | public | Hero, categories from `/config`, how it works, recent bookings |
+| Bookings | `app/(tabs)/bookings.tsx` | signed in | Booking list with status chips |
+| Trips | `app/(tabs)/trips.tsx` | signed in | Traveller's own trips and opportunity entry |
+| Profile | `app/(tabs)/profile.tsx` | signed in | Name/email/locale edit, verification, sign-out, deletion |
+| Sign in | `app/sign-in.tsx` | public | Phone OTP, Google (native), session restore |
+| Send | `app/send.tsx` | signed in | Parcel wizard: route, category, weight, window, quote, match, book |
+| Parcel | `app/parcels/[id].tsx` | signed in | Parcel detail, offers, cancel |
+| Booking | `app/bookings/[id].tsx` | signed in | Status timeline, next action, handover codes, chat, dispute, review |
+| Publish trip | `app/trips/new.tsx` | signed in + verified | Trip form with the server's verification gate |
+| Trip | `app/trips/[id].tsx` | signed in | Trip detail, opportunity offers, edit, cancel |
+| Verification | `app/verification.tsx` | signed in | Upload ID + selfie, state, reasons, retry budget |
+| Notifications | `app/notifications.tsx` | signed in | In-app rows, read state, deep link to booking |
+| Help | `app/help.tsx` | public | FAQ, honest "what this build does not do" |
+| Not found | `app/+not-found.tsx` | public | Recovery |
+
+Auth-gated screens render `AuthGate`, which paints nothing protected while the stored refresh token
+is being checked. The tab bar shows an unread badge fed by `GET /notifications`.
+
+### Session transport (additive to the web contract)
+
+The web keeps its refresh token in the HttpOnly `py_refresh` cookie, which a native client cannot
+read. With `x-py-client: native`:
+
+- `POST /auth/otp/verify`, `POST /auth/google/token` and `POST /auth/refresh` include
+  `refresh_token` **in the JSON body** as well as setting the cookie;
+- `POST /auth/refresh` accepts `{ refresh_token }` in the body;
+- rotation and reuse detection are unchanged; a reused token still kills the session family.
+
+The native app stores that refresh token in **SecureStore** (`py.refresh_token`, accessibility
+`WHEN_UNLOCKED_THIS_DEVICE_ONLY`), never in AsyncStorage. The access token lives only in module
+memory: killing the process ends it, and the next boot refreshes from SecureStore. A per-install
+random `py.device_id` is kept so the server can distinguish devices without a fingerprint.
+
+`apps/api/test/native-session.test.ts` (5 tests inside `npm run test:api`) covers: the header makes
+`refresh_token` appear in the body; a browser request does not get it; body-refresh rotates; reuse
+of an old token is refused; and web cookie refresh still works.
+
+### API client
+
+`src/api/http.ts` normalises every failure into `ApiError { code, status, request_id, details }`:
+`NETWORK` when fetch rejects, `TIMEOUT` at 20 s (per-request override available), `AUTH_REQUIRED`
+after one failed refresh, and the server's own code/message otherwise. Every non-GET call carries an
+`Idempotency-Key`. One 401 triggers one refresh and one retry; concurrent 401s share that refresh;
+a second 401 ends the session. The module is free of React Native imports and is tested in Node
+(`test/http.test.ts`, 8 tests).
+
+### Backend changes the app needed
+
+One additive field, no behaviour change for the web client:
+
+- `bookingView` returns `viewer_role: 'sender' | 'traveller'` so the app knows which actions to
+  offer without guessing from the user's roles.
+
+`userProfile` already returned `verification_state`, defaulting to `not_started` (the same way
+`/verifications/me` synthesises a row), so the app did not have to treat "no row" as "verified".
+
+### Environment
+
+`app.json` carries the production `extra.apiBase`; at runtime `EXPO_PUBLIC_API_BASE` overrides it.
+Google sign-in needs platform client ids; without them the button is hidden rather than shown broken.
+
+| Variable | Required | Meaning |
+| --- | --- | --- |
+| `EXPO_PUBLIC_API_BASE` | no (default in `app.json`) | Full API root, including `/v1` |
+| `EXPO_PUBLIC_GOOGLE_CLIENT_ID` | for Google | Web/client id used by `expo-auth-session` |
+| `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID` | iOS Google | Defaults to the value above |
+| `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` | Android Google | Defaults to the value above |
+
+`EXPO_PUBLIC_*` values are embedded in the bundle and are public by design. No secret belongs here;
+the API's Google client secret stays on the server.
+
+### Commands
+
+```bash
+npm run start -w @py/mobile          # Expo dev server (press w for the web preview)
+npm run start -w @py/mobile -- --web # web preview directly
+npm run typecheck -w @py/mobile      # tsc --noEmit
+npm run test -w @py/mobile           # 8 transport tests in Node
+npm run export:android -w @py/mobile
+```
+
+`export:android` writes `apps/mobile/dist-android` (git-ignored). There is **no** `eas.json` and no
+signing material in this repository, so no store-ready build is produced here. The app runs in Expo
+Go for SDK 58 (the community date picker is one of the modules it bundles), so a device can load it
+from the dev server without a native build; this machine has no phone, emulator, JDK or Android SDK,
+so it was not launched on either platform. On a **physical iPhone**, Expo Go (SDK 57 and later) also
+requires the CLI and the app to be signed in to the same free Expo account before it will open a
+project; Android does not have that rule.
+
+### Web preview (development only)
+
+There is no emulator, phone, JDK or Android SDK on the build machine, so a React Native Web preview
+is the only way to render this app locally. It is a convenience for development, not a supported
+target: nothing here claims the app is a web product.
+
+- `react-native-web` and a matching `react-dom` are installed in `apps/mobile` so `expo start --web`
+  resolves. Expo Router needs both; without them the web bundle fails to resolve `react-native-web/dist/index`.
+- `expo-secure-store` has no usable web implementation, so `src/lib/secret-store.ts` swaps in a
+  module-scoped `Map` when `Platform.OS === 'web'`. Nothing is written to `localStorage`,
+  `sessionStorage` or cookies. The cost is that a page reload signs the user out, because the
+  refresh token only lives in memory there. Native builds are unaffected and still use SecureStore.
+- `Screen` omits `refreshControl` on web. React Native Web's `ScrollView` clones the `refreshControl`
+  element and renders it in place of the content, which blanked every screen that passed one.
+- `DateTimeField` renders two text inputs (`YYYY-MM-DD` and `HH:MM`) on web because React Native Web
+  has no native date dialog. The text is parsed locally and rejected if the calendar rolls it over
+  (e.g. `2026-02-31`); the native build keeps the platform picker.
+- A local API is needed for real data. Start it with an isolated database
+  (`PGLITE_PATH=./data/pgdata.preview npm run dev:api`) and add `http://127.0.0.1:8081` to
+  `WEB_ORIGINS` in `.env`; otherwise the preview's calls to the deployed API are blocked by CORS.
+  Point the preview at it with `EXPO_PUBLIC_API_BASE=http://127.0.0.1:3000/v1`.
+- Signing in on the preview uses the local sandbox. Like the web login, the sign-in screen asks
+  `GET /v1/dev/otp/:challengeId` for the code and shows "Sandbox build: fill NNNNNN and continue".
+  That route exists only with `ENABLE_DEV_ENDPOINTS` and answers loopback addresses only; on any
+  other server the call fails and no hint appears. No SMS is sent and no production account is
+  touched.
+
+**OBSERVED on 2026-10-27**, desktop browser against the local sandbox: the home screen rendered the
+config-driven categories and limits; phone sign-in completed (OTP request → dev-store code → session);
+home then showed "Signed in as Aarti Verma" and the seeded booking; the Bookings tab and booking
+detail rendered (route, pickup window, ₹935 total, ₹647 traveller share, chat composer, status
+history); Trips showed the verification lock; Profile showed the masked phone, verification state and
+API base; the send wizard's step 1 rendered with the web date fields and refused an empty route with
+inline errors. `localStorage`, `sessionStorage` and `document.cookie` stayed empty throughout.
+
+### Deliberate limitations
+
+- **No push notifications.** The bell polls `GET /notifications` every 60 s while the app is open;
+  closed-app delivery needs a provider the API does not have.
+- **No maps, GPS or live tracking.** Routes are city plus an optional free-text area, matching the
+  API. No location permission is requested and no screen implies tracking.
+- **No payment capture.** The booking screen requests an intent and then says plainly that the
+  sandbox cannot charge; the server refuses live payments at boot.
+- **No payout, wallet or cash collection.** The API refuses these, so the UI does not offer them.
+- **No account export.** `POST /me/export` returns `BACKGROUND_WORKER_UNAVAILABLE`; the app exposes
+  deletion but not export, rather than showing a button that always fails.
+- **No offline cache.** TanStack Query keeps data in memory only; a cold start without a network
+  shows named errors, not stale bookings.
+- **No emulator or device run.** Type checking, unit tests and the Metro export pass, and a React
+  Native Web preview was rendered in a desktop browser against a local sandbox, but no screen in
+  this app has been rendered on Android or iOS. Treat the native visual layer as unverified.

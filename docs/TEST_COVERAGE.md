@@ -28,8 +28,8 @@ broken" and stops rather than printing a pass it did not earn.
 | `node scripts/kyc-review.mjs` | supporting (staff identity review) | 25 passed, 0 failed |
 | `node scripts/concurrency.mjs` | supporting (booking atomicity) | 11 passed, 0 failed |
 | `node scripts/ratelimit.mjs` | supporting (limiters) | 14 passed, 0 failed |
-| `npm test` | unit: domain + api | 64 passed + 12 passed, 0 failed |
-| `npm run typecheck` | all three workspaces | clean |
+| `npm test` | unit: domain + api + mobile | 64 passed + 25 passed + 8 passed, 0 failed |
+| `npm run typecheck` | all four workspaces | clean |
 | `npm run build` | `@py/web` production build | clean (one chunk-size warning) |
 
 The skip in `messaging.mjs` is honest: the closed-thread assertion only runs when the demo booking has
@@ -136,6 +136,27 @@ deploy.
 **Not covered:** no real `GOOGLE_CLIENT_ID/SECRET`, so no test reaches a session or a `py_refresh`
 cookie; no browser with third-party cookies genuinely blocked; no assertion about Google's own JWKS
 or the ID-token audience (the placeholder code never gets that far).
+
+## Mobile transport (`apps/mobile/test/http.test.ts`)
+
+Eight tests, run by `npm test` (or `npm run test:mobile`), against a fake `fetch` — no server and no
+emulator. They pin the client rules the screens rely on: a dropped connection is `NETWORK` and a
+never-answered request is `TIMEOUT` (not an empty success); the server's error envelope survives into
+`ApiError`; one 401 causes exactly one refresh and one retry with the new token; a failed refresh
+ends the session once and does not loop; concurrent 401s share a single refresh; mutations carry an
+`Idempotency-Key` while reads do not; and a 204 resolves `undefined`.
+
+The API's half of the native session is covered by `apps/api/test/native-session.test.ts` inside
+`npm run test:api`: the `x-py-client: native` header adds `refresh_token` to auth bodies, a browser
+request does not receive it, body refresh rotates, an old token is refused on reuse, and the web
+cookie path still works.
+
+**Not covered:** the native mobile UI. No emulator, device, Android SDK or iOS toolchain was
+available, so no screen has been rendered on Android or iOS; the Metro Android export proves the
+bundle compiles, nothing more. A React Native Web preview against a local sandbox was walked through
+on 2026-10-27 (home, phone sign-in, bookings list and detail, trips, profile, send step 1); that
+exercises shared components and the API client, not the native renderer. Push notifications, offline
+behaviour and deep links are untested.
 
 ## What these suites do not cover
 

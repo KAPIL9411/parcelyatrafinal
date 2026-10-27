@@ -15,8 +15,8 @@
     "dev:api": "npm run dev -w @py/api",
     "dev:web": "npm run dev -w @py/web",
     "build": "npm run build -w @py/api && npm run build -w @py/web",
-    "typecheck": "npm run typecheck -w @py/domain && npm run typecheck -w @py/api && npm run typecheck -w @py/web",
-    "test": "npm run test -w @py/domain && npm run test -w @py/api",
+    "typecheck": "npm run typecheck -w @py/domain && npm run typecheck -w @py/api && npm run typecheck -w @py/web && npm run typecheck -w @py/mobile",
+    "test": "npm run test -w @py/domain && npm run test -w @py/api && npm run test -w @py/mobile",
     "test:domain": "npm run test -w @py/domain",
     "test:api": "npm run test -w @py/api",
     "test:smoke": "node scripts/smoke.mjs",
@@ -29,7 +29,8 @@
     "test:google": "node scripts/test-google-auth.js",
     "db:migrate": "npm run db:migrate -w @py/api",
     "db:seed": "npm run db:seed -w @py/api",
-    "db:reset": "npm run db:reset -w @py/api"
+    "db:reset": "npm run db:reset -w @py/api",
+    "test:mobile": "npm run test -w @py/mobile"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

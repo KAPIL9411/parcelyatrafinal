@@ -160,9 +160,25 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const hardDeleteAfter = new Date(Date.now() + 30 * 24 * 3_600_000);
-    await db.query(`UPDATE users SET status = 'deleted', deleted_at = now(), updated_at = now() WHERE id = $1`, [
-      auth.userId,
-    ]);
+    await db.transaction(async (tx) => {
+      // The row becomes a tombstone: the account is gone, but payment and booking records still
+      // point at it. Its login identifiers are freed in the same statement. Leaving `google_sub`
+      // or the real `phone_hash` on a deleted row made the person unable to sign up again — the
+      // Google callback died on `users_google_sub_idx` with a 500, and the phone hash could never
+      // be re-registered — while keeping an identifier that the deletion was meant to remove.
+      await tx.query(
+        `UPDATE users
+            SET status = 'deleted', deleted_at = now(), google_sub = NULL,
+                phone_hash = 'deleted:' || id::text, updated_at = now()
+          WHERE id = $1`,
+        [auth.userId],
+      );
+      // The pack's deletion flow starts by revoking sessions, and the signed-in devices must lose
+      // access at once rather than keep rotating tokens for an account that every route now rejects.
+      await tx.query(`UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, [
+        auth.userId,
+      ]);
+    });
     await audit(db, {
       actorId: auth.userId,
       actorKind: 'user',

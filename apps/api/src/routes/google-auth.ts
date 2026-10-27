@@ -3,11 +3,13 @@ import { randomBytes } from 'node:crypto';
 
 import { config } from '../config.ts';
 import { AppError } from '../lib/errors.ts';
+import { isUniqueViolation } from '../lib/db-errors.ts';
 import { createPkce, googleAuthService, type GoogleUserInfo } from '../lib/google-auth.ts';
 import { createSession } from '../lib/auth.ts';
 import { OAUTH_COOKIE, deleteCookie, readCookie, setCookie, setRefreshCookie } from '../lib/cookies.ts';
 import { open as openSealed, seal } from '../lib/seal.ts';
 import { safeEqual, sha256 } from '../lib/crypto.ts';
+import { isNativeClient } from '../lib/session-transport.ts';
 import { syncAdminRoles } from '../lib/admin-access.ts';
 import { audit } from '../services/audit.ts';
 import { loadProfile } from './auth.ts';
@@ -217,6 +219,8 @@ async function finishSignIn(
   }
 
   const user = await upsertUserFromGoogle(db, googleUser);
+  if (user.status === 'suspended') throw new AppError('ACCOUNT_SUSPENDED');
+  if (user.status === 'deleted') throw new AppError('ACCOUNT_DELETED');
   const isAdmin = await syncAdminRoles(db, user.id, googleUser.email);
 
   const session = await createSession(db, user.id, {
@@ -239,6 +243,8 @@ async function finishSignIn(
     user: await loadProfile(req.server, user.id),
     access_token: session.accessToken,
     expires_in: session.expiresIn,
+    // See lib/session-transport.ts: the mobile client keeps this in the platform keystore.
+    ...(isNativeClient(req) ? { refresh_token: session.refreshToken } : {}),
     phone_verification_required: config.PHONE_VERIFICATION_REQUIRED,
   };
 }
@@ -270,8 +276,41 @@ async function findUserByEmail(db: Db, email: string): Promise<string | null> {
  * Order matters: the Google subject is the authoritative link. Email is only used to attach a
  * subject to an account that predates it (a phone-OTP signup that later signs in with Google), and
  * that path requires Google to have confirmed the address is verified.
+ *
+ * Deleted accounts are tombstones (`deleted_at` set) with their login identifiers freed by the
+ * deletion route, so they match neither lookup and the person gets a fresh account, as the deletion
+ * asked for. A retry on a unique violation settles the case where two first sign-ins for one
+ * identity race each other: the loser reads the winner's row instead of answering 500.
  */
 export async function upsertUserFromGoogle(db: Db, googleUser: GoogleUserInfo): Promise<UserRecord> {
+  try {
+    return await resolveGoogleUser(db, googleUser);
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    const existing = await db.query<UserRecord & { google_sub: string | null }>(
+      `SELECT ${USER_COLUMNS}, google_sub FROM users WHERE google_sub = $1 AND deleted_at IS NULL LIMIT 1`,
+      [googleUser.sub],
+    );
+    if (existing.rows[0]) return existing.rows[0];
+
+    // A tombstone from before migration 0009 can still hold the subject. Freeing it is what the
+    // migration would have done; the person then gets the fresh account the deletion implies.
+    const freed = await db.query(
+      `UPDATE users SET google_sub = NULL, updated_at = now()
+        WHERE google_sub = $1 AND deleted_at IS NOT NULL`,
+      [googleUser.sub],
+    );
+    if ((freed.rowCount ?? 0) > 0) return await resolveGoogleUser(db, googleUser);
+
+    throw new AppError(
+      'GOOGLE_AUTH_FAILED',
+      { reason: 'identity_conflict' },
+      'This Google account could not be linked to a Parcel Yatra account.',
+    );
+  }
+}
+
+async function resolveGoogleUser(db: Db, googleUser: GoogleUserInfo): Promise<UserRecord> {
   return await db.transaction(async (tx) => {
     const bySub = await tx.query<UserRecord & { google_sub: string | null }>(
       `SELECT ${USER_COLUMNS}, google_sub FROM users WHERE google_sub = $1 AND deleted_at IS NULL LIMIT 1`,

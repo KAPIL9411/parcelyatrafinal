@@ -169,6 +169,7 @@ async function loadForViewer(app: FastifyInstance, bookingId: string, userId: st
     view: bookingView(
       { ...detail.rows[0]!, timeline: events.rows, open_dispute: dispute.rows[0] ?? null },
       cmds as string[],
+      role,
     ),
   };
 }

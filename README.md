@@ -24,6 +24,8 @@ sets.
 - Traveller trip publishing (car only at pilot).
 - Staff console: verification queue, booking search, case queue, refund approval, audit log.
 - Static pricing, prohibited items, safety, help, and draft legal pages.
+- An Expo (React Native) app in `apps/mobile` that uses the same API and session rules; see
+  [`docs/BUILD_NOTES.md` §6](docs/BUILD_NOTES.md#6-mobile-app-expo--what-exists-and-what-it-refuses-to-fake).
 
 ## What is deliberately off
 
@@ -51,6 +53,9 @@ npm run dev
 
 - Web: <http://localhost:5173>
 - API: <http://127.0.0.1:3000/v1/health>
+- Mobile: `npm run start -w @py/mobile`, then open the project in Expo Go (SDK 58 includes the
+  community date picker) or a development build. Nothing was launched here — no phone, emulator or
+  Android SDK exists on the build machine; see `docs/BUILD_NOTES.md` §6.
 
 First boot applies `apps/api/src/db/schema.sql` to an embedded PGlite database in
 `apps/api/data/pgdata` and seeds demo data. The web dev server proxies `/v1` to the API, so the
@@ -65,7 +70,8 @@ npm run dev:web
 
 ### Demo accounts (development seed only)
 
-The OTP is shown on the login screen in dev ("Fill NNNNNN and continue"). No SMS is sent.
+The OTP is shown on the login screen in dev ("Fill NNNNNN and continue"), on the web app and on the
+mobile app's local preview when it points at a dev API. No SMS is sent.
 
 | Phone | Name | What it is |
 | --- | --- | --- |
@@ -81,8 +87,8 @@ These numbers, names and trips are fictional. Do not treat them as real users or
 | Command | Does |
 | --- | --- |
 | `npm run dev` | API + web together. |
-| `npm run typecheck` | TypeScript for domain, API and web. |
-| `npm test` | Domain unit tests (pricing arithmetic, state machine). |
+| `npm run typecheck` | TypeScript for domain, API, web and mobile. |
+| `npm test` | Domain, API and mobile test suites. |
 | `npm run build` | Bundle the API (esbuild) and build the web app (Vite). |
 | `npm run db:migrate` | Apply `schema.sql` to the configured database. |
 | `npm run db:seed` | Insert demo data. |
@@ -103,6 +109,8 @@ apps/
     data/         Local database and uploads (gitignored).
   web/            Vite + React 19 + TypeScript + Tailwind v4 + React Router + TanStack Query.
     src/screens/  One file per screen; /admin is lazy-loaded and staff-gated.
+  mobile/         Expo SDK 58 + Expo Router. Routes in app/, shared code in src/. Android/iOS target;
+                  a React Native Web preview exists for local development only.
 packages/
   domain/         Framework-free pricing, enums, booking state machine, status copy. 15 tests.
 scripts/
