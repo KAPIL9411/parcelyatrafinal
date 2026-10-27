@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { ID_TYPE_LABELS, ID_TYPES, type IdType } from '@py/domain';
 
-import { api, type Verification as VerificationRecord } from '../lib/api';
+import { api, ApiError, type Verification as VerificationRecord } from '../lib/api';
 import { verificationReason } from '../lib/copy';
 import { formatDateTime } from '../lib/format';
 import { useDocumentTitle } from '../lib/hooks';
@@ -97,6 +97,17 @@ export function Verification() {
       await queryClient.invalidateQueries({ queryKey: ['verification'] });
     } catch (err) {
       setError(err);
+      // The keys point at objects the server cannot read (or does not credit to this account), so
+      // keeping them would repeat the same refusal on every press. Clear them and let the panel ask
+      // for the photos again.
+      if (
+        err instanceof ApiError &&
+        (err.code === 'UPLOAD_EXPIRED' || (err.code === 'VALIDATION_FAILED' && err.details.field === 'object_key'))
+      ) {
+        setFrontKey('');
+        setBackKey('');
+        setSelfieKey('');
+      }
     } finally {
       setBusy(false);
     }

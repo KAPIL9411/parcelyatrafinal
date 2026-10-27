@@ -4,6 +4,7 @@ import { router } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { filesApi, travellerApi } from '../src/api/client.ts';
+import { ApiError } from '../src/api/http.ts';
 import type { IdType } from '../src/lib/format.ts';
 import { AuthGate } from '../src/components/auth-gate.tsx';
 import {
@@ -106,6 +107,15 @@ function VerificationFlow() {
       await refreshProfile();
     } catch (err) {
       setError(err);
+      // The stored keys no longer resolve, so pressing submit again would repeat the refusal.
+      if (
+        err instanceof ApiError &&
+        (err.code === 'UPLOAD_EXPIRED' || (err.code === 'VALIDATION_FAILED' && err.details.field === 'object_key'))
+      ) {
+        setFrontKey(null);
+        setBackKey(null);
+        setSelfieKey(null);
+      }
     } finally {
       setBusy(false);
     }

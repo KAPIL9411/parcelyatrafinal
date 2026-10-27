@@ -290,6 +290,11 @@ const BY_CODE: Record<string, ErrorCopy> = {
     body: 'Use a JPEG or PNG photo.',
   },
   UPLOAD_TOO_LARGE: { title: 'That photo is too large', body: 'The limit is 10 MB.' },
+  UPLOAD_EXPIRED: {
+    title: 'Those photos are no longer available',
+    body: 'The upload did not survive until submission. Attach the document and the selfie again.',
+    hint: 'Nothing was submitted, and no attempt was used.',
+  },
   UPLOAD_URL_EXPIRED: { title: 'The upload link expired', body: 'Try the upload again.' },
   UPLOAD_NOT_CONFIRMED: { title: 'The upload did not finish', body: 'Try the upload again.' },
 
@@ -366,6 +371,15 @@ export function errorCopy(error: unknown): ErrorCopy {
       if (apiError.code === 'TRIP_EDIT_BREAKS_BOOKING') {
         const gate = typeof details.reason === 'string' ? TRIP_GATE_COPY[details.reason] : undefined;
         return { ...mapped, body: gate ?? mapped.body };
+      }
+      // A document key that is not this account's produces the generic "check the details" copy,
+      // which says nothing about the one field the server named.
+      if (apiError.code === 'VALIDATION_FAILED' && details.field === 'object_key') {
+        return {
+          title: 'Attach the document again',
+          body: 'Those photos were not uploaded from this account.',
+          hint: 'Choose the files again and submit.',
+        };
       }
       return mapped;
     }

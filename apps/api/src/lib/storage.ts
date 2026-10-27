@@ -118,6 +118,9 @@ async function cloudinaryPut(key: string, bytes: Buffer): Promise<void> {
     public_id: filePublicId,
     timestamp,
     type: 'authenticated', // private — requires signed URL to view
+    // Cloudinary defaults to SHA-1 signatures. Naming the algorithm keeps an account that still
+    // uses the default from rejecting the SHA-256 digest this adapter computes.
+    signature_algorithm: 'sha256',
   };
 
   const signature = cloudinarySignature(params, apiSecret);
@@ -156,18 +159,27 @@ async function cloudinaryGet(key: string): Promise<StoredObject | null> {
 
   const publicId = toPublicId(key);
   const ext = key.split('.').pop()?.toLowerCase() ?? 'jpg';
-  const timestamp = Math.floor(Date.now() / 1000) + 300; // 5-min expiry
+  const timestamp = Math.floor(Date.now() / 1000);
 
-  const sig = createHash('sha256')
-    .update(`public_id=${publicId}&timestamp=${timestamp}${apiSecret}`)
-    .digest('hex');
+  // The asset is stored as `type=authenticated`, and the download endpoint defaults to
+  // `type=upload`. Without this parameter Cloudinary answers for an asset that does not exist,
+  // which read as a missing upload and made every verification submission fail.
+  const params: Record<string, string | number> = {
+    public_id: publicId,
+    timestamp,
+    type: 'authenticated',
+    signature_algorithm: 'sha256',
+  };
+  const signature = cloudinarySignature(params, apiSecret);
+  const query = new URLSearchParams({
+    ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])),
+    api_key: apiKey,
+    signature,
+  });
 
-  const url =
-    `https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudName)}/image/download` +
-    `?public_id=${encodeURIComponent(publicId)}&api_key=${encodeURIComponent(apiKey)}` +
-    `&timestamp=${timestamp}&signature=${sig}`;
-
-  const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+  const res = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudName)}/image/download?${query}`, {
+    signal: AbortSignal.timeout(15_000),
+  });
   if (!res.ok) return null;
 
   const bytes = Buffer.from(await res.arrayBuffer());
@@ -176,30 +188,6 @@ async function cloudinaryGet(key: string): Promise<StoredObject | null> {
     contentType: CONTENT_TYPES[ext] ?? 'application/octet-stream',
     byteSize: bytes.byteLength,
   };
-}
-
-/**
- * Build a short-lived Cloudinary signed delivery URL for staff viewers.
- */
-function cloudinarySignedUrl(key: string, ttlSeconds = config.FILE_URL_TTL_SECONDS): { url: string; expiresAt: Date } {
-  const cloudName = config.CLOUDINARY_CLOUD_NAME!;
-  const apiKey = config.CLOUDINARY_API_KEY!;
-  const apiSecret = config.CLOUDINARY_API_SECRET!;
-
-  const publicId = toPublicId(key);
-  const ext = key.split('.').pop()?.toLowerCase() ?? 'jpg';
-  const expiry = Math.floor(Date.now() / 1000) + ttlSeconds;
-
-  const sig = createHash('sha256')
-    .update(`public_id=${publicId}&timestamp=${expiry}${apiSecret}`)
-    .digest('hex');
-
-  const url =
-    `https://res.cloudinary.com/${encodeURIComponent(cloudName)}/image/authenticated` +
-    `/s--${sig.substring(0, 8)}--/${publicId}.${ext}` +
-    `?_a=${encodeURIComponent(apiKey)}&_t=${expiry}&_s=${sig}`;
-
-  return { url, expiresAt: new Date(expiry * 1000) };
 }
 
 // ─────────────────────────────────────────────── public interface
@@ -248,18 +236,15 @@ function sign(body: string): string {
 }
 
 /**
- * A short-lived, single-purpose read URL.
- * In cloudinary mode: returns a Cloudinary signed delivery URL (no API proxy hop).
- * In local mode: returns an HMAC-signed API URL that proxies the file bytes.
+ * Build a short-lived, single-purpose read URL.
+ *
+ * Both providers return an API URL: the signed token is verified here and the bytes are proxied
+ * from `getObject`. Cloudinary's own delivery URLs need a CDN-signature format that this adapter
+ * does not reproduce, and a URL that silently 404s for a reviewer is worse than one extra hop.
  */
 export function signObjectKey(key: string, ttlSeconds = config.FILE_URL_TTL_SECONDS): { url: string; expiresAt: Date } {
   if (!isValidKey(key)) throw new Error('invalid object key');
 
-  if (config.STORAGE_PROVIDER === 'cloudinary') {
-    return cloudinarySignedUrl(key, ttlSeconds);
-  }
-
-  // local — HMAC-signed token in the API path
   const payload: SignedPayload = { k: key, e: Math.floor(Date.now() / 1000) + ttlSeconds };
   const body = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
   const token = `${body}.${sign(body)}`;

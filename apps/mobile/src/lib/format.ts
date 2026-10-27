@@ -373,6 +373,10 @@ const ERROR_COPY: Record<string, { title: string; body: string }> = {
   MODE_DISABLED: { title: 'That travel mode is not open', body: 'Only car travellers can carry parcels at launch.' },
   CITY_NOT_SERVICED: { title: 'That city is not covered yet', body: 'Choose a serviceable city.' },
   UPLOAD_FAILED: { title: 'The photo did not upload', body: 'Check your connection and choose it again.' },
+  UPLOAD_EXPIRED: {
+    title: 'Those photos are gone',
+    body: 'The upload did not last until submission. Attach the document and the selfie again.',
+  },
   SESSION_NOT_TRANSPORTED: { title: 'Sign-in could not be kept', body: 'This build cannot store the session. Update the app.' },
   OTP_ATTEMPTS_EXCEEDED: { title: 'Too many wrong codes', body: 'This booking is paused for review. Contact support.' },
   BOOKING_LOCKED: { title: 'This booking is paused', body: 'Too many wrong codes. Support will review it.' },
@@ -394,6 +398,9 @@ export function errorCopy(error: unknown): { title: string; body: string } {
     if (error.code === 'OTP_INVALID' && typeof error.details.attempts_remaining === 'number') {
       const left = error.details.attempts_remaining;
       return { title: 'That code is not right', body: `${left} ${left === 1 ? 'try' : 'tries'} left.` };
+    }
+    if (error.code === 'VALIDATION_FAILED' && error.details.field === 'object_key') {
+      return { title: 'Attach the photos again', body: 'Those uploads do not belong to this account.' };
     }
     return (
       ERROR_COPY[error.code] ?? {

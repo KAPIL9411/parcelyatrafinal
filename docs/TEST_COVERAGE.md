@@ -28,7 +28,7 @@ broken" and stops rather than printing a pass it did not earn.
 | `node scripts/kyc-review.mjs` | supporting (staff identity review) | 25 passed, 0 failed |
 | `node scripts/concurrency.mjs` | supporting (booking atomicity) | 11 passed, 0 failed |
 | `node scripts/ratelimit.mjs` | supporting (limiters) | 14 passed, 0 failed |
-| `npm test` | unit: domain + api + mobile | 64 passed + 25 passed + 8 passed, 0 failed |
+| `npm test` | unit: domain + api + mobile | 64 passed + 29 passed + 8 passed, 0 failed |
 | `npm run typecheck` | all four workspaces | clean |
 | `npm run build` | `@py/web` production build | clean (one chunk-size warning) |
 

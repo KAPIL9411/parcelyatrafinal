@@ -87,6 +87,7 @@ export type ErrorCode =
   | 'CONVERSATION_CLOSED'
   | 'UPLOAD_INVALID_TYPE'
   | 'UPLOAD_TOO_LARGE'
+  | 'UPLOAD_EXPIRED'
   | 'WEBHOOK_SIGNATURE_INVALID'
   | 'WEBHOOK_TIMESTAMP_INVALID'
   | 'WEBHOOK_UNKNOWN_TYPE'
@@ -195,6 +196,10 @@ export const ERROR_TABLE: Record<ErrorCode, Spec> = {
   CONVERSATION_CLOSED: { status: 409, message: 'This delivery is closed, so the chat is read-only.' },
   UPLOAD_INVALID_TYPE: { status: 400, message: 'Upload a JPEG or PNG.' },
   UPLOAD_TOO_LARGE: { status: 400, message: 'Files must be 10 MB or smaller.' },
+  UPLOAD_EXPIRED: {
+    status: 400,
+    message: 'The uploaded photos are no longer available. Attach them again.',
+  },
   WEBHOOK_SIGNATURE_INVALID: { status: 401, message: 'Signature check failed.' },
   WEBHOOK_TIMESTAMP_INVALID: { status: 401, message: 'Timestamp outside tolerance.' },
   WEBHOOK_UNKNOWN_TYPE: { status: 400, message: 'Unknown event type.' },

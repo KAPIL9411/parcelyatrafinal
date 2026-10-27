@@ -121,7 +121,7 @@ export async function verificationRoutes(app: FastifyInstance): Promise<void> {
         // a MIME type nobody sniffed and a size nobody measured are exactly what a reviewer would
         // then trust, so they are not written at all.
         const object = await getObject(doc.key);
-        if (!object) throw new AppError('VALIDATION_FAILED', { field: 'object_key' }, 'Upload the document again.');
+        if (!object) throw new AppError('UPLOAD_EXPIRED');
         await tx.query(
           `INSERT INTO verification_documents
             (verification_id, kind, object_key, content_sha256, mime_type, byte_size, purge_after)

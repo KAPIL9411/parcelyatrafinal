@@ -671,6 +671,62 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
   remain on the tombstone and are not transferred. The day-7 anonymisation and day-30 purge in
   `database/RETENTION_AND_DELETION.md` are still not automated (no worker in this build).
 
+### DEFECT-027 — verification submission answers 400 "Check the details" and hides the reason
+
+- **OBSERVED (production console):** signing in and opening `/verify`, `POST /v1/verifications`
+  answered **400** and the page showed "Check the details / One of the fields needs a different
+  value." with reference `d486072e-422b-4d99-a5fc-e3aeb836bea1`. A **401** on the first
+  `GET /v1/verifications` appeared in the same console.
+- **Cause — four layers of the same silence:**
+  - The submit path re-reads every uploaded object to measure its true MIME type, size and hash
+    (`getObject`). When the bytes were gone it threw `VALIDATION_FAILED { field: 'object_key' }`
+    ("Upload the document again."). The client's `errorCopy` maps by code only, so
+    `VALIDATION_FAILED` collapsed to the generic "Check the details" copy and discarded both the
+    server message and `details`. Nothing told the person which field, or that re-uploading was the
+    fix.
+  - `cloudinaryGet` requested `/image/download` without `type: 'authenticated'`, while
+    `cloudinaryPut` stores with `type: 'authenticated'`. Every Cloudinary-backed read would have
+    returned a non-200 (and thus "bytes gone") even when the asset existed. The delivery-URL
+    signature also used the default SHA-1 algorithm while the upload signature asked for SHA-256.
+  - `signObjectKey` hand-built a Cloudinary CDN delivery URL for authenticated assets; that URL
+    format is not reproduced by this adapter and would 404 for the reviewer.
+  - On a host with an ephemeral filesystem (Render), a local-disk upload survives only until the
+    next deploy/restart, which is how bytes go missing in the first place.
+  - The 401 is separate: the page fires `GET /verifications/me` before the access token is in
+    memory; the client refreshes once and retries, so it is a benign bootstrap 401 unless it
+    repeats after sign-in.
+- **CHANGED:**
+  - `lib/errors.ts` — new `UPLOAD_EXPIRED` (400, "The uploaded photos are no longer available.
+    Attach them again."), catalogued with the rest.
+  - `routes/verification.ts` — a submit whose object cannot be read now throws `UPLOAD_EXPIRED`;
+    a key owned by someone else still throws `VALIDATION_FAILED { field: 'object_key' }`. Both
+    happen before the verification row is written, so a failed attempt is not spent.
+  - `lib/storage.ts` — `cloudinaryGet` sends `type=authenticated` and
+    `signature_algorithm=sha256` and fetches through `/image/download`; `cloudinaryPut` declares
+    `signature_algorithm: 'sha256'`; `signObjectKey` returns the API's HMAC-signed proxy URL for
+    both providers, so one verified code path serves reads.
+  - `apps/web/src/lib/copy.ts`, `apps/mobile/src/lib/format.ts` — `UPLOAD_EXPIRED` copy, and
+    `VALIDATION_FAILED { details.field: 'object_key' }` gets its own title/hint instead of the
+    generic message.
+  - `apps/web/src/screens/Verification.tsx`, `apps/mobile/app/verification.tsx` — on either code,
+    the three uploaded keys are cleared so the panel asks for the photos instead of resubmitting
+    keys the server will keep refusing.
+- **Verification:** `apps/api/test/verification-upload.test.ts` (4 tests) drives the real routes
+  over a ticket + upload sink: a submission with its own uploads returns 201 with two
+  `verification_documents` rows carrying the measured MIME type, exact byte size and a 64-hex
+  SHA-256; a fabricated ghost key returns 400 `UPLOAD_EXPIRED` and writes no verification row
+  (the attempt is not spent); another account's key returns 400 `VALIDATION_FAILED` with
+  `details.field === 'object_key'`; the upload URL points at the API sink and a PUT under a
+  foreign key is refused. Full run: 29/29 API, 64/64 domain, 8/8 mobile, workspace typecheck
+  clean.
+- **Not covered:** no Cloudinary credentials exist in this environment, so the Cloudinary branch
+  is code-reviewed and typechecked, not executed. The local branch is what the tests exercise.
+- **Operational requirement, stated plainly:** production `POST /v1/verifications` can only keep
+  working across restarts if `STORAGE_PROVIDER=cloudinary` with real
+  `CLOUDINARY_CLOUD_NAME`/`API_KEY`/`API_SECRET`, or the API runs on a host with a persistent
+  disk. With the default local provider on an ephemeral filesystem, uploads are lost on every
+  deploy and the new error is what the person will see — correct, but a dead end.
+
 ---
 
 ## 2. Other deviations
@@ -776,9 +832,10 @@ undefined here on purpose rather than being invented.
 - `npm run typecheck` — domain, API, web and mobile all clean.
 - `npm test` — 64/64 domain tests pass (money, pricing, eligibility, the booking state machine,
   refunds, and the matching engine: hard gates, score arithmetic, tie-breaks, policy validation,
-  low-confidence fallback, truthfulness of the reason codes), 25/25 API tests (the `ADMIN_EMAILS`
-  grant, the Google handshake short of the call to Google, the native session transport, and the
-  deletion/recovery identity cases in DEFECT-026), and 8/8 mobile transport tests. **The Google leg
+  low-confidence fallback, truthfulness of the reason codes), 29/29 API tests (the `ADMIN_EMAILS`
+  grant, the Google handshake short of the call to Google, the native session transport, the
+  deletion/recovery identity cases in DEFECT-026, and the upload/submission cases in
+  DEFECT-027), and 8/8 mobile transport tests. **The Google leg
   is not tested here**: it needs a real ID token from a configured OAuth client, and this build has
   no credentials. What is proven is the function that sign-in calls.
 - `node scripts/smoke.mjs --reset` — 57 checks pass, 0 fail. Covers sign-in, upload ownership,
