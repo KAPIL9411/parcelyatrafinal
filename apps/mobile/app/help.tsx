@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { router } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 
 import {
   AppText,
@@ -10,6 +11,7 @@ import {
   Row,
   Screen,
 } from '../src/components/ui.tsx';
+import { InfoNote, QuickTile, SectionHead } from '../src/components/kit.tsx';
 import { colors, font, radius, spacing } from '../src/theme.ts';
 
 const FAQ = [
@@ -52,58 +54,185 @@ const FAQ = [
 ];
 
 export default function HelpScreen() {
-  const [open, setOpen] = useState<number | null>(null);
+  const [open, setOpen] = useState<number | null>(0);
 
   return (
     <Screen>
-      <AppText variant="label" tone="muted" style={{ textTransform: 'uppercase' }}>
-        Help
-      </AppText>
-      <AppText variant="title" style={{ marginTop: 4 }}>
-        How can we help?
-      </AppText>
-      <AppText variant="small" tone="muted" style={{ marginTop: 4 }}>
-        Most questions are answered below. Support is a person, and we answer within 48 hours.
-      </AppText>
-
-      <View style={{ marginTop: spacing.lg, gap: spacing.sm }}>
-        {FAQ.map((item, index) => {
-          const expanded = open === index;
-          return (
-            <Pressable
-              key={item.q}
-              accessibilityRole="button"
-              accessibilityState={{ expanded }}
-              onPress={() => setOpen(expanded ? null : index)}
-              style={{
-                backgroundColor: colors.surface,
-                borderWidth: 1,
-                borderColor: colors.line,
-                borderRadius: radius.lg,
-                padding: spacing.md,
-              }}
-            >
-              <Row style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                <AppText variant="body" style={{ fontFamily: font.semibold, flex: 1 }}>
-                  {item.q}
-                </AppText>
-                <AppText variant="body" tone="muted">
-                  {expanded ? '−' : '+'}
-                </AppText>
-              </Row>
-              {expanded ? (
-                <AppText variant="small" tone="muted" style={{ marginTop: spacing.sm }}>
-                  {item.a}
-                </AppText>
-              ) : null}
-            </Pressable>
-          );
-        })}
+      {/* hero */}
+      <View
+        style={{
+          backgroundColor: colors.navy,
+          borderRadius: radius.xl,
+          padding: spacing.lg,
+          overflow: 'hidden',
+        }}
+      >
+        <View
+          style={{
+            position: 'absolute',
+            width: 170,
+            height: 170,
+            borderRadius: 85,
+            backgroundColor: 'rgba(10,87,255,0.32)',
+            right: -60,
+            top: -70,
+          }}
+        />
+        <Row style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <View style={{ flex: 1 }}>
+            <AppText variant="label" style={{ color: colors.accent, letterSpacing: 1.1 }}>
+              SUPPORT
+            </AppText>
+            <AppText variant="title" tone="white" style={{ marginTop: 4 }}>
+              How can we help?
+            </AppText>
+            <AppText variant="small" tone="onDark" style={{ marginTop: 2 }}>
+              Most questions are answered below. If not, support is a person, and we answer within 48 hours.
+            </AppText>
+          </View>
+          <View
+            style={{
+              width: 46,
+              height: 46,
+              borderRadius: 23,
+              backgroundColor: 'rgba(255,255,255,0.12)',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Ionicons name="help-buoy" size={22} color={colors.white} />
+          </View>
+        </Row>
+        <Row gap={spacing.sm} style={{ marginTop: spacing.md, flexWrap: 'wrap' }}>
+          <View style={pill}>
+            <Ionicons name="person" size={11} color={colors.accent} />
+            <AppText variant="micro" style={{ color: colors.white, fontFamily: font.regular }}>
+              A person replies
+            </AppText>
+          </View>
+          <View style={pill}>
+            <Ionicons name="time" size={11} color={colors.accent} />
+            <AppText variant="micro" style={{ color: colors.white, fontFamily: font.regular }}>
+              Within 48 hours
+            </AppText>
+          </View>
+        </Row>
       </View>
 
-      <Card style={{ marginTop: spacing.lg }}>
-        <AppText variant="heading">Still stuck?</AppText>
-        <AppText variant="body" tone="muted" style={{ marginTop: spacing.sm }}>
+      {/* policy shortcuts */}
+      <View style={{ marginTop: spacing.xl }}>
+        <SectionHead eyebrow="Policies" title="The rules, in plain words" />
+        <Row gap={spacing.md} style={{ alignItems: 'stretch' }}>
+          <QuickTile
+            icon="pricetag"
+            title="Pricing"
+            subtitle="What you pay and what a traveller earns"
+            onPress={() => router.push('/info/pricing')}
+          />
+          <QuickTile
+            icon="shield-checkmark"
+            title="Safety"
+            subtitle="Codes, photos and verification"
+            onPress={() => router.push('/info/safety')}
+            tint={colors.successBg}
+            iconColor={colors.success}
+          />
+        </Row>
+        <Row gap={spacing.md} style={{ alignItems: 'stretch', marginTop: spacing.md }}>
+          <QuickTile
+            icon="ban"
+            title="Prohibited"
+            subtitle="What can never travel"
+            onPress={() => router.push('/info/prohibited')}
+            tint={colors.dangerBg}
+            iconColor={colors.danger}
+          />
+          <QuickTile
+            icon="megaphone"
+            title="Grievance"
+            subtitle="Escalate a complaint to a person"
+            onPress={() => router.push('/info/grievance')}
+            tint={colors.warnBg}
+            iconColor={colors.warn}
+          />
+        </Row>
+      </View>
+
+      {/* FAQ */}
+      <View style={{ marginTop: spacing.xxl }}>
+        <SectionHead title="Common questions" />
+        <View style={{ gap: spacing.sm }}>
+          {FAQ.map((item, index) => {
+            const expanded = open === index;
+            return (
+              <Pressable
+                key={item.q}
+                accessibilityRole="button"
+                accessibilityState={{ expanded }}
+                onPress={() => setOpen(expanded ? null : index)}
+                style={({ pressed }) => [
+                  {
+                    backgroundColor: colors.surface,
+                    borderWidth: 1,
+                    borderColor: expanded ? '#d5e2ff' : colors.line,
+                    borderRadius: radius.lg,
+                    padding: spacing.md,
+                  },
+                  pressed && { opacity: 0.9 },
+                ]}
+              >
+                <Row style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                  <AppText variant="body" style={{ fontFamily: font.semibold, flex: 1 }}>
+                    {item.q}
+                  </AppText>
+                  <View
+                    style={{
+                      width: 24,
+                      height: 24,
+                      borderRadius: 12,
+                      backgroundColor: expanded ? colors.brandSoft : colors.canvas,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Ionicons
+                      name={expanded ? 'remove' : 'add'}
+                      size={15}
+                      color={expanded ? colors.brandDark : colors.ink500}
+                    />
+                  </View>
+                </Row>
+                {expanded ? (
+                  <AppText variant="small" tone="muted" style={{ marginTop: spacing.sm, lineHeight: 21 }}>
+                    {item.a}
+                  </AppText>
+                ) : null}
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+
+      {/* still stuck */}
+      <Card style={{ marginTop: spacing.xl }}>
+        <Row gap={spacing.sm} style={{ alignItems: 'center' }}>
+          <View
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 18,
+              backgroundColor: colors.brandSoft,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Ionicons name="chatbubbles" size={18} color={colors.brandDark} />
+          </View>
+          <AppText variant="heading" style={{ flex: 1 }}>
+            Still stuck?
+          </AppText>
+        </Row>
+        <AppText variant="small" tone="muted" style={{ marginTop: spacing.sm, lineHeight: 21 }}>
           Use the support route inside the booking. Include the booking reference, what happened, when, and
           any photos or documents that support it. Do not send an Aadhaar copy.
         </AppText>
@@ -114,31 +243,55 @@ export default function HelpScreen() {
         />
         <Button
           label="Open my bookings"
-          variant="secondary"
           onPress={() => router.push('/bookings')}
           style={{ marginTop: spacing.md }}
         />
+        <Button
+          label="Read the grievance process"
+          variant="secondary"
+          onPress={() => router.push('/info/grievance')}
+          style={{ marginTop: spacing.sm }}
+        />
       </Card>
 
-      <Card style={{ marginTop: spacing.md, backgroundColor: colors.canvas, shadowOpacity: 0, elevation: 0 }}>
-        <AppText variant="subheading">What this build does not do</AppText>
-        <Fact text="No live GPS or map. Status comes from people marking each step." />
-        <Fact text="No automatic parcel insurance." />
-        <Fact text="Payouts are disabled at launch." />
-        <Fact text="Payments cannot be captured: a booking can request one, but it stays unpaid." />
-        <Fact text="Only car travel carries parcels. Bikes, buses, trains and flights are not open." />
-      </Card>
+      {/* honest limits */}
+      <View style={{ marginTop: spacing.lg }}>
+        <Card style={{ backgroundColor: colors.canvas, shadowOpacity: 0, elevation: 0 }}>
+          <AppText variant="subheading">What this build does not do</AppText>
+          <Fact text="No live GPS or map. Status comes from people marking each step." />
+          <Fact text="No automatic parcel insurance." />
+          <Fact text="Payouts are disabled at launch." />
+          <Fact text="Payments cannot be captured: a booking can request one, but it stays unpaid." />
+          <Fact text="Only car travel carries parcels. Bikes, buses, trains and flights are not open." />
+        </Card>
+      </View>
+
+      <View style={{ marginTop: spacing.lg }}>
+        <InfoNote
+          icon="lock-closed"
+          title="Your number stays private"
+          body="The other side sees a masked number and a first name. Chat and calls stay attached to the booking."
+        />
+      </View>
     </Screen>
   );
 }
 
+const pill = {
+  flexDirection: 'row' as const,
+  alignItems: 'center' as const,
+  gap: 5,
+  backgroundColor: 'rgba(255,255,255,0.10)',
+  borderRadius: radius.pill,
+  paddingHorizontal: 10,
+  paddingVertical: 5,
+};
+
 function Fact({ text }: { text: string }) {
   return (
     <Row gap={spacing.sm} style={{ alignItems: 'flex-start', marginTop: 6 }}>
-      <AppText variant="small" tone="brand">
-        •
-      </AppText>
-      <AppText variant="small" style={{ flex: 1 }}>
+      <Ionicons name="close-circle" size={14} color={colors.ink300} style={{ marginTop: 2 }} />
+      <AppText variant="small" style={{ flex: 1, lineHeight: 20 }}>
         {text}
       </AppText>
     </Row>

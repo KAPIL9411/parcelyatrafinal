@@ -262,11 +262,30 @@ export interface QuoteLine {
 export interface Quote {
   id: string;
   formula_version: string;
+  policy_version: string;
   subtotal_paise: number;
   platform_fee_paise: number;
   tax_paise: number;
   total_paise: number;
   traveller_paise: number;
+  commission_paise: number;
+  traveller_subsidy_paise: number;
+  discount_paise: number;
+  platform_net_paise: number;
+  loss_making: boolean;
+  within_limits: boolean;
+  warnings: string[];
+  /** Road distance the fare was computed on, rounded only for display. */
+  road_distance_km: number;
+  /** `routed` means a provider measurement; `estimated` means no measured distance exists yet. */
+  distance_source: 'routed' | 'estimated';
+  /** `candidate` → `calculated` → `approved` → `operational`, plus `failed` / `retired`. */
+  route_status: string;
+  route_provider: string | null;
+  route_measured_at: string | null;
+  billable_weight_kg: number;
+  volumetric_weight_kg: number;
+  service_mode: string;
   expires_at: string;
   breakdown: QuoteLine[];
 }

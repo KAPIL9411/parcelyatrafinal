@@ -48,6 +48,34 @@ import {
 
 const MAX_VALUE_RUPEES = 5000;
 
+/**
+ * Route status is not a booking promise: only an `operational` edge backed by a measured distance
+ * is bookable. The labels here exist so a sender can see which rung the pair is actually on.
+ */
+const ROUTE_STATUS_LABELS: Record<string, string> = {
+  unverified: 'unverified',
+  candidate: 'not measured yet',
+  calculated: 'measured, awaiting approval',
+  approved: 'approved, not yet operational',
+  operational: 'operational',
+  cached: 'measured, not yet approved',
+  failed: 'measurement failed',
+  retired: 'retired',
+};
+
+const DISTANCE_PROVIDER_LABELS: Record<string, string> = {
+  google_routes: 'Google Routes',
+};
+
+function providerName(provider: string | null): string {
+  if (!provider) return 'the routing provider';
+  return DISTANCE_PROVIDER_LABELS[provider] ?? provider;
+}
+
+function formatKm(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
 interface ItemState {
   category: Category;
   description: string;
@@ -789,6 +817,41 @@ export function Send() {
                         meta={formatWindow(fromLocalInput(route.windowStart), fromLocalInput(route.windowEnd))}
                       />
                     </div>
+
+                    <div className="mt-3 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-sm text-ink-500">
+                      <span>
+                        Road distance{' '}
+                        <span className="tabular font-semibold text-ink-900">{formatKm(quote.road_distance_km)} km</span>
+                      </span>
+                      <span>
+                        Basis{' '}
+                        <span
+                          className={cn(
+                            'font-semibold',
+                            quote.distance_source === 'routed' ? 'text-ink-900' : 'text-warn-600',
+                          )}
+                        >
+                          {quote.distance_source === 'routed' ? 'Measured' : 'Estimate'}
+                        </span>
+                      </span>
+                      <span>
+                        Billable <span className="tabular font-semibold text-ink-900">{kg(quote.billable_weight_kg)}</span>
+                      </span>
+                      <span>
+                        Route{' '}
+                        <span className="font-semibold text-ink-900">
+                          {ROUTE_STATUS_LABELS[quote.route_status] ?? quote.route_status}
+                        </span>
+                      </span>
+                    </div>
+
+                    <p className="mt-1.5 text-xs text-ink-500">
+                      {quote.distance_source === 'routed'
+                        ? `Road distance measured by ${providerName(quote.route_provider)}${
+                            quote.route_measured_at ? ` on ${formatDateTime(quote.route_measured_at)}` : ''
+                          }.`
+                        : 'This fare uses an estimated road distance — no routing provider has measured this city pair yet. The total may change once it is measured.'}
+                    </p>
 
                     <div className="mt-4">
                       {quote.breakdown.map((line) => (

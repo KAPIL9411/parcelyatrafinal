@@ -23,6 +23,8 @@ import { messageRoutes } from './routes/messages.ts';
 import { notificationRoutes } from './routes/notifications.ts';
 import { fileRoutes, filePublicRoutes } from './routes/files.ts';
 import { adminRoutes } from './routes/admin.ts';
+import { adminGeoRoutes } from './routes/admin-geo.ts';
+import { geoRoutes } from './routes/geo.ts';
 import { googleAuthRoutes } from './routes/google-auth.ts';
 import { webhookRoutes } from './routes/webhooks.ts';
 import { devRoutes } from './routes/dev.ts';
@@ -222,6 +224,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(healthRoutes, { prefix: '/v1' });
   await app.register(authRoutes, { prefix: '/v1' });
   await app.register(catalogueRoutes, { prefix: '/v1' });
+  await app.register(geoRoutes, { prefix: '/v1' });
   await app.register(webhookRoutes, { prefix: '/v1' });
   // Signed file reads carry their own credential in the path, so they sit outside the auth hook.
   await app.register(filePublicRoutes, { prefix: '/v1' });
@@ -249,6 +252,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(googleAuthRoutes, { prefix: '/v1' });
 
   await app.register(adminRoutes, { prefix: '/v1' });
+  await app.register(adminGeoRoutes, { prefix: '/v1' });
 
   if (config.ENABLE_DEV_ENDPOINTS) {
     await app.register(devRoutes, { prefix: '/v1' });

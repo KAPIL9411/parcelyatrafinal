@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 import { router } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Ionicons } from '@expo/vector-icons';
 
 import { filesApi, travellerApi } from '../src/api/client.ts';
 import { ApiError } from '../src/api/http.ts';
@@ -141,20 +142,53 @@ function VerificationFlow() {
 
   return (
     <Screen>
-      <Row style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <View style={{ flex: 1 }}>
-          <AppText variant="label" tone="muted" style={{ textTransform: 'uppercase' }}>
-            Traveller verification
-          </AppText>
-          <AppText variant="title" style={{ marginTop: 4 }}>
-            Verify your ID
-          </AppText>
-        </View>
-        <Badge label={statusLabel(state)} tone={statusTone(state)} />
-      </Row>
-      <AppText variant="small" tone="muted" style={{ marginTop: 4 }}>
-        One photo ID and a selfie. A person checks them. It usually takes under 24 hours.
-      </AppText>
+      <View
+        style={{
+          backgroundColor: colors.navy,
+          borderRadius: radius.xl,
+          padding: spacing.lg,
+          overflow: 'hidden',
+        }}
+      >
+        <View
+          style={{
+            position: 'absolute',
+            width: 160,
+            height: 160,
+            borderRadius: 80,
+            backgroundColor: 'rgba(10,87,255,0.32)',
+            right: -55,
+            top: -70,
+          }}
+        />
+        <Row gap={spacing.md} style={{ alignItems: 'flex-start' }}>
+          <View
+            style={{
+              width: 46,
+              height: 46,
+              borderRadius: 14,
+              backgroundColor: 'rgba(232,179,60,0.18)',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Ionicons name="shield-checkmark" size={24} color={colors.accent} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <AppText variant="label" style={{ color: colors.accent, letterSpacing: 1.1 }}>
+              TRAVELLER VERIFICATION
+            </AppText>
+            <AppText variant="title" tone="white" style={{ marginTop: 3 }}>
+              Verify your ID
+            </AppText>
+          </View>
+          <Badge label={statusLabel(state)} tone={statusTone(state)} />
+        </Row>
+        <AppText variant="small" tone="onDark" style={{ marginTop: spacing.sm }}>
+          One photo ID and a selfie. A person checks them. It usually takes under 24 hours.
+        </AppText>
+        <VerifySteps state={state} />
+      </View>
 
       {state === 'verified' ? (
         <Card style={{ marginTop: spacing.lg }}>
@@ -346,6 +380,80 @@ function Fact({ text }: { text: string }) {
       <AppText variant="small" style={{ flex: 1 }}>
         {text}
       </AppText>
+    </Row>
+  );
+}
+
+function VerifySteps({ state }: { state: string }) {
+  const labels = ['Photos', 'Review', 'Approved'];
+  const completed = state === 'verified' ? 3 : state === 'pending' ? 1 : 0;
+  return (
+    <Row gap={0} style={{ marginTop: spacing.lg, alignItems: 'flex-start' }}>
+      {labels.map((label, index) => {
+        const done = index < completed;
+        const current = index === completed;
+        return (
+          <View key={label} style={{ flex: 1, alignItems: 'center' }}>
+            <Row gap={0} style={{ width: '100%', alignItems: 'center' }}>
+              <View
+                style={{
+                  flex: 1,
+                  height: 2,
+                  backgroundColor: index === 0 ? 'transparent' : done || current ? colors.accent : 'rgba(255,255,255,0.20)',
+                }}
+              />
+              <View
+                style={{
+                  width: 20,
+                  height: 20,
+                  borderRadius: 10,
+                  backgroundColor: done ? colors.accent : 'transparent',
+                  borderWidth: done ? 0 : 2,
+                  borderColor: current ? colors.white : 'rgba(255,255,255,0.30)',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                {done ? (
+                  <Ionicons name="checkmark" size={12} color={colors.navy} />
+                ) : (
+                  <View
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: 3,
+                      backgroundColor: current ? colors.white : 'transparent',
+                    }}
+                  />
+                )}
+              </View>
+              <View
+                style={{
+                  flex: 1,
+                  height: 2,
+                  backgroundColor:
+                    index === labels.length - 1
+                      ? 'transparent'
+                      : index < completed
+                        ? colors.accent
+                        : 'rgba(255,255,255,0.20)',
+                }}
+              />
+            </Row>
+            <AppText
+              variant="micro"
+              numberOfLines={1}
+              style={{
+                marginTop: 6,
+                color: done ? colors.accent : current ? colors.white : 'rgba(255,255,255,0.55)',
+                fontFamily: current ? font.bold : font.regular,
+              }}
+            >
+              {label}
+            </AppText>
+          </View>
+        );
+      })}
     </Row>
   );
 }

@@ -9,7 +9,8 @@
     "ios": "expo run:ios",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
-    "export:android": "expo export --platform android --output-dir dist-android"
+    "export:android": "expo export --platform android --output-dir dist-android",
+    "lint": "expo lint"
   },
   "dependencies": {
     "@expo-google-fonts/titillium-web": "^0.4.1",
@@ -41,6 +42,8 @@
   },
   "devDependencies": {
     "@types/react": "~19.3.0",
+    "eslint": "^9.0.0",
+    "eslint-config-expo": "~58.0.4",
     "tsx": "^4.23.15",
     "typescript": "~6.0.3"
   }

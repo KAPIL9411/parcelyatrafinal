@@ -36,7 +36,7 @@
 
 import type { Category, MatchBand, MatchReasonCode, ReliabilityBand, TransportMode, VerificationState } from './enums.ts';
 import { detectProhibitedContent, PILOT_LIMITS } from './eligibility.ts';
-import { indicativePricePaise } from './pricing.ts';
+import { indicativeLaunchPricePaise } from './launch-pricing.ts';
 
 export const MATCHING_FORMULA_VERSION = 'match-p1.0';
 
@@ -482,7 +482,7 @@ export function rankMatches(input: MatchInput, trips: readonly TripCandidate[]):
         arrival_estimate_at: trip.arrivalEstimateAt.toISOString(),
         capacity_kg_remaining: trip.capacityKgRemaining,
         pickup_distance_band_km: distanceBandKm(trip.originDetourKm),
-        indicative_price_paise: indicativePricePaise(input.corridorKm, input.weightKg, input.category),
+        indicative_price_paise: indicativeLaunchPricePaise(input.corridorKm, input.weightKg, input.category),
         accepts_documents_only: trip.acceptsDocumentsOnly,
         score_breakdown: { formula_version: policy.version, fit, points },
       },

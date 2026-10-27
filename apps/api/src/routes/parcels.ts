@@ -7,7 +7,7 @@ import {
   evaluateEligibility,
   haversineKm,
   rankMatches,
-  quotePrice,
+  quoteLaunchPrice,
   type Category,
   type TripCandidate,
   type TransportMode,
@@ -18,6 +18,8 @@ import { matchPolicy } from '../lib/matching-policy.ts';
 import { AppError } from '../lib/errors.ts';
 import { requireAuth } from '../lib/auth.ts';
 import { phoneHash, phoneLast4 } from '../lib/crypto.ts';
+import { loadActivePolicy, legacyQuoteColumns } from '../lib/pricing-policy.ts';
+import { resolveCityDistance, type ResolvedRoute } from '../lib/routing.ts';
 import { num, parcelView, toIso } from '../lib/serialize.ts';
 import { keyBelongsTo } from '../lib/storage.ts';
 import { audit } from '../services/audit.ts';
@@ -50,6 +52,7 @@ export interface CityRow {
   lat: string | number;
   lng: string | number;
   is_serviceable: boolean;
+  status?: string;
 }
 
 export interface ParcelRowFull {
@@ -116,6 +119,12 @@ export async function parcelRoutes(app: FastifyInstance): Promise<void> {
 
     const user = sender.rows[0];
     if (!user) throw new AppError('NOT_FOUND');
+    if (origin.status && origin.status !== 'active') {
+      throw new AppError('CITY_NOT_SERVICED', { city_id: origin.id, status: origin.status });
+    }
+    if (dest.status && dest.status !== 'active') {
+      throw new AppError('CITY_NOT_SERVICED', { city_id: dest.id, status: dest.status });
+    }
 
     const cancellations = await db.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM bookings
@@ -361,11 +370,52 @@ export async function parcelRoutes(app: FastifyInstance): Promise<void> {
       throw new AppError('NO_MATCH', { no_match_reasons: matches.no_match_reasons });
     }
 
-    const priced = quotePrice({
-      corridorKm: corridor.km,
-      weightKg: num(parcel.weight_kg),
+    if (corridor.route.kind === 'unavailable' || corridor.route.distanceKm === null) {
+      throw new AppError('CITY_NOT_SERVICED', {
+        reason: corridor.route.reason ?? 'distance_unresolved',
+        route_status: corridor.route.routeStatus,
+      });
+    }
+
+    const policy = await loadActivePolicy(db);
+    const priced = quoteLaunchPrice({
+      roadDistanceKm: corridor.route.distanceKm,
+      distanceSource: corridor.route.source ?? 'estimated',
+      actualWeightKg: num(parcel.weight_kg),
+      dimsCm: parcel.dims_cm,
       category: parcel.category as Category,
+      serviceMode: 'hub_to_hub',
+      policy,
     });
+
+    // The quote table predates the launch formula and requires subtotal + platform + tax = total.
+    // `legacyQuoteColumns` performs that split; the full v2 decomposition lives in breakdown/inputs.
+    const { subtotal_paise: subtotalPaise, platform_fee_paise: platformFeePaise } =
+      legacyQuoteColumns(priced);
+
+    const quoteInputs = {
+      formula_version: priced.formula_version,
+      policy_version: priced.policy_version,
+      policy: policy,
+      road_distance_km: priced.road_distance_km,
+      distance_source: priced.distance_source,
+      route_status: corridor.route.routeStatus,
+      route_provider: corridor.route.provider,
+      route_measured_at: corridor.route.travelledAt,
+      actual_weight_kg: priced.actual_weight_kg,
+      volumetric_weight_kg: priced.volumetric_weight_kg,
+      billable_weight_kg: priced.billable_weight_kg,
+      dims_cm: parcel.dims_cm,
+      category: parcel.category,
+      service_mode: 'hub_to_hub',
+      commission_paise: priced.commission_paise,
+      traveller_subsidy_paise: priced.traveller_subsidy_paise,
+      discount_paise: priced.discount_paise,
+      platform_net_paise: priced.platform_net_paise,
+      loss_making: priced.loss_making,
+      warnings: priced.warnings,
+    };
+
     const expiresAt = new Date(Date.now() + config.QUOTE_TTL_SECONDS * 1000);
 
     const inserted = await db.query<{ id: string }>(
@@ -376,9 +426,9 @@ export async function parcelRoutes(app: FastifyInstance): Promise<void> {
       [
         parcel.id,
         priced.formula_version,
-        JSON.stringify(priced.inputs),
-        priced.subtotal_paise,
-        priced.platform_fee_paise,
+        JSON.stringify(quoteInputs),
+        subtotalPaise,
+        platformFeePaise,
         priced.tax_paise,
         priced.total_paise,
         priced.traveller_paise,
@@ -393,17 +443,41 @@ export async function parcelRoutes(app: FastifyInstance): Promise<void> {
       action: 'quote.created',
       resource: 'quote',
       resourceId: inserted.rows[0]!.id,
-      after: { total_paise: priced.total_paise, formula_version: priced.formula_version },
+      after: {
+        total_paise: priced.total_paise,
+        formula_version: priced.formula_version,
+        policy_version: priced.policy_version,
+        distance_source: priced.distance_source,
+        route_status: corridor.route.routeStatus,
+        platform_net_paise: priced.platform_net_paise,
+        loss_making: priced.loss_making,
+      },
     });
 
     return reply.code(201).send({
       id: inserted.rows[0]!.id,
       formula_version: priced.formula_version,
-      subtotal_paise: priced.subtotal_paise,
-      platform_fee_paise: priced.platform_fee_paise,
+      policy_version: priced.policy_version,
+      subtotal_paise: subtotalPaise,
+      platform_fee_paise: platformFeePaise,
       tax_paise: priced.tax_paise,
       total_paise: priced.total_paise,
       traveller_paise: priced.traveller_paise,
+      commission_paise: priced.commission_paise,
+      traveller_subsidy_paise: priced.traveller_subsidy_paise,
+      discount_paise: priced.discount_paise,
+      platform_net_paise: priced.platform_net_paise,
+      loss_making: priced.loss_making,
+      within_limits: priced.within_limits,
+      warnings: priced.warnings,
+      road_distance_km: priced.road_distance_km,
+      distance_source: priced.distance_source,
+      route_status: corridor.route.routeStatus,
+      route_provider: corridor.route.provider,
+      route_measured_at: corridor.route.travelledAt,
+      billable_weight_kg: priced.billable_weight_kg,
+      volumetric_weight_kg: priced.volumetric_weight_kg,
+      service_mode: 'hub_to_hub',
       expires_at: toIso(expiresAt),
       breakdown: priced.breakdown,
     });
@@ -433,26 +507,32 @@ export async function parcelRoutes(app: FastifyInstance): Promise<void> {
 }
 
 interface Corridor {
+  /** Measured road distance when one exists; otherwise the labelled estimate. */
   km: number;
   origin: CityRow;
   dest: CityRow;
+  route: ResolvedRoute;
 }
 
 async function loadCorridor(app: FastifyInstance, parcel: ParcelRowFull): Promise<Corridor> {
   const res = await app.db.query<CityRow>(
-    `SELECT id, name, state, lat, lng, is_serviceable FROM cities WHERE id = ANY($1::uuid[])`,
+    `SELECT id, name, state, lat, lng, is_serviceable, status FROM cities WHERE id = ANY($1::uuid[])`,
     [[parcel.origin_city_id, parcel.dest_city_id]],
   );
   const origin = res.rows.find((c) => c.id === parcel.origin_city_id);
   const dest = res.rows.find((c) => c.id === parcel.dest_city_id);
   if (!origin || !dest) throw new AppError('CITY_NOT_SERVICED', { parcel_id: parcel.id });
+
+  const route = await resolveCityDistance(app.db, origin.id, dest.id);
+  const estimateKm = corridorKm(
+    { lat: Number(origin.lat), lng: Number(origin.lng) },
+    { lat: Number(dest.lat), lng: Number(dest.lng) },
+  );
   return {
     origin,
     dest,
-    km: corridorKm(
-      { lat: Number(origin.lat), lng: Number(origin.lng) },
-      { lat: Number(dest.lat), lng: Number(dest.lng) },
-    ),
+    route,
+    km: route.distanceKm ?? estimateKm,
   };
 }
 

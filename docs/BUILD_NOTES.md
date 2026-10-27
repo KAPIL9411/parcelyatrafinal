@@ -802,6 +802,65 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
 
 ---
 
+### DEFECT-029 — no connected network, no road distances, no launch fare engine
+
+- **OBSERVED:** the repository had three cities in the demo seeder, no state/zone/hotspot model, no
+  directed city pairs, no distance cache, and one flat quote formula. Matching distances were
+  great-circle only and the fare did not separate traveller pay, commission, subsidy, discount and
+  tax. Nothing could say which city pairs were measured, approved or operational.
+- **CHANGED:**
+  - `apps/api/migrations/0010_geo_network.sql` — countries, states, zones, hotspots, directed
+    `route_edges`, `distance_cache`, `pricing_policies`, `postal_benchmarks`; adds `state_id`,
+    `status`, `coordinate_source`, `coordinate_verified_at` to cities. Seeds the 8 launch cities
+    once each, 4–5 zones per city, 41 hotspot candidates with NULL coordinates, the 56 directed
+    candidate edges and one active policy. Database checks enforce the route ladder
+    (`operational` requires a distance), hotspot activation (coordinates + verification) and a
+    single active policy.
+  - `apps/api/src/lib/routing.ts` + `apps/api/scripts/geo-matrix.ts` — Google Routes
+    `computeRouteMatrix` client, resolution precedence (edge → fresh cache → labelled estimate →
+    refusal), per-element failure recording, and an offline matrix filler. Measurement is never on
+    a request path, and approved/operational edges are never overwritten.
+  - `packages/domain/src/launch-pricing.ts` — `v2.0-launch` formula with billable/volumetric
+    weight, route and weight costs, surge, discount, tax, commission, traveller subsidy, platform
+    net, minimum/maximum fare, with the reconciliation invariant checked before returning. The
+    quote table's legacy `total = subtotal + platform + tax` constraint is satisfied by mapping
+    commission into the split (`legacyQuoteColumns`); full decomposition is returned separately.
+  - `apps/api/src/routes/geo.ts`, `admin-geo.ts`, quote handler changes — public geo/route/
+    serviceability/journey endpoints; staff hotspot verification, route decisions, matrix refresh,
+    policy and benchmark management, all audited; quotes now store their policy snapshot, distance
+    provenance and cost decomposition.
+  - `apps/web` — the price card shows road distance, Measured vs Estimate, billable weight and
+    route status, with the provider and measurement time when a measured distance exists.
+  - `apps/web/src/components/NetworkAdmin.tsx` + the `network` tab in `screens/Admin.tsx` — the
+    staff console over the admin endpoints: coverage counters and per-city hotspot table, the route
+    ladder with per-pair measure / approve / operational / retire, the hotspot editor (coordinates,
+    verify / reject / suspend, activate, pickup and drop-off), pricing policy drafts with activation
+    and the recorded postal benchmarks with their source links. Write controls are gated on the
+    caller's own `/me` roles; the rows and refusals come from the server, and nothing is computed
+    locally. `/admin/geo/routes` now also returns `origin_city_id` / `dest_city_id` so a row can be
+    sent to `POST /admin/geo/routes/refresh`.
+- **CONTRACT:** `parcel-yatra-startup-pack/api/openapi.yaml` lists neither the five `/geo/*`
+  endpoints nor the eight `/admin/geo/*` endpoints, and its `Quote` schema is
+  `additionalProperties: false` with only the legacy money columns. The quote response now carries
+  `policy_version`, `commission_paise`, `traveller_subsidy_paise`, `discount_paise`,
+  `platform_net_paise`, `loss_making`, `within_limits`, `warnings`, `road_distance_km`,
+  `distance_source`, `route_status`, `route_provider`, `route_measured_at`, `billable_weight_kg`,
+  `volumetric_weight_kg` and `service_mode` on top of them. Nothing validates responses against the
+  pack at runtime, so no request breaks — but this is the same additive-contract situation as
+  DEFECT-005: the pack should gain these paths and fields before the API is frozen. The pack is
+  reference material, so it was not edited here.
+- **UNVERIFIED / NOT DONE:** no `GOOGLE_MAPS_API_KEY` exists in this workspace, so all 56 pairs
+  remain unmeasured and are priced on labelled estimates; no hotspot has coordinates, so doorstep
+  is refused; no Speed Post benchmark is stored. The staff console is new and has no test of its
+  own — it was walked through in a browser (below), but no state-changing press (verify a hotspot,
+  approve a route, activate a policy, record a benchmark) has been driven through it, because doing
+  so on this build would either need a provider key or write demo rows into the development
+  database. See `docs/GEO_NETWORK.md` §9 for the full list.
+- **Verification:** `geo-network`, `routing`, `launch-quote` and `geo-api` suites run against the
+  real app and PGlite; counts are recorded in `docs/TEST_COVERAGE.md`.
+
+---
+
 ## 2. Other deviations
 
 ### PGlite as the development database
@@ -903,15 +962,20 @@ undefined here on purpose rather than being invented.
 **OBSERVED**, on the machine that built it:
 
 - `npm run typecheck` — domain, API, web and mobile all clean.
-- `npm test` — 64/64 domain tests pass (money, pricing, eligibility, the booking state machine,
+- `npm test` — 73/73 domain tests pass (money, pricing, eligibility, the booking state machine,
   refunds, and the matching engine: hard gates, score arithmetic, tie-breaks, policy validation,
-  low-confidence fallback, truthfulness of the reason codes), 32/32 API tests (the `ADMIN_EMAILS`
+  low-confidence fallback, truthfulness of the reason codes — plus the nine launch-pricing cases in
+  DEFECT-029), 50/50 API tests (the `ADMIN_EMAILS`
   grant, the Google handshake short of the call to Google, the native session transport, the
   deletion/recovery identity cases in DEFECT-026, the upload/submission cases in
-  DEFECT-027/DEFECT-028, and the Cloudinary signature construction), and 8/8 mobile transport
+  DEFECT-027/DEFECT-028, the Cloudinary signature construction, and the geo-network, routing,
+  policy and geo-API suites), and 8/8 mobile transport
   tests. **The Google leg
   is not tested here**: it needs a real ID token from a configured OAuth client, and this build has
   no credentials. What is proven is the function that sign-in calls.
+  **Re-run 2026-10-27 after the staff console (DEFECT-029) landed:** typecheck clean,
+  73/50/8 still green, and `npm run build -w @py/web` produced the bundle with the new tab. The
+  console itself adds no test file.
 - `node scripts/smoke.mjs --reset` — 57 checks pass, 0 fail. Covers sign-in, upload ownership,
   parcel creation,
   prohibited-item refusal, matching, quote arithmetic, booking, acceptance, sandbox payment and
@@ -923,6 +987,42 @@ undefined here on purpose rather than being invented.
   A cancelled parcel can be booked again, so the "one active booking" index is genuinely partial.
 - Browser walkthrough of the sender and traveller happy path, the dispute path, verification
   submission and staff approval, the admin case queue, refund/payout refusal, and the audit log.
+- **RE-RUN 2026-10-27, after DEFECT-029 moved the quote to the v2 engine.** A temporary API on port
+  3001 with its own PGlite directory (`AUTO_SEED`, `PUBLIC_API_URL` matching the port) ran the whole
+  script matrix against itself: `smoke` 57 / `discovery` 46 / `trips` 40 / `journeys` 52 /
+  `messaging` 33 with the one honest skip / `concurrency` 11, all 0 failed, and `ratelimit` 14/14 on
+  a restart with `RATE_LIMIT_ENABLED=true` — the first attempt aborted because I had the limiters
+  switched off, which is an artifact of my harness, not of the build. The temporary process and its
+  database were removed afterwards; the developer's own API and web dev server were not touched.
+- **OBSERVED in the browser on 2026-10-27** (the local vite dev server and its `/v1` proxy): a real
+  three-step send — documents, 2 kg, 30×22×5 cm, ₹3,000 declared, Bareilly · Cantt → Delhi ·
+  Connaught Place — rendered the new price-card line as `Road distance 274 km · Basis Estimate ·
+  Billable 2 kg · Route unverified`, followed by "This fare uses an estimated road distance — no
+  routing provider has measured this city pair yet. The total may change once it is measured." The
+  server's breakdown came through as ₹12 base + ₹49.32 distance + ₹8 weight + ₹12.48 GST = ₹81.80,
+  held for 14:57. "Estimate" computed to the warning colour and the rest to ink-900; the console
+  showed no errors from this screen (only the pre-existing `hero-background.webp` preload warning on
+  a page that does not use the hero). The card was read through the DOM and computed styles — the
+  in-app browser had no visible surface, so no screenshot exists — and the **Measured branch has
+  never been rendered with real data**, because there is no routing key here to measure a pair.
+- **OBSERVED in the browser on 2026-10-27 (the new staff console).** Signed in as the seeded
+  development staff account (`+919000000009`, the roles the seed grants) and opened **Operations →
+  Network and pricing**: coverage read `10 active` cities, `56` directed routes with `0 measured ·
+  0 operational (0%)`, `0` postal benchmarks and the single active policy
+  `launch-2026-10-experiment (active)`; the route table held 56 rows all `candidate`, the hotspot
+  table 41 rows with coordinates `none`, and the benchmark panel showed its empty state ("Nothing has
+  been read from a postal tariff page and recorded here, so the product shows no comparison and
+  claims no saving"). Opening a route row exposed the ladder with the buttons the status allows —
+  Approve and Mark operational **disabled** on a candidate — and **Measure with the provider**
+  returned the server's own refusal, "Configure ROUTING_PROVIDER=google and GOOGLE_MAPS_API_KEY
+  before refreshing routes.", as a 503 with nothing written and the row still `candidate`. Filtering
+  routes to `operational` produced the honest empty state. Opening a hotspot showed empty coordinate
+  fields with **Save coordinates** disabled. The policy draft form opens with the launch tunables
+  (₹12 / ₹0.18 / ₹4 / 6%) and **Save as draft** disabled until a version and name are typed. The only
+  console error was that deliberate 503. Read through the DOM again — no screenshot surface. **Not
+  driven:** any successful write through this panel (verify, approve, activate, record, delete); each
+  of those transitions is covered by `geo-api.test.ts` against the API, not through this UI, and the
+  panel has no test file of its own.
 - `npm run build -w @py/web` — production bundle builds.
 - `npm run export:android -w @py/mobile` — Metro produced the Android bundle, 56 assets and a
   metadata file. This proves the app compiles for the platform; it is not an installable APK.

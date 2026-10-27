@@ -64,6 +64,8 @@ export function createPkce(): PkcePair {
  */
 export class GoogleAuthService {
   private readonly clientId: string;
+  /** Web client plus the native Android/iOS clients; a token is valid if it targets any of them. */
+  private readonly audiences: string[];
   private readonly clientSecret: string;
   private readonly redirectUri: string;
   private readonly enabled: boolean;
@@ -72,6 +74,10 @@ export class GoogleAuthService {
     // Credentials are validated lazily when the flow is actually used, so an API that has Google
     // OAuth disabled still boots even without Client ID/Secret configured.
     this.clientId = config.GOOGLE_CLIENT_ID ?? '';
+    this.audiences = [
+      this.clientId,
+      ...config.GOOGLE_ADDITIONAL_CLIENT_IDS.split(',').map((id) => id.trim()),
+    ].filter(Boolean);
     this.clientSecret = config.GOOGLE_CLIENT_SECRET ?? '';
     this.redirectUri = config.GOOGLE_REDIRECT_URI ?? '';
     this.enabled = config.GOOGLE_OAUTH_ENABLED;
@@ -172,7 +178,9 @@ export class GoogleAuthService {
     try {
       const verified = await jwtVerify(idToken, keySet(), {
         issuer: GOOGLE_ISSUERS,
-        audience: this.clientId,
+        // One token, several legitimate audiences: the web client for the browser flow and the
+        // Android/iOS clients for `POST /auth/google/token`.
+        audience: this.audiences,
         algorithms: ['RS256'],
         clockTolerance: 30,
       });

@@ -24,6 +24,7 @@ import {
   Screen,
   Sheet,
 } from '../../src/components/ui.tsx';
+import { IconBubble, RouteTimeline } from '../../src/components/kit.tsx';
 import { useCities } from '../../src/lib/cities.ts';
 import {
   categoryLabel,
@@ -36,7 +37,7 @@ import {
   statusLabel,
   statusTone,
 } from '../../src/lib/format.ts';
-import { colors, font, spacing } from '../../src/theme.ts';
+import { colors, font, radius, spacing } from '../../src/theme.ts';
 
 /** Mirrors the server's sets in `apps/api/src/routes/trips.ts`. */
 const LIVE_TRIP_STATUSES = new Set(['published', 'partially_booked']);
@@ -148,16 +149,27 @@ function TripDetail({ id }: { id: string }) {
         />
       }
     >
-      <Card>
+      <View
+        style={{
+          backgroundColor: colors.surface,
+          borderRadius: radius.xl,
+          borderWidth: 1,
+          borderColor: colors.line,
+          padding: spacing.lg,
+        }}
+      >
         <Row style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <View style={{ flex: 1 }}>
-            <AppText variant="title">
-              {cities.name(row.origin_city_id)} → {cities.name(row.dest_city_id)}
-            </AppText>
-            <AppText variant="small" tone="muted" style={{ marginTop: 2 }}>
-              {modeLabel(row.mode)} · departs {formatDateTime(row.departure_at)}
-            </AppText>
-          </View>
+          <Row gap={spacing.sm}>
+            <IconBubble name="car-sport" size={38} background={colors.partnerSoft} color={colors.partner} iconSize={18} />
+            <View>
+              <AppText variant="label" style={{ color: colors.partner, letterSpacing: 0.8 }}>
+                YOUR TRIP
+              </AppText>
+              <AppText variant="micro" tone="muted" style={{ fontFamily: font.regular }}>
+                {modeLabel(row.mode)} · {formatDateTime(row.departure_at)}
+              </AppText>
+            </View>
+          </Row>
           <Badge label={statusLabel(row.status)} tone={statusTone(row.status)} />
         </Row>
 
@@ -167,10 +179,53 @@ function TripDetail({ id }: { id: string }) {
           </View>
         ) : null}
 
-        <View style={{ marginTop: spacing.md, gap: 6 }}>
-          <DetailRow label="Arrives" value={formatDateTime(row.arrival_estimate_at)} />
-          <DetailRow label="Space offered" value={kg(row.capacity_kg)} />
-          <DetailRow label="Space left" value={kg(row.capacity_kg_remaining)} />
+        <View style={{ marginTop: spacing.md }}>
+          <RouteTimeline
+            origin={row.origin_area ?? cities.name(row.origin_city_id)}
+            dest={cities.name(row.dest_city_id)}
+            originMeta={`Departs ${formatDateTime(row.departure_at)}`}
+            destMeta={`Arrives by ${formatDateTime(row.arrival_estimate_at)}`}
+            tone="partner"
+          />
+        </View>
+
+        <View style={{ marginTop: spacing.md }}>
+          <Row style={{ justifyContent: 'space-between' }}>
+            <AppText variant="micro" tone="muted" style={{ fontFamily: font.regular }}>
+              Capacity used
+            </AppText>
+            <AppText variant="micro" style={{ fontFamily: font.semibold }}>
+              {kg(row.capacity_kg - row.capacity_kg_remaining)} of {kg(row.capacity_kg)} used
+            </AppText>
+          </Row>
+          <View
+            style={{
+              height: 7,
+              borderRadius: 4,
+              backgroundColor: colors.canvasAlt,
+              marginTop: 5,
+              overflow: 'hidden',
+            }}
+          >
+            <View
+              style={{
+                width: `${Math.round(
+                  Math.max(0, Math.min(1, (row.capacity_kg - row.capacity_kg_remaining) / (row.capacity_kg || 1))) * 100,
+                )}%`,
+                height: '100%',
+                borderRadius: 4,
+                backgroundColor:
+                  (row.capacity_kg - row.capacity_kg_remaining) / (row.capacity_kg || 1) > 0.85
+                    ? colors.warn
+                    : colors.partner,
+              }}
+            />
+          </View>
+        </View>
+
+        <Divider style={{ marginVertical: spacing.md }} />
+
+        <View style={{ gap: 6 }}>
           <DetailRow label="Meeting point" value={row.origin_area ?? 'Not named'} />
           <DetailRow
             label="Parcels"
@@ -190,7 +245,7 @@ function TripDetail({ id }: { id: string }) {
             ) : null}
           </Row>
         ) : null}
-      </Card>
+      </View>
 
       {live ? (
         <Card style={{ marginTop: spacing.md }}>

@@ -3,9 +3,9 @@ import { Tabs, router } from 'expo-router';
 import { Pressable, View, Text } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 
-import { notificationsApi } from '../../src/api/client.ts';
+import { conversationsApi, notificationsApi } from '../../src/api/client.ts';
 import { useSession } from '../../src/session.tsx';
-import { colors, font } from '../../src/theme.ts';
+import { colors, font, shadow } from '../../src/theme.ts';
 
 function Bell() {
   const { status } = useSession();
@@ -25,7 +25,7 @@ function Bell() {
       hitSlop={10}
       style={{ marginRight: 16, padding: 4 }}
     >
-      <Ionicons name={unread ? 'notifications' : 'notifications-outline'} size={23} color={colors.ink700} />
+      <Ionicons name={unread ? 'notifications' : 'notifications-outline'} size={22} color={colors.ink700} />
       {unread > 0 ? (
         <View
           style={{
@@ -48,17 +48,53 @@ function Bell() {
   );
 }
 
+function SendButton() {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Send a parcel"
+      onPress={() => router.push('/send')}
+      hitSlop={10}
+      style={{ marginRight: 4, padding: 4 }}
+    >
+      <Ionicons name="add-circle" size={24} color={colors.brand} />
+    </Pressable>
+  );
+}
+
 export default function TabsLayout() {
+  const { status } = useSession();
+  const inbox = useQuery({
+    queryKey: ['conversations'],
+    queryFn: conversationsApi.list,
+    enabled: status === 'signed_in',
+    refetchInterval: 60_000,
+  });
+  const unreadMessages = inbox.data?.total_unread ?? 0;
+
+  const header = {
+    headerShadowVisible: false,
+    headerStyle: { backgroundColor: colors.canvas },
+    headerTitleStyle: { fontFamily: font.semibold, fontSize: 18, color: colors.ink900 },
+    headerTintColor: colors.ink900,
+  } as const;
+
   return (
     <Tabs
       screenOptions={{
-        headerShadowVisible: false,
-        headerStyle: { backgroundColor: colors.surface },
-        headerTitleStyle: { fontFamily: font.semibold, fontSize: 18, color: colors.ink900 },
+        ...header,
         tabBarActiveTintColor: colors.brand,
-        tabBarInactiveTintColor: colors.ink500,
-        tabBarStyle: { backgroundColor: colors.surface, borderTopColor: colors.line },
-        tabBarLabelStyle: { fontFamily: font.semibold, fontSize: 11 },
+        tabBarInactiveTintColor: colors.ink300,
+        tabBarStyle: {
+          backgroundColor: colors.surface,
+          borderTopColor: colors.line,
+          borderTopWidth: 1,
+          paddingTop: 6,
+          ...shadow.soft,
+        },
+        tabBarLabelStyle: { fontFamily: font.semibold, fontSize: 10.5, marginTop: 1 },
+        tabBarItemStyle: { paddingBottom: 4 },
+        tabBarHideOnKeyboard: true,
         sceneStyle: { backgroundColor: colors.canvas },
       }}
     >
@@ -66,30 +102,70 @@ export default function TabsLayout() {
         name="index"
         options={{
           title: 'Home',
-          headerTitle: 'Parcel Yatra',
-          headerRight: () => <Bell />,
-          tabBarIcon: ({ color, size }) => <Ionicons name="home-outline" size={size} color={typeof color === 'string' ? color : colors.ink500} />,
+          headerShown: false,
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'home' : 'home-outline'} size={22} color={color as string} />
+          ),
         }}
       />
       <Tabs.Screen
         name="bookings"
         options={{
           title: 'Bookings',
-          tabBarIcon: ({ color, size }) => <Ionicons name="cube-outline" size={size} color={typeof color === 'string' ? color : colors.ink500} />,
+          headerRight: () => (
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <SendButton />
+              <Bell />
+            </View>
+          ),
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'cube' : 'cube-outline'} size={22} color={color as string} />
+          ),
         }}
       />
       <Tabs.Screen
         name="trips"
         options={{
           title: 'Trips',
-          tabBarIcon: ({ color, size }) => <Ionicons name="navigate-outline" size={size} color={typeof color === 'string' ? color : colors.ink500} />,
+          headerRight: () => (
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <SendButton />
+              <Bell />
+            </View>
+          ),
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'car-sport' : 'car-sport-outline'} size={23} color={color as string} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="inbox"
+        options={{
+          title: 'Inbox',
+          headerRight: () => <Bell />,
+          tabBarBadge: unreadMessages > 0 ? (unreadMessages > 9 ? '9+' : unreadMessages) : undefined,
+          tabBarBadgeStyle: {
+            backgroundColor: colors.brand,
+            color: colors.white,
+            fontFamily: font.bold,
+            fontSize: 9,
+            minWidth: 16,
+            height: 16,
+            lineHeight: 16,
+          },
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'chatbubbles' : 'chatbubbles-outline'} size={22} color={color as string} />
+          ),
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
           title: 'Profile',
-          tabBarIcon: ({ color, size }) => <Ionicons name="person-outline" size={size} color={typeof color === 'string' ? color : colors.ink500} />,
+          headerRight: () => <Bell />,
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'person' : 'person-outline'} size={22} color={color as string} />
+          ),
         }}
       />
     </Tabs>

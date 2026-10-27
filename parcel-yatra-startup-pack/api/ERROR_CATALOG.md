@@ -118,6 +118,7 @@ Envelope shape is defined once in `api/API_CONVENTIONS.md` §4.
 | `PAYMENT_ALREADY_EXISTS` | 409 | Intent already created for booking | Return the existing intent |
 | `PAYMENT_NOT_PAYABLE` | 409 | Booking not in a payable state | |
 | `PAYMENT_PROVIDER_UNAVAILABLE` | 503 | Provider timeout/5xx | Booking stays `payment_pending`; do not treat as failure |
+| `ROUTING_UNAVAILABLE` | 503 | Routing provider is not configured or did not answer | No distance and no quote were produced; retry after the matrix is filled |
 | `PAYMENT_STATE_UNKNOWN` | 409 | Provider status unknown | Poll; never assume success or failure |
 | `REFUND_EXCEEDS_CAPTURED_AMOUNT` | 409 | Refund > captured − prior refunds | |
 | `APPROVAL_REQUIRED` | 409 | Maker-checker needed (> ₹1,000) | |

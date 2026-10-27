@@ -1,8 +1,9 @@
-import { corridorKm, quotePrice } from '@py/domain';
+import { corridorKm, quoteLaunchPrice } from '@py/domain';
 
 import { closeDb, getDb, schemaExists, type Db } from './client.ts';
 import { runMigrations } from './migrations.ts';
 import { config } from '../config.ts';
+import { legacyQuoteColumns } from '../lib/pricing-policy.ts';
 import { maskPhone, phoneHash, phoneLast4 } from '../lib/crypto.ts';
 
 /**
@@ -146,7 +147,15 @@ async function seedDemoBooking(db: Db): Promise<void> {
   const bareilly = CITIES[0]!;
   const delhi = CITIES[1]!;
   const km = corridorKm({ lat: bareilly.lat, lng: bareilly.lng }, { lat: delhi.lat, lng: delhi.lng });
-  const priced = quotePrice({ corridorKm: km, weightKg: 1.5, category: 'documents' });
+  // Demo data is labelled as an estimate: no routing provider ran for these coordinates.
+  const priced = quoteLaunchPrice({
+    roadDistanceKm: km,
+    distanceSource: 'estimated',
+    actualWeightKg: 1.5,
+    dimsCm: [30, 22, 2],
+    category: 'documents',
+  });
+  const legacy = legacyQuoteColumns(priced);
 
   const windowStart = atHourFromNow(1, 9);
   // The demo parcel is picked up and delivered on the same day. A window ending the following
@@ -188,9 +197,26 @@ async function seedDemoBooking(db: Db): Promise<void> {
       QUOTE_DEMO,
       PARCEL_DEMO,
       priced.formula_version,
-      JSON.stringify(priced.inputs),
-      priced.subtotal_paise,
-      priced.platform_fee_paise,
+      JSON.stringify({
+        formula_version: priced.formula_version,
+        policy_version: priced.policy_version,
+        road_distance_km: priced.road_distance_km,
+        distance_source: priced.distance_source,
+        actual_weight_kg: priced.actual_weight_kg,
+        volumetric_weight_kg: priced.volumetric_weight_kg,
+        billable_weight_kg: priced.billable_weight_kg,
+        category: 'documents',
+        service_mode: 'hub_to_hub',
+        commission_paise: priced.commission_paise,
+        traveller_subsidy_paise: priced.traveller_subsidy_paise,
+        discount_paise: priced.discount_paise,
+        platform_net_paise: priced.platform_net_paise,
+        loss_making: priced.loss_making,
+        warnings: priced.warnings,
+        demo: true,
+      }),
+      legacy.subtotal_paise,
+      legacy.platform_fee_paise,
       priced.tax_paise,
       priced.total_paise,
       priced.traveller_paise,

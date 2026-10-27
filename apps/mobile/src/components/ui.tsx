@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -174,16 +174,22 @@ export function Screen({
   refreshControl,
   keyboard = false,
   contentStyle,
+  footer,
+  background = colors.canvas,
 }: {
   children: ReactNode;
   scroll?: boolean;
   refreshControl?: React.ComponentProps<typeof ScrollView>['refreshControl'];
   keyboard?: boolean;
   contentStyle?: StyleProp<ViewStyle>;
+  /** A sticky bar below the scroll area — the price/action row on the send flow. */
+  footer?: ReactNode;
+  background?: string;
 }) {
   const insets = useSafeAreaInsets();
   const body = scroll ? (
     <ScrollView
+      style={{ flex: 1 }}
       contentContainerStyle={[{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }, contentStyle]}
       keyboardShouldPersistTaps="handled"
       refreshControl={Platform.OS === 'web' ? undefined : refreshControl}
@@ -199,10 +205,11 @@ export function Screen({
 
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: colors.canvas }}
+      style={{ flex: 1, backgroundColor: background }}
       behavior={keyboard && Platform.OS === 'ios' ? 'padding' : undefined}
     >
       {body}
+      {footer ? <View style={{ paddingBottom: insets.bottom }}>{footer}</View> : null}
     </KeyboardAvoidingView>
   );
 }
@@ -554,16 +561,27 @@ function parseLocalDateTime(dateText: string, timeText: string): Date | null {
 }
 
 function WebDateTimeField({ label, value, onChange, error, hint }: DateTimeFieldProps) {
-  const [dateText, setDateText] = useState(() => (value ? dateInputText(value) : ''));
-  const [timeText, setTimeText] = useState(() => (value ? timeInputText(value) : ''));
+  // The inputs keep their own draft so a half-typed date is not rewritten on every keystroke.
+  // A draft remembers which value it belongs to; when the caller hands us a different one, the
+  // text is re-derived during render rather than patched from an effect.
+  const valueKey = value ? value.getTime() : null;
+  const [draft, setDraft] = useState(() => ({
+    key: valueKey,
+    date: value ? dateInputText(value) : '',
+    time: value ? timeInputText(value) : '',
+  }));
 
-  useEffect(() => {
-    if (!value) return;
-    setDateText(dateInputText(value));
-    setTimeText(timeInputText(value));
-  }, [value]);
+  const shown =
+    draft.key === valueKey
+      ? draft
+      : {
+          key: valueKey,
+          date: value ? dateInputText(value) : '',
+          time: value ? timeInputText(value) : '',
+        };
 
-  function commit(nextDate: string, nextTime: string) {
+  function edit(nextDate: string, nextTime: string) {
+    setDraft({ key: valueKey, date: nextDate, time: nextTime });
     const parsed = parseLocalDateTime(nextDate, nextTime);
     if (parsed) onChange(parsed);
   }
@@ -587,10 +605,9 @@ function WebDateTimeField({ label, value, onChange, error, hint }: DateTimeField
       </AppText>
       <View style={{ flexDirection: 'row', gap: spacing.sm }}>
         <TextInput
-          value={dateText}
+          value={shown.date}
           onChangeText={(next) => {
-            setDateText(next);
-            commit(next, timeText);
+            edit(next, shown.time);
           }}
           placeholder="YYYY-MM-DD"
           placeholderTextColor={colors.ink500}
@@ -598,10 +615,9 @@ function WebDateTimeField({ label, value, onChange, error, hint }: DateTimeField
           style={[{ flex: 1.4 }, inputStyle]}
         />
         <TextInput
-          value={timeText}
+          value={shown.time}
           onChangeText={(next) => {
-            setTimeText(next);
-            commit(dateText, next);
+            edit(shown.date, next);
           }}
           placeholder="HH:MM"
           placeholderTextColor={colors.ink500}

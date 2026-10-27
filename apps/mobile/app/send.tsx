@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Ionicons } from '@expo/vector-icons';
 
 import { ApiError } from '../src/api/http.ts';
 import { filesApi, senderApi } from '../src/api/client.ts';
@@ -24,13 +25,32 @@ import {
   PickerSheet,
   Row,
   Screen,
-  SelectField,
   SectionTitle,
 } from '../src/components/ui.tsx';
+import {
+  Chip,
+  IconBubble,
+  InfoNote,
+  MapCanvas,
+  RouteTimeline,
+  StickyBar,
+} from '../src/components/kit.tsx';
 import { useCities } from '../src/lib/cities.ts';
 import { pickPhoto } from '../src/lib/photo.ts';
 import { categoryLabel, formatDateTime, inr, kg, normalisePhone } from '../src/lib/format.ts';
-import { colors, font, spacing } from '../src/theme.ts';
+import { colors, font, radius, spacing } from '../src/theme.ts';
+
+const CATEGORY_ICONS: Record<string, React.ComponentProps<typeof Ionicons>['name']> = {
+  documents: 'document-text-outline',
+  educational_certificates: 'school-outline',
+  business_samples: 'briefcase-outline',
+  spare_parts_dry: 'construct-outline',
+  cosmetics_sealed: 'sparkles-outline',
+  printed_material: 'newspaper-outline',
+  religious_items: 'flower-outline',
+  keys: 'key-outline',
+  electronics_accessories_low_value: 'headset-outline',
+};
 
 export default function SendScreen() {
   return (
@@ -47,6 +67,12 @@ function startOfTomorrow(): Date {
   return date;
 }
 
+function todayIn(hours: number): Date {
+  const date = new Date();
+  date.setHours(date.getHours() + hours, 0, 0, 0);
+  return date;
+}
+
 function SendWizard() {
   const params = useLocalSearchParams<{ category?: string }>();
   const cities = useCities();
@@ -59,6 +85,7 @@ function SendWizard() {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [picker, setPicker] = useState<'origin' | 'dest' | 'originArea' | 'destArea' | 'category' | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [schedule, setSchedule] = useState<'today' | 'tomorrow' | 'custom'>('tomorrow');
 
   const [originId, setOriginId] = useState('');
   const [destId, setDestId] = useState('');
@@ -275,185 +302,446 @@ function SendWizard() {
     }
   }
 
+  function applySchedule(next: 'today' | 'tomorrow' | 'custom') {
+    setSchedule(next);
+    setErrors({});
+    if (next === 'today') {
+      const start = todayIn(2);
+      setWindowStart(start);
+      setWindowEnd(new Date(start.getTime() + 8 * 60 * 60 * 1000));
+    } else if (next === 'tomorrow') {
+      const start = startOfTomorrow();
+      setWindowStart(start);
+      setWindowEnd(new Date(start.getTime() + 6 * 60 * 60 * 1000));
+    }
+  }
+
   const cityOptions = cities.serviceable.map((city) => ({
     value: city.id,
     label: city.name,
     meta: city.state,
   }));
 
+  const footer =
+    step === 1 ? (
+      <StickyBar
+        label="Route"
+        value="City to city"
+        caption="Pickup and delivery windows"
+        buttonLabel="Continue"
+        onPress={() => {
+          if (validateRoute()) {
+            setErrors({});
+            setStep(2);
+          }
+        }}
+      />
+    ) : step === 2 ? (
+      <StickyBar
+        label="Parcel"
+        value={weightKg ? `${weightKg} kg` : 'Add details'}
+        caption={`Up to ${maxWeight} kg · ${inr(maxValue)} declared value`}
+        buttonLabel="Find travellers"
+        onPress={postParcel}
+        loading={busy}
+      />
+    ) : parcel?.review_required ? null : matches && matches.matches.length === 0 ? (
+      <StickyBar
+        label="Parcel"
+        value="Posted"
+        caption="Live until a traveller on this route offers"
+        buttonLabel="View my parcel"
+        onPress={() => router.push(`/parcels/${parcel?.id ?? ''}`)}
+        disabled={!parcel}
+      />
+    ) : (
+      <StickyBar
+        label={quote ? 'Total, fixed' : 'Price'}
+        value={quote ? inr(quote.total_paise) : quoteId ? 'Fixed' : '—'}
+        caption={quote ? `Locked until ${formatDateTime(quote.expires_at)}` : 'Choose a traveller to continue'}
+        buttonLabel={selectedTrip ? 'Book this traveller' : 'Choose a traveller'}
+        onPress={book}
+        loading={bookingBusy}
+        disabled={!selectedTrip || !quoteId}
+      />
+    );
+
   return (
-    <Screen keyboard>
+    <Screen keyboard footer={footer}>
       <Stepper step={step} />
 
       {step === 1 ? (
-        <Card>
-          <AppText variant="heading">Where is it going?</AppText>
-          <AppText variant="small" tone="muted" style={{ marginTop: 2, marginBottom: spacing.lg }}>
-            City to city. The areas help the traveller and you find each other.
+        <>
+          <MapCanvas
+            height={188}
+            originLabel={originArea || (originId ? cities.name(originId) : 'Pickup')}
+            destLabel={destArea || (destId ? cities.name(destId) : 'Drop')}
+          >
+            <View
+              style={{
+                position: 'absolute',
+                top: spacing.md,
+                left: spacing.md,
+                backgroundColor: 'rgba(255,255,255,0.94)',
+                borderRadius: radius.pill,
+                paddingHorizontal: 10,
+                paddingVertical: 5,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 5,
+              }}
+            >
+              <Ionicons name="navigate" size={11} color={colors.brand} />
+              <AppText variant="micro" tone="brand">
+                Intercity · car
+              </AppText>
+            </View>
+          </MapCanvas>
+
+          <View style={{ marginTop: spacing.lg }}>
+            <AppText variant="heading">Where is it going?</AppText>
+            <AppText variant="small" tone="muted" style={{ marginTop: 2 }}>
+              City to city. Areas help you and the traveller find each other — never an exact address.
+            </AppText>
+          </View>
+
+          <View style={routeCard}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+              <View style={{ width: 22, alignItems: 'center' }}>
+                <View
+                  style={{
+                    width: 16,
+                    height: 16,
+                    borderRadius: 8,
+                    borderWidth: 4,
+                    borderColor: colors.brand,
+                    backgroundColor: colors.white,
+                  }}
+                />
+                <View style={{ width: 2, height: 30, backgroundColor: colors.line, marginTop: 3 }} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => setPicker('origin')}
+                  style={routeRow}
+                >
+                  <View style={{ flex: 1 }}>
+                    <AppText variant="micro" tone="muted" style={{ letterSpacing: 0.5 }}>
+                      PICKUP CITY
+                    </AppText>
+                    <AppText
+                      variant="subheading"
+                      tone={originId ? 'default' : 'muted'}
+                      numberOfLines={1}
+                      style={{ marginTop: 1 }}
+                    >
+                      {originId ? cities.name(originId) : 'Choose a city'}
+                    </AppText>
+                  </View>
+                  <Ionicons name="chevron-down" size={16} color={colors.ink300} />
+                </Pressable>
+                <Field
+                  label="Pickup area"
+                  value={originArea}
+                  onChangeText={setOriginArea}
+                  placeholder="e.g. Civil Lines"
+                  error={errors.originArea}
+                  accessory={
+                    <Pressable onPress={() => setPicker('originArea')} hitSlop={8} disabled={!originId}>
+                      <AppText
+                        variant="small"
+                        tone={originId ? 'brand' : 'muted'}
+                        style={{ fontFamily: font.semibold }}
+                      >
+                        List
+                      </AppText>
+                    </Pressable>
+                  }
+                />
+              </View>
+            </View>
+
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm }}>
+              <View style={{ width: 22, alignItems: 'center', paddingTop: 6 }}>
+                <View
+                  style={{
+                    width: 14,
+                    height: 14,
+                    borderRadius: 4,
+                    backgroundColor: colors.navy,
+                  }}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => setPicker('dest')}
+                  style={routeRow}
+                >
+                  <View style={{ flex: 1 }}>
+                    <AppText variant="micro" tone="muted" style={{ letterSpacing: 0.5 }}>
+                      DROP CITY
+                    </AppText>
+                    <AppText
+                      variant="subheading"
+                      tone={destId ? 'default' : 'muted'}
+                      numberOfLines={1}
+                      style={{ marginTop: 1 }}
+                    >
+                      {destId ? cities.name(destId) : 'Choose a city'}
+                    </AppText>
+                  </View>
+                  <Ionicons name="chevron-down" size={16} color={colors.ink300} />
+                </Pressable>
+                <Field
+                  label="Delivery area"
+                  value={destArea}
+                  onChangeText={setDestArea}
+                  placeholder="e.g. Sector 62"
+                  error={errors.destArea}
+                  accessory={
+                    <Pressable onPress={() => setPicker('destArea')} hitSlop={8} disabled={!destId}>
+                      <AppText
+                        variant="small"
+                        tone={destId ? 'brand' : 'muted'}
+                        style={{ fontFamily: font.semibold }}
+                      >
+                        List
+                      </AppText>
+                    </Pressable>
+                  }
+                />
+              </View>
+            </View>
+
+            {errors.origin || errors.dest ? (
+              <AppText variant="small" tone="danger">
+                {errors.origin ?? errors.dest}
+              </AppText>
+            ) : null}
+          </View>
+
+          <AppText variant="label" tone="muted" style={{ marginTop: spacing.lg, marginBottom: spacing.sm, letterSpacing: 0.8 }}>
+            WHEN SHOULD IT MOVE?
           </AppText>
+          <Row gap={spacing.sm} style={{ flexWrap: 'wrap' }}>
+            <Chip label="Today" icon="flash-outline" selected={schedule === 'today'} onPress={() => applySchedule('today')} />
+            <Chip label="Tomorrow" icon="sunny-outline" selected={schedule === 'tomorrow'} onPress={() => applySchedule('tomorrow')} />
+            <Chip label="Pick dates" icon="calendar-outline" selected={schedule === 'custom'} onPress={() => applySchedule('custom')} />
+          </Row>
 
-          <SelectField
-            label="From city"
-            value={originId ? cities.name(originId) : null}
-            placeholder="Choose origin"
-            onPress={() => setPicker('origin')}
-            error={errors.origin}
-          />
-          <Field
-            label="Pickup area"
-            value={originArea}
-            onChangeText={setOriginArea}
-            placeholder="e.g. Indiranagar"
-            error={errors.originArea}
-            accessory={
-              <Pressable onPress={() => setPicker('originArea')} hitSlop={8} disabled={!originId}>
-                <AppText variant="small" tone={originId ? 'brand' : 'muted'} style={{ fontFamily: font.semibold }}>
-                  List
+          {schedule === 'custom' ? (
+            <Card style={{ marginTop: spacing.md }}>
+              <DateTimeField
+                label="Pickup from"
+                value={windowStart}
+                onChange={(next) => {
+                  setWindowStart(next);
+                  if (windowEnd <= next) setWindowEnd(new Date(next.getTime() + 6 * 60 * 60 * 1000));
+                }}
+                minimumDate={new Date()}
+                error={errors.windowStart}
+              />
+              <DateTimeField
+                label="Deliver by"
+                value={windowEnd}
+                onChange={setWindowEnd}
+                minimumDate={windowStart}
+                error={errors.windowEnd}
+                hint="The traveller must arrive inside this window."
+              />
+            </Card>
+          ) : (
+            <View style={windowSummary}>
+              <Ionicons name="time-outline" size={16} color={colors.brandDark} />
+              <View style={{ flex: 1 }}>
+                <AppText variant="small" style={{ fontFamily: font.semibold }}>
+                  Pickup {formatDateTime(windowStart.toISOString())}
                 </AppText>
-              </Pressable>
-            }
-          />
-          <SelectField
-            label="To city"
-            value={destId ? cities.name(destId) : null}
-            placeholder="Choose destination"
-            onPress={() => setPicker('dest')}
-            error={errors.dest}
-          />
-          <Field
-            label="Delivery area"
-            value={destArea}
-            onChangeText={setDestArea}
-            placeholder="e.g. HSR Layout"
-            error={errors.destArea}
-            accessory={
-              <Pressable onPress={() => setPicker('destArea')} hitSlop={8} disabled={!destId}>
-                <AppText variant="small" tone={destId ? 'brand' : 'muted'} style={{ fontFamily: font.semibold }}>
-                  List
+                <AppText variant="micro" tone="muted" style={{ fontFamily: font.regular }}>
+                  Deliver by {formatDateTime(windowEnd.toISOString())}
                 </AppText>
-              </Pressable>
-            }
-          />
-          <DateTimeField
-            label="Pickup from"
-            value={windowStart}
-            onChange={(next) => {
-              setWindowStart(next);
-              if (windowEnd <= next) setWindowEnd(new Date(next.getTime() + 6 * 60 * 60 * 1000));
-            }}
-            minimumDate={new Date()}
-            error={errors.windowStart}
-          />
-          <DateTimeField
-            label="Deliver by"
-            value={windowEnd}
-            onChange={setWindowEnd}
-            minimumDate={windowStart}
-            error={errors.windowEnd}
-            hint="The traveller must arrive inside this window."
-          />
+              </View>
+            </View>
+          )}
 
-          {cities.isError ? <ErrorNotice error={cities.error} onRetry={() => void cities.refetch()} /> : null}
+          {cities.isError ? (
+            <View style={{ marginTop: spacing.md }}>
+              <ErrorNotice error={cities.error} onRetry={() => void cities.refetch()} />
+            </View>
+          ) : null}
 
-          <Button
-            label="Continue"
-            onPress={() => {
-              if (validateRoute()) {
-                setErrors({});
-                setStep(2);
-              }
-            }}
-            style={{ marginTop: spacing.sm }}
-          />
-        </Card>
+          <View style={{ marginTop: spacing.md }}>
+            <InfoNote
+              icon="shield-checkmark"
+              title="Every traveller is ID-checked"
+              body="Only verified travellers can be booked. Capacity and route are hard gates."
+            />
+          </View>
+        </>
       ) : null}
 
       {step === 2 ? (
-        <Card>
-          <AppText variant="heading">What is inside?</AppText>
-          <AppText variant="small" tone="muted" style={{ marginTop: 2, marginBottom: spacing.lg }}>
-            Be specific. Prohibited items are refused and can end the account.
-          </AppText>
-
-          <SelectField
-            label="Category"
-            value={categoryLabel(category)}
-            onPress={() => setPicker('category')}
-            error={errors.category}
-          />
-          <Field
-            label="Description"
-            value={description}
-            onChangeText={setDescription}
-            placeholder="e.g. Sealed university transcripts in a folder"
-            multiline
-            maxLength={300}
-            style={{ height: 84, textAlignVertical: 'top' }}
-            error={errors.description}
-          />
-
-          <Row gap={spacing.md} style={{ alignItems: 'flex-start' }}>
+        <>
+          <Row style={{ justifyContent: 'space-between', alignItems: 'center' }}>
             <View style={{ flex: 1 }}>
-              <Field
-                label="Weight (kg)"
-                value={weightKg}
-                onChangeText={setWeightKg}
-                keyboardType="decimal-pad"
-                placeholder={`up to ${maxWeight}`}
-                error={errors.weight}
-              />
+              <AppText variant="heading">What is inside?</AppText>
+              <AppText variant="small" tone="muted" style={{ marginTop: 2 }}>
+                Be specific. Prohibited items are refused and can end the account.
+              </AppText>
             </View>
-            <View style={{ flex: 1 }}>
-              <Field
-                label="Value (₹)"
-                value={declaredRupees}
-                onChangeText={setDeclaredRupees}
-                keyboardType="number-pad"
-                placeholder={`up to ${maxValue / 100}`}
-                error={errors.declared}
-              />
-            </View>
+            <Pressable accessibilityRole="button" onPress={() => setStep(1)} hitSlop={8}>
+              <AppText variant="small" tone="brand" style={{ fontFamily: font.semibold }}>
+                Edit route
+              </AppText>
+            </Pressable>
           </Row>
 
-          <AppText variant="label" tone="muted" style={{ textTransform: 'uppercase', marginBottom: 6 }}>
-            Dimensions L × W × H (cm)
+          <AppText variant="label" tone="muted" style={{ marginTop: spacing.lg, marginBottom: spacing.sm, letterSpacing: 0.8 }}>
+            CATEGORY
           </AppText>
-          <Row gap={spacing.sm} style={{ alignItems: 'flex-start' }}>
-            {dims.map((value, index) => (
-              <View key={index} style={{ flex: 1 }}>
+          {config.isLoading ? (
+            <LoadingBlock lines={2} />
+          ) : (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+              {categories.map((value) => {
+                const active = category === value;
+                return (
+                  <Pressable
+                    key={value}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: active }}
+                    onPress={() => {
+                      setCategory(value);
+                      setErrors((current) => ({ ...current, category: '' }));
+                    }}
+                    style={{
+                      width: '48%',
+                      flexGrow: 1,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: spacing.sm,
+                      backgroundColor: active ? colors.brandTint : colors.surface,
+                      borderWidth: active ? 2 : 1,
+                      borderColor: active ? colors.brand : colors.line,
+                      borderRadius: radius.md,
+                      padding: spacing.sm,
+                    }}
+                  >
+                    <IconBubble
+                      name={CATEGORY_ICONS[value] ?? 'cube-outline'}
+                      size={32}
+                      background={active ? colors.brandSoft : colors.canvas}
+                      color={active ? colors.brandDark : colors.ink500}
+                      iconSize={16}
+                    />
+                    <AppText
+                      variant="micro"
+                      numberOfLines={2}
+                      style={{ flex: 1, color: active ? colors.brandDark : colors.ink700, lineHeight: 14 }}
+                    >
+                      {categoryLabel(value)}
+                    </AppText>
+                    {active ? <Ionicons name="checkmark-circle" size={15} color={colors.brand} /> : null}
+                  </Pressable>
+                );
+              })}
+            </View>
+          )}
+          {errors.category ? (
+            <AppText variant="small" tone="danger" style={{ marginTop: 4 }}>
+              {errors.category}
+            </AppText>
+          ) : null}
+
+          <View style={{ marginTop: spacing.lg }}>
+            <Field
+              label="Description"
+              value={description}
+              onChangeText={setDescription}
+              placeholder="e.g. Sealed university transcripts in a folder"
+              multiline
+              maxLength={300}
+              style={{ height: 84, textAlignVertical: 'top' }}
+              error={errors.description}
+            />
+
+            <Row gap={spacing.md} style={{ alignItems: 'flex-start' }}>
+              <View style={{ flex: 1 }}>
                 <Field
-                  label={['Length', 'Width', 'Height'][index]!}
-                  value={value}
-                  onChangeText={(text) =>
-                    setDims((current) => current.map((item, position) => (position === index ? text : item)))
-                  }
-                  keyboardType="number-pad"
-                  placeholder="cm"
-                  error={index === 2 ? errors.dims : undefined}
+                  label="Weight (kg)"
+                  value={weightKg}
+                  onChangeText={setWeightKg}
+                  keyboardType="decimal-pad"
+                  placeholder={`up to ${maxWeight}`}
+                  error={errors.weight}
                 />
               </View>
-            ))}
-          </Row>
+              <View style={{ flex: 1 }}>
+                <Field
+                  label="Value (₹)"
+                  value={declaredRupees}
+                  onChangeText={setDeclaredRupees}
+                  keyboardType="number-pad"
+                  placeholder={`up to ${maxValue / 100}`}
+                  error={errors.declared}
+                />
+              </View>
+            </Row>
 
-          <Field
-            label="Receiver name"
-            value={receiverName}
-            onChangeText={setReceiverName}
-            placeholder="Who receives it"
-            error={errors.receiverName}
-          />
-          <Field
-            label="Receiver mobile"
-            value={receiverPhone}
-            onChangeText={setReceiverPhone}
-            keyboardType="phone-pad"
-            placeholder="98765 43210"
-            hint="Used for delivery coordination. The traveller sees a masked number."
-            error={errors.receiverPhone}
-          />
+            <AppText variant="label" tone="muted" style={{ textTransform: 'uppercase', marginBottom: 6 }}>
+              Dimensions L × W × H (cm)
+            </AppText>
+            <Row gap={spacing.sm} style={{ alignItems: 'flex-start' }}>
+              {dims.map((value, index) => (
+                <View key={index} style={{ flex: 1 }}>
+                  <Field
+                    label={['Length', 'Width', 'Height'][index]!}
+                    value={value}
+                    onChangeText={(text) =>
+                      setDims((current) => current.map((item, position) => (position === index ? text : item)))
+                    }
+                    keyboardType="number-pad"
+                    placeholder="cm"
+                    error={index === 2 ? errors.dims : undefined}
+                  />
+                </View>
+              ))}
+            </Row>
+          </View>
 
-          <Card style={{ backgroundColor: colors.canvas, shadowOpacity: 0, elevation: 0 }}>
-            <Row style={{ justifyContent: 'space-between' }}>
+          <View style={sectionCard}>
+            <Row gap={spacing.sm} style={{ alignItems: 'center', marginBottom: spacing.md }}>
+              <IconBubble name="person-outline" size={34} background={colors.brandSoft} color={colors.brandDark} iconSize={17} />
+              <View style={{ flex: 1 }}>
+                <AppText variant="subheading">Who receives it?</AppText>
+                <AppText variant="small" tone="muted">
+                  The traveller sees a masked number, never the full one.
+                </AppText>
+              </View>
+            </Row>
+            <Field
+              label="Receiver name"
+              value={receiverName}
+              onChangeText={setReceiverName}
+              placeholder="Who receives it"
+              error={errors.receiverName}
+            />
+            <Field
+              label="Receiver mobile"
+              value={receiverPhone}
+              onChangeText={setReceiverPhone}
+              keyboardType="phone-pad"
+              placeholder="98765 43210"
+              hint="Used for delivery coordination only."
+              error={errors.receiverPhone}
+            />
+          </View>
+
+          <View style={sectionCard}>
+            <Row gap={spacing.sm} style={{ alignItems: 'center' }}>
+              <IconBubble name="camera-outline" size={34} background={colors.accentSoft} color={colors.warn} iconSize={17} />
               <View style={{ flex: 1 }}>
                 <AppText variant="subheading">Sealed photo</AppText>
                 <AppText variant="small" tone="muted">
@@ -476,16 +764,24 @@ function SendWizard() {
                 fullWidth={false}
               />
               {photoKey ? (
-                <Button
-                  label="Remove"
-                  variant="tertiary"
-                  size="sm"
-                  onPress={() => setPhotoKey(null)}
-                  fullWidth={false}
-                />
+                <>
+                  <View style={photoAdded}>
+                    <Ionicons name="checkmark-circle" size={13} color={colors.success} />
+                    <AppText variant="micro" tone="success">
+                      Attached
+                    </AppText>
+                  </View>
+                  <Button
+                    label="Remove"
+                    variant="tertiary"
+                    size="sm"
+                    onPress={() => setPhotoKey(null)}
+                    fullWidth={false}
+                  />
+                </>
               ) : null}
             </Row>
-          </Card>
+          </View>
 
           <View style={{ marginTop: spacing.md }}>
             <Checkbox
@@ -505,16 +801,7 @@ function SendWizard() {
               <ErrorNotice error={submitError} />
             </View>
           ) : null}
-
-          <Row gap={spacing.sm} style={{ marginTop: spacing.md }}>
-            <View style={{ flex: 1 }}>
-              <Button label="Back" variant="secondary" onPress={() => setStep(1)} />
-            </View>
-            <View style={{ flex: 2 }}>
-              <Button label="Find travellers" onPress={postParcel} loading={busy} />
-            </View>
-          </Row>
-        </Card>
+        </>
       ) : null}
 
       {step === 3 && parcel ? (
@@ -532,32 +819,50 @@ function SendWizard() {
           </Card>
         ) : (
           <>
-            <Card>
-              <Row style={{ justifyContent: 'space-between' }}>
+            <View style={postedCard}>
+              <Row style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <View style={{ flex: 1 }}>
-                  <AppText variant="heading">
-                    {originArea} → {destArea}
+                  <AppText variant="label" tone="brand" style={{ letterSpacing: 0.8 }}>
+                    PARCEL POSTED
                   </AppText>
-                  <AppText variant="small" tone="muted">
-                    {categoryLabel(parcel.category)} · {kg(parcel.weight_kg)} · pickup{' '}
-                    {formatDateTime(parcel.window_start)}
+                  <AppText variant="heading" style={{ marginTop: 2 }}>
+                    {originArea} → {destArea}
                   </AppText>
                 </View>
                 <Badge label="Posted" tone="info" />
               </Row>
-            </Card>
+              <View style={{ marginTop: spacing.md }}>
+                <RouteTimeline
+                  origin={`${originArea}, ${cities.name(originId)}`}
+                  dest={`${destArea}, ${cities.name(destId)}`}
+                  originMeta={`Pickup ${formatDateTime(parcel.window_start)}`}
+                  destMeta={`Deliver by ${formatDateTime(parcel.window_end)}`}
+                  compact
+                />
+              </View>
+              <Row gap={spacing.sm} style={{ marginTop: spacing.md, flexWrap: 'wrap' }}>
+                <FactPill icon="cube-outline" text={categoryLabel(parcel.category)} />
+                <FactPill icon="scale-outline" text={kg(parcel.weight_kg)} />
+                <FactPill icon="cash-outline" text={inr(parcel.declared_value_paise)} />
+              </Row>
+            </View>
 
             {quote ? (
-              <Card style={{ marginTop: spacing.md }}>
-                <Row style={{ justifyContent: 'space-between' }}>
-                  <AppText variant="heading">Price</AppText>
-                  <AppText variant="title" tone="brand">
-                    {inr(quote.total_paise)}
-                  </AppText>
+              <View style={[sectionCard, { marginTop: spacing.md }]}>
+                <Row style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <View style={{ flex: 1 }}>
+                    <AppText variant="micro" tone="muted" style={{ letterSpacing: 0.5 }}>
+                      TOTAL, FIXED FOR THIS PARCEL
+                    </AppText>
+                    <AppText variant="hero" tone="brand" style={{ marginTop: 2 }}>
+                      {inr(quote.total_paise)}
+                    </AppText>
+                    <AppText variant="small" tone="muted">
+                      Locked until {formatDateTime(quote.expires_at)}.
+                    </AppText>
+                  </View>
+                  <IconBubble name="pricetag" size={40} background={colors.brandSoft} color={colors.brandDark} />
                 </Row>
-                <AppText variant="small" tone="muted" style={{ marginTop: 2 }}>
-                  Fixed for this parcel until {formatDateTime(quote.expires_at)}.
-                </AppText>
                 <View style={{ marginTop: spacing.md, gap: 6 }}>
                   {quote.breakdown.map((line) => (
                     <Row key={line.label} style={{ justifyContent: 'space-between' }}>
@@ -571,19 +876,21 @@ function SendWizard() {
                   <Divider style={{ marginVertical: 4 }} />
                   <Row style={{ justifyContent: 'space-between' }}>
                     <AppText variant="small" tone="muted">
-                      Traveller's share
+                      Traveller’s share
                     </AppText>
-                    <AppText variant="small">{inr(quote.traveller_paise)}</AppText>
+                    <AppText variant="small" style={{ fontFamily: font.semibold }}>
+                      {inr(quote.traveller_paise)}
+                    </AppText>
                   </Row>
                 </View>
-              </Card>
+              </View>
             ) : quoteId ? (
-              <Card style={{ marginTop: spacing.md }}>
+              <View style={[sectionCard, { marginTop: spacing.md }]}>
                 <AppText variant="heading">Price fixed</AppText>
                 <AppText variant="small" tone="muted" style={{ marginTop: 2 }}>
                   {quoteNote ?? 'This parcel already has a valid quote. The amount is confirmed on the booking.'}
                 </AppText>
-              </Card>
+              </View>
             ) : null}
 
             {quoteError ? (
@@ -610,6 +917,15 @@ function SendWizard() {
                   actionLabel="Check again"
                   onAction={() => void loadPricing(parcel.id)}
                 />
+                <Button
+                  label="View my parcel"
+                  variant="secondary"
+                  onPress={() => router.push(`/parcels/${parcel.id}`)}
+                  style={{ marginTop: spacing.sm }}
+                />
+                <AppText variant="small" tone="muted" style={{ textAlign: 'center', marginTop: spacing.sm }}>
+                  Your parcel is live. Travellers going that way can offer, and you choose who carries it.
+                </AppText>
               </Card>
             ) : null}
 
@@ -638,17 +954,15 @@ function SendWizard() {
               </View>
             ) : null}
 
-            <Button
-              label={selectedTrip ? 'Book this traveller' : 'Choose a traveller'}
-              onPress={book}
-              loading={bookingBusy}
-              disabled={!selectedTrip || !quoteId}
-              style={{ marginTop: spacing.lg }}
-            />
-            <AppText variant="small" tone="muted" style={{ marginTop: spacing.sm, textAlign: 'center' }}>
-              The traveller has 30 minutes to accept. A payment request follows acceptance; no money moves until
-              the provider confirms.
-            </AppText>
+            {selectedTrip ? (
+              <View style={{ marginTop: spacing.lg }}>
+                <InfoNote
+                  icon="time-outline"
+                  title="The traveller has 30 minutes to accept"
+                  body="A payment request follows acceptance. No money moves until the provider confirms."
+                />
+              </View>
+            ) : null}
           </>
         )
       ) : null}
@@ -660,7 +974,10 @@ function SendWizard() {
         selected={picker === 'dest' ? destId : originId}
         onSelect={(value) => {
           if (picker === 'dest') setDestId(value);
-          else setOriginId(value);
+          else {
+            setOriginId(value);
+            setOriginArea('');
+          }
           setErrors({});
         }}
         onClose={() => setPicker(null)}
@@ -669,8 +986,11 @@ function SendWizard() {
 
       <PickerSheet
         visible={picker === 'originArea' || picker === 'destArea'}
-        title="Pickup areas"
-        options={((picker === 'destArea' ? destAreas.data?.items : originAreas.data?.items) ?? []).map((area) => ({ value: area.id, label: area.name }))}
+        title={picker === 'destArea' ? 'Delivery areas' : 'Pickup areas'}
+        options={((picker === 'destArea' ? destAreas.data?.items : originAreas.data?.items) ?? []).map((area) => ({
+          value: area.name,
+          label: area.name,
+        }))}
         selected={picker === 'destArea' ? destArea : originArea}
         onSelect={(value) => {
           if (picker === 'destArea') setDestArea(value);
@@ -695,33 +1015,144 @@ function SendWizard() {
 function Stepper({ step }: { step: 1 | 2 | 3 }) {
   const labels = ['Route', 'Parcel', 'Traveller'];
   return (
-    <Row style={{ marginBottom: spacing.lg, justifyContent: 'space-between' }}>
-      {labels.map((label, index) => {
-        const position = (index + 1) as 1 | 2 | 3;
-        const active = step >= position;
-        return (
-          <Row key={label} gap={6}>
-            <View
-              style={{
-                width: 24,
-                height: 24,
-                borderRadius: 12,
-                backgroundColor: active ? colors.brand : '#e2e7f0',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <AppText variant="small" style={{ color: active ? colors.white : colors.ink500, fontFamily: font.bold }}>
-                {position}
+    <View style={{ marginBottom: spacing.lg }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        {labels.map((label, index) => {
+          const position = (index + 1) as 1 | 2 | 3;
+          const done = step > position;
+          const active = step === position;
+          return (
+            <View key={label} style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
+              <View
+                style={{
+                  width: active ? 30 : 24,
+                  height: active ? 30 : 24,
+                  borderRadius: 15,
+                  backgroundColor: done ? colors.success : active ? colors.brand : colors.surface,
+                  borderWidth: active || done ? 0 : 1,
+                  borderColor: colors.line,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                {done ? (
+                  <Ionicons name="checkmark" size={13} color={colors.white} />
+                ) : (
+                  <AppText
+                    variant="micro"
+                    style={{
+                      color: active ? colors.white : colors.ink300,
+                      fontFamily: font.bold,
+                    }}
+                  >
+                    {position}
+                  </AppText>
+                )}
+              </View>
+              <AppText
+                variant="micro"
+                style={{
+                  marginLeft: 6,
+                  color: active ? colors.ink900 : colors.ink500,
+                  fontFamily: active ? font.bold : font.regular,
+                }}
+              >
+                {label}
               </AppText>
+              {index < labels.length - 1 ? (
+                <View
+                  style={{
+                    flex: 1,
+                    height: 2,
+                    marginHorizontal: spacing.sm,
+                    backgroundColor: done ? colors.success : colors.line,
+                  }}
+                />
+              ) : null}
             </View>
-            <AppText variant="small" tone={active ? 'default' : 'muted'} style={{ fontFamily: font.semibold }}>
-              {label}
-            </AppText>
-          </Row>
-        );
-      })}
-    </Row>
+          );
+        })}
+      </View>
+    </View>
   );
 }
 
+function FactPill({ icon, text }: { icon: React.ComponentProps<typeof Ionicons>['name']; text: string }) {
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        backgroundColor: colors.canvas,
+        borderRadius: radius.pill,
+        paddingHorizontal: 9,
+        paddingVertical: 4,
+      }}
+    >
+      <Ionicons name={icon} size={11} color={colors.ink500} />
+      <AppText variant="micro" tone="muted" style={{ fontFamily: font.regular }}>
+        {text}
+      </AppText>
+    </View>
+  );
+}
+
+const routeCard = {
+  backgroundColor: colors.surface,
+  borderRadius: radius.xl,
+  borderWidth: 1,
+  borderColor: colors.line,
+  padding: spacing.md,
+  marginTop: spacing.md,
+};
+
+const routeRow = {
+  flexDirection: 'row' as const,
+  alignItems: 'center' as const,
+  gap: spacing.sm,
+  backgroundColor: colors.canvas,
+  borderRadius: radius.md,
+  paddingHorizontal: spacing.md,
+  paddingVertical: 10,
+  marginBottom: spacing.sm,
+};
+
+const windowSummary = {
+  flexDirection: 'row' as const,
+  alignItems: 'center' as const,
+  gap: spacing.sm,
+  backgroundColor: colors.brandTint,
+  borderRadius: radius.md,
+  borderWidth: 1,
+  borderColor: '#d5e2ff',
+  padding: spacing.md,
+  marginTop: spacing.md,
+};
+
+const sectionCard = {
+  backgroundColor: colors.surface,
+  borderRadius: radius.lg,
+  borderWidth: 1,
+  borderColor: colors.line,
+  padding: spacing.md,
+  marginTop: spacing.md,
+};
+
+const photoAdded = {
+  flexDirection: 'row' as const,
+  alignItems: 'center' as const,
+  gap: 4,
+  backgroundColor: colors.successBg,
+  borderRadius: radius.pill,
+  paddingHorizontal: 8,
+  paddingVertical: 4,
+};
+
+const postedCard = {
+  backgroundColor: colors.surface,
+  borderRadius: radius.xl,
+  borderWidth: 1,
+  borderColor: colors.line,
+  padding: spacing.lg,
+};

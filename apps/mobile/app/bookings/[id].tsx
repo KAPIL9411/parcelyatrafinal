@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Alert, Pressable, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
+import { Ionicons } from '@expo/vector-icons';
 
 import { bookingsApi, disputesApi, filesApi } from '../../src/api/client.ts';
 import { ApiError } from '../../src/api/http.ts';
@@ -25,6 +26,7 @@ import {
   SectionTitle,
   Sheet,
 } from '../../src/components/ui.tsx';
+import { Avatar, RouteTimeline, StatusTrack } from '../../src/components/kit.tsx';
 import { pickPhoto } from '../../src/lib/photo.ts';
 import {
   CANCEL_REASONS,
@@ -134,67 +136,111 @@ function BookingDetail({ bookingId }: { bookingId: string }) {
         />
       }
     >
-      <Card>
+      <View
+        style={{
+          backgroundColor: colors.surface,
+          borderRadius: radius.xl,
+          borderWidth: 1,
+          borderColor: colors.line,
+          padding: spacing.lg,
+        }}
+      >
         <Row style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <View style={{ flex: 1 }}>
-            <AppText variant="title">
-              {booking.pickup_area ?? 'Pickup'} → {booking.drop_area ?? 'Drop'}
+          <Row gap={spacing.sm} style={{ flex: 1 }}>
+            <View
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: 4,
+                backgroundColor: role === 'traveller' ? colors.partner : colors.brand,
+              }}
+            />
+            <AppText
+              variant="label"
+              style={{
+                letterSpacing: 0.8,
+                color: role === 'traveller' ? colors.partner : colors.brandDark,
+              }}
+            >
+              {role === 'traveller' ? 'YOU ARE CARRYING' : role === 'sender' ? 'YOU ARE SENDING' : 'BOOKING'}
             </AppText>
-            <AppText variant="small" tone="muted" style={{ marginTop: 2 }}>
-              Booking {booking.id.slice(0, 8)} · created {formatDateTime(booking.created_at)}
-            </AppText>
-          </View>
+          </Row>
           <View style={{ alignItems: 'flex-end', gap: 6 }}>
             <Badge label={statusLabel(booking.status)} tone={statusTone(booking.status)} />
             <Badge label={payoutLabel(booking.payout_state)} tone={payoutTone(booking.payout_state)} />
           </View>
         </Row>
 
-        <View style={{ backgroundColor: colors.canvas, borderRadius: radius.md, padding: spacing.md, marginTop: spacing.md }}>
+        <View style={{ marginTop: spacing.md }}>
+          <RouteTimeline
+            origin={booking.pickup_area ?? 'Pickup'}
+            dest={booking.drop_area ?? 'Drop'}
+            originMeta={
+              booking.pickup_window_start && booking.pickup_window_end
+                ? `${formatDateTime(booking.pickup_window_start)} – ${formatDateTime(booking.pickup_window_end)}`
+                : 'Agree a time in the chat below'
+            }
+            destMeta={`Booking ${booking.id.slice(0, 8)} · ${formatDateTime(booking.created_at)}`}
+            tone={role === 'traveller' ? 'partner' : 'brand'}
+          />
+        </View>
+
+        <View style={{ marginTop: spacing.md }}>
+          <StatusTrack status={booking.status} tone={role === 'traveller' ? 'partner' : 'brand'} />
+        </View>
+
+        <View
+          style={{
+            backgroundColor: colors.canvas,
+            borderRadius: radius.md,
+            padding: spacing.md,
+            marginTop: spacing.md,
+          }}
+        >
           <AppText variant="small" tone="muted">
             {role ? statusHint(booking.status, role) : 'Status update in progress.'}
           </AppText>
         </View>
 
-        <Row style={{ justifyContent: 'space-between', marginTop: spacing.md }}>
-          <View>
-            <AppText variant="label" tone="muted" style={{ textTransform: 'uppercase' }}>
-              Pickup window
+        <Divider style={{ marginVertical: spacing.md }} />
+
+        <Row style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          {booking.counterparty ? (
+            <Row gap={spacing.sm} style={{ flex: 1 }}>
+              <Avatar
+                name={booking.counterparty.first_name}
+                size={38}
+                tone={role === 'traveller' ? 'brand' : 'partner'}
+              />
+              <View style={{ flex: 1 }}>
+                <AppText variant="subheading" numberOfLines={1}>
+                  {booking.counterparty.first_name ?? 'The other side'}
+                </AppText>
+                <Row gap={4}>
+                  <AppText variant="micro" tone="muted" numberOfLines={1} style={{ fontFamily: font.regular }}>
+                    {booking.counterparty.phone_masked ?? 'Number hidden'}
+                  </AppText>
+                  {booking.counterparty.verification_state === 'verified' ? (
+                    <Ionicons name="shield-checkmark" size={12} color={colors.success} />
+                  ) : null}
+                </Row>
+              </View>
+            </Row>
+          ) : (
+            <AppText variant="small" tone="muted">
+              The other side
             </AppText>
-            <AppText variant="small" style={{ fontFamily: font.semibold, marginTop: 2 }}>
-              {booking.pickup_window_start && booking.pickup_window_end
-                ? `${formatDateTime(booking.pickup_window_start)} – ${formatDateTime(booking.pickup_window_end)}`
-                : 'Agree a time in the chat below'}
-            </AppText>
-          </View>
+          )}
           <View style={{ alignItems: 'flex-end' }}>
-            <AppText variant="label" tone="muted" style={{ textTransform: 'uppercase' }}>
+            <AppText variant="micro" tone="muted" style={{ fontFamily: font.regular }}>
               Total
             </AppText>
-            <AppText variant="title" tone="brand" style={{ marginTop: 2 }}>
+            <AppText variant="price" tone="brand" style={{ fontSize: 20 }}>
               {inr(booking.agreed_total_paise)}
             </AppText>
           </View>
         </Row>
-
-        {booking.counterparty ? (
-          <>
-            <Divider style={{ marginVertical: spacing.md }} />
-            <Row style={{ justifyContent: 'space-between' }}>
-              <View style={{ flex: 1 }}>
-                <AppText variant="subheading">{booking.counterparty.first_name ?? 'The other side'}</AppText>
-                <AppText variant="small" tone="muted">
-                  {booking.counterparty.phone_masked ?? 'Number hidden until you both agree'}
-                </AppText>
-              </View>
-              <Badge
-                label={booking.counterparty.verification_state === 'verified' ? 'ID verified' : 'ID not verified'}
-                tone={booking.counterparty.verification_state === 'verified' ? 'success' : 'warn'}
-              />
-            </Row>
-          </>
-        ) : null}
-      </Card>
+      </View>
 
       {role ? <ActionPanel booking={booking} role={role} onChanged={refreshBooking} /> : listQ.isError ? (
         <View style={{ marginTop: spacing.md }}>

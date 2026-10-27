@@ -224,14 +224,14 @@ export interface Booking {
   dispute_deadline: string | null;
   payout_state: string;
   allowed_commands: string[];
-  timeline: Array<{
+  timeline: {
     from_state: string | null;
     to_state: string;
     actor_kind: string;
     actor_role?: 'sender' | 'traveller' | null;
     reason_code: string | null;
     occurred_at: string;
-  }>;
+  }[];
   created_at: string;
   updated_at: string;
 }
@@ -242,7 +242,7 @@ export interface Dispute {
   category: string;
   state: string;
   outcome_code: string | null;
-  evidence: Array<{ id: string; note: string; object_key: string | null; created_at: string }>;
+  evidence: { id: string; note: string; object_key: string | null; created_at: string }[];
   created_at: string;
   resolved_at: string | null;
 }
@@ -276,6 +276,23 @@ export interface NotificationItem {
 export interface NotificationList {
   items: NotificationItem[];
   unread_count: number;
+}
+
+export interface ConversationSummary {
+  conversation_id: string;
+  booking_id: string;
+  booking_status: string;
+  role: 'sender' | 'traveller' | string;
+  closed: boolean;
+  counterparty: string | null;
+  last_message: string | null;
+  last_at: string | null;
+  unread_count: number;
+}
+
+export interface Inbox {
+  items: ConversationSummary[];
+  total_unread: number;
 }
 
 export interface PaymentIntent {

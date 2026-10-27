@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Alert, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Ionicons } from '@expo/vector-icons';
 
 import { ApiError } from '../../src/api/http.ts';
 import { senderApi } from '../../src/api/client.ts';
@@ -14,7 +15,6 @@ import {
   Banner,
   Button,
   Card,
-  Divider,
   ErrorNotice,
   LoadingBlock,
   Refresh,
@@ -22,6 +22,8 @@ import {
   Screen,
   SectionTitle,
 } from '../../src/components/ui.tsx';
+import { Avatar, IconBubble, RouteTimeline } from '../../src/components/kit.tsx';
+import { useCities } from '../../src/lib/cities.ts';
 import {
   categoryLabel,
   formatDateTime,
@@ -31,7 +33,7 @@ import {
   statusLabel,
   statusTone,
 } from '../../src/lib/format.ts';
-import { colors, font, spacing } from '../../src/theme.ts';
+import { colors, font, radius, spacing } from '../../src/theme.ts';
 
 export default function ParcelScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -44,6 +46,7 @@ export default function ParcelScreen() {
 
 function ParcelDetail({ parcelId }: { parcelId: string }) {
   const queryClient = useQueryClient();
+  const cities = useCities();
   const parcelQuery = useQuery({ queryKey: ['parcel', parcelId], queryFn: () => senderApi.parcel(parcelId) });
   const offersQuery = useQuery({
     queryKey: ['parcel-offers', parcelId],
@@ -194,27 +197,63 @@ function ParcelDetail({ parcelId }: { parcelId: string }) {
         />
       }
     >
-      <Card>
+      <View
+        style={{
+          backgroundColor: colors.surface,
+          borderRadius: radius.xl,
+          borderWidth: 1,
+          borderColor: colors.line,
+          padding: spacing.lg,
+        }}
+      >
         <Row style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <View style={{ flex: 1 }}>
-            <AppText variant="title">
-              {parcel.origin_area} → {parcel.dest_area}
-            </AppText>
-            <AppText variant="small" tone="muted" style={{ marginTop: 2 }}>
-              Posted {formatDateTime(parcel.created_at)}
-            </AppText>
-          </View>
+          <Row gap={spacing.sm}>
+            <IconBubble name="cube" size={38} background={colors.accentSoft} color={colors.warn} iconSize={18} />
+            <View>
+              <AppText variant="label" tone="muted" style={{ letterSpacing: 0.8 }}>
+                PARCEL
+              </AppText>
+              <AppText variant="micro" tone="muted" style={{ fontFamily: font.regular }}>
+                Posted {formatDateTime(parcel.created_at)}
+              </AppText>
+            </View>
+          </Row>
           <Badge label={statusLabel(parcel.status)} tone={statusTone(parcel.status)} />
         </Row>
 
-        <Divider style={{ marginVertical: spacing.md }} />
+        <View style={{ marginTop: spacing.md }}>
+          <RouteTimeline
+            origin={parcel.origin_area}
+            dest={parcel.dest_area}
+            originMeta={[cities.city(parcel.origin_city_id)?.name, `Pickup ${formatDateTime(parcel.window_start)}`]
+              .filter(Boolean)
+              .join(' · ')}
+            destMeta={[cities.city(parcel.dest_city_id)?.name, `By ${formatDateTime(parcel.window_end)}`]
+              .filter(Boolean)
+              .join(' · ')}
+          />
+        </View>
 
-        <DetailRow label="Category" value={categoryLabel(parcel.category)} />
-        <DetailRow label="Weight" value={kg(parcel.weight_kg)} />
-        <DetailRow label="Size" value={`${parcel.dims_cm.join(' × ')} cm`} />
-        <DetailRow label="Declared value" value={inr(parcel.declared_value_paise)} />
-        <DetailRow label="Pickup window" value={`${formatDateTime(parcel.window_start)} – ${formatDateTime(parcel.window_end)}`} />
-        <DetailRow label="Contents" value={parcel.description} />
+        <Row gap={spacing.sm} style={{ marginTop: spacing.md, flexWrap: 'wrap' }}>
+          <FactPill icon="pricetag-outline" text={categoryLabel(parcel.category)} />
+          <FactPill icon="scale-outline" text={kg(parcel.weight_kg)} />
+          <FactPill icon="cash-outline" text={inr(parcel.declared_value_paise)} />
+        </Row>
+      </View>
+
+      <Card style={{ marginTop: spacing.md }}>
+        <AppText variant="subheading">Shipment details</AppText>
+        <View style={{ marginTop: spacing.sm }}>
+          <DetailRow label="Category" value={categoryLabel(parcel.category)} />
+          <DetailRow label="Weight" value={kg(parcel.weight_kg)} />
+          <DetailRow label="Size" value={`${parcel.dims_cm.join(' × ')} cm`} />
+          <DetailRow label="Declared value" value={inr(parcel.declared_value_paise)} />
+          <DetailRow
+            label="Pickup window"
+            value={`${formatDateTime(parcel.window_start)} – ${formatDateTime(parcel.window_end)}`}
+          />
+          <DetailRow label="Contents" value={parcel.description} />
+        </View>
       </Card>
 
       {parcel.review_required ? (
@@ -248,7 +287,7 @@ function ParcelDetail({ parcelId }: { parcelId: string }) {
       {offers.length === 0 ? (
         <Card>
           <AppText variant="small" tone="muted">
-            Nobody has offered yet. Travellers see this parcel in their trip's opportunities when the route and
+            Nobody has offered yet. Travellers see this parcel in their trip’s opportunities when the route and
             space fit.
           </AppText>
         </Card>
@@ -256,7 +295,8 @@ function ParcelDetail({ parcelId }: { parcelId: string }) {
         <View style={{ gap: spacing.sm }}>
           {offers.map((offer) => (
             <Card key={offer.trip_id} style={{ padding: spacing.md }}>
-              <Row style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <Row gap={spacing.sm} style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <Avatar name={offer.traveller_first_name} size={38} tone="partner" />
                 <View style={{ flex: 1 }}>
                   <AppText variant="subheading">{offer.traveller_first_name ?? 'A traveller'}</AppText>
                   <AppText variant="small" tone="muted">
@@ -399,5 +439,32 @@ function DetailRow({ label, value }: { label: string; value: string }) {
         {value}
       </AppText>
     </Row>
+  );
+}
+
+function FactPill({
+  icon,
+  text,
+}: {
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  text: string;
+}) {
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        backgroundColor: colors.canvas,
+        borderRadius: radius.pill,
+        paddingHorizontal: 9,
+        paddingVertical: 4,
+      }}
+    >
+      <Ionicons name={icon} size={11} color={colors.ink500} />
+      <AppText variant="micro" tone="muted" style={{ fontFamily: font.regular }}>
+        {text}
+      </AppText>
+    </View>
   );
 }

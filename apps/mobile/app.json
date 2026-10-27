@@ -47,7 +47,8 @@
       ]
     ],
     "extra": {
-      "apiBase": "https://parcelyatrafinal.onrender.com/v1"
+      "apiBase": "https://parcelyatrafinal.onrender.com/v1",
+      "googleWebClientId": "130100214583-b8jp20gsi8teqgoqk116o6pnlb1tqlnm.apps.googleusercontent.com"
     }
   }
 }

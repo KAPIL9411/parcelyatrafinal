@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { router } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Ionicons } from '@expo/vector-icons';
 
 import { senderApi, travellerApi } from '../../src/api/client.ts';
 import { AuthGate } from '../../src/components/auth-gate.tsx';
@@ -20,6 +21,7 @@ import {
   Screen,
   SelectField,
 } from '../../src/components/ui.tsx';
+import { InfoNote, StickyBar } from '../../src/components/kit.tsx';
 import { useCities } from '../../src/lib/cities.ts';
 import {
   formatDateTime,
@@ -142,32 +144,78 @@ function PublishTrip() {
   if (!verified) {
     return (
       <Screen>
-        <Card>
-          <AppText variant="label" tone="muted" style={{ textTransform: 'uppercase', marginBottom: 6 }}>
-            Travelling
-          </AppText>
-          <AppText variant="title">
-            {state === 'pending'
-              ? 'Your verification is with our team'
-              : state === 'rejected'
-                ? 'Your last verification was not accepted'
-                : 'Verify your ID before publishing'}
-          </AppText>
-          <AppText variant="body" tone="muted" style={{ marginTop: spacing.sm }}>
+        <View
+          style={{
+            backgroundColor: colors.partner,
+            borderRadius: radius.xl,
+            padding: spacing.lg,
+            overflow: 'hidden',
+          }}
+        >
+          <View
+            style={{
+              position: 'absolute',
+              width: 160,
+              height: 160,
+              borderRadius: 80,
+              backgroundColor: 'rgba(255,255,255,0.10)',
+              right: -55,
+              top: -70,
+            }}
+          />
+          <Row gap={spacing.md} style={{ alignItems: 'flex-start' }}>
+            <View
+              style={{
+                width: 46,
+                height: 46,
+                borderRadius: 14,
+                backgroundColor: 'rgba(255,255,255,0.16)',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Ionicons
+                name={state === 'pending' ? 'time' : state === 'rejected' ? 'alert-circle' : 'shield-checkmark'}
+                size={24}
+                color={colors.white}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <AppText variant="label" style={{ color: '#bfe9db', letterSpacing: 1.1 }}>
+                PARTNER
+              </AppText>
+              <AppText variant="title" tone="white" style={{ marginTop: 3 }}>
+                {state === 'pending'
+                  ? 'Your verification is with our team'
+                  : state === 'rejected'
+                    ? 'Your last verification was not accepted'
+                    : 'Verify your ID before publishing'}
+              </AppText>
+            </View>
+          </Row>
+          <AppText variant="small" style={{ color: '#d3ece4', marginTop: spacing.sm }}>
             {state === 'pending'
               ? 'Usually within 24 hours. A person checks your ID, and publishing stays locked until then.'
               : state === 'rejected'
                 ? `${verificationReason(verification.data?.reason_code ?? null)} You can read the reason, then try once more.`
                 : 'A person checks one photo ID and a selfie. It usually takes under 24 hours. We never ask for Aadhaar.'}
           </AppText>
+        </View>
 
+        <Card style={{ marginTop: spacing.md }}>
           {state === 'pending' ? (
             <Banner
               tone="warn"
               title="Nothing is published in the meantime"
               body="You can still post parcels and look around as a sender."
             />
-          ) : null}
+          ) : (
+            <InfoNote
+              icon="lock-closed"
+              title="Publishing stays locked until a person approves"
+              body="Senders see your first name, your route and your verification badge — never your ID document."
+            />
+          )}
 
           <Button
             label={state === 'rejected' ? 'Review verification' : state === 'pending' ? 'See verification' : 'Start verification'}
@@ -181,22 +229,88 @@ function PublishTrip() {
   }
 
   return (
-    <Screen keyboard>
-      <AppText variant="label" tone="muted" style={{ textTransform: 'uppercase' }}>
-        Travelling
-      </AppText>
-      <AppText variant="title" style={{ marginTop: 4 }}>
-        Publish a trip
-      </AppText>
-      <AppText variant="small" tone="muted" style={{ marginTop: 4 }}>
-        Tell us the drive you are already making. Senders see the route, the time and the space — not your
-        phone number.
-      </AppText>
+    <Screen
+      keyboard
+      footer={
+        <StickyBar
+          label="Your trip"
+          value={originId && destId ? `${cities.name(originId)} → ${cities.name(destId)}` : 'Choose a route'}
+          caption={`${formatDateTime(departure.toISOString())} · ${kg(Number(capacity) || 0)} of space`}
+          buttonLabel="Publish trip"
+          onPress={publish}
+          loading={busy}
+          disabled={!originId || !destId || !capacity}
+        />
+      }
+    >
+      <View
+        style={{
+          backgroundColor: colors.partner,
+          borderRadius: radius.xl,
+          padding: spacing.lg,
+          overflow: 'hidden',
+        }}
+      >
+        <View
+          style={{
+            position: 'absolute',
+            width: 160,
+            height: 160,
+            borderRadius: 80,
+            backgroundColor: 'rgba(255,255,255,0.10)',
+            right: -55,
+            top: -70,
+          }}
+        />
+        <Row gap={spacing.md} style={{ alignItems: 'flex-start' }}>
+          <View
+            style={{
+              width: 46,
+              height: 46,
+              borderRadius: 14,
+              backgroundColor: 'rgba(255,255,255,0.16)',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Ionicons name="car-sport" size={24} color={colors.white} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <AppText variant="label" style={{ color: '#bfe9db', letterSpacing: 1.1 }}>
+              PARTNER
+            </AppText>
+            <AppText variant="title" tone="white" style={{ marginTop: 3 }}>
+              Publish a trip
+            </AppText>
+          </View>
+        </Row>
+        <AppText variant="small" style={{ color: '#d3ece4', marginTop: spacing.sm }}>
+          Tell us the drive you are already making. Senders see the route, the time and the space — not your
+          phone number.
+        </AppText>
+        <Row gap={spacing.sm} style={{ marginTop: spacing.md, flexWrap: 'wrap' }}>
+          <View style={heroPill}>
+            <Ionicons name="car" size={11} color={colors.accent} />
+            <AppText variant="micro" style={{ color: colors.white, fontFamily: font.regular }}>
+              Car only at launch
+            </AppText>
+          </View>
+          <View style={heroPill}>
+            <Ionicons name="cube" size={11} color={colors.accent} />
+            <AppText variant="micro" style={{ color: colors.white, fontFamily: font.regular }}>
+              4 parcels a month
+            </AppText>
+          </View>
+        </Row>
+      </View>
 
-      <Banner
-        title="Only car travel is open at launch"
-        body="We are not carrying parcels on bikes, buses, trains or flights yet. Car only keeps the handover simple."
-      />
+      <View style={{ marginTop: spacing.md }}>
+        <InfoNote
+          icon="shield-checkmark"
+          title="You choose every request"
+          body="An offer is a flag, not a booking. The sender still chooses, and nothing is reserved until they do."
+        />
+      </View>
 
       <Card style={{ marginTop: spacing.lg }}>
         <AppText variant="heading">Where are you going?</AppText>
@@ -314,11 +428,6 @@ function PublishTrip() {
         </View>
       ) : null}
 
-      <Button label="Publish trip" onPress={publish} loading={busy} style={{ marginTop: spacing.lg }} />
-      <AppText variant="small" tone="muted" style={{ marginTop: spacing.sm, textAlign: 'center' }}>
-        Your trip leaves on {formatDateTime(departure.toISOString())} with {kg(Number(capacity) || 0)} of space.
-      </AppText>
-
       <PickerSheet
         visible={picker === 'origin' || picker === 'dest'}
         title={picker === 'dest' ? 'Destination city' : 'Origin city'}
@@ -348,6 +457,16 @@ function PublishTrip() {
     </Screen>
   );
 }
+
+const heroPill = {
+  flexDirection: 'row' as const,
+  alignItems: 'center' as const,
+  gap: 5,
+  backgroundColor: 'rgba(255,255,255,0.12)',
+  borderRadius: radius.pill,
+  paddingHorizontal: 10,
+  paddingVertical: 5,
+};
 
 function Agreement({ text }: { text: string }) {
   return (

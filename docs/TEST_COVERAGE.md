@@ -4,6 +4,11 @@ Maps the fourteen-phase brief's Phase 13 journeys to the harnesses that actually
 the result of the run that produced this file. Every number below is a count printed by a suite that
 was executed, not an estimate.
 
+The whole matrix was re-run on 2026-10-27 against a temporary API instance, after DEFECT-029 moved
+quotes onto the v2 pricing engine and added the launch-network routes. The counts did not change,
+which is the point of re-running them: the new quote response and the new `cities.status` gate broke
+nothing on the paths these scripts walk.
+
 ## How to run
 
 The API must be listening on `127.0.0.1:3000` with the isolated parity database:
@@ -28,7 +33,7 @@ broken" and stops rather than printing a pass it did not earn.
 | `node scripts/kyc-review.mjs` | supporting (staff identity review) | 25 passed, 0 failed |
 | `node scripts/concurrency.mjs` | supporting (booking atomicity) | 11 passed, 0 failed |
 | `node scripts/ratelimit.mjs` | supporting (limiters) | 14 passed, 0 failed |
-| `npm test` | unit: domain + api + mobile | 64 passed + 32 passed + 8 passed, 0 failed |
+| `npm test` | unit: domain + api + mobile | 73 passed + 50 passed + 8 passed, 0 failed |
 | `npm run typecheck` | all four workspaces | clean |
 | `npm run build` | `@py/web` production build | clean (one chunk-size warning) |
 
@@ -158,6 +163,29 @@ on 2026-10-27 (home, phone sign-in, bookings list and detail, trips, profile, se
 exercises shared components and the API client, not the native renderer. Push notifications, offline
 behaviour and deep links are untested.
 
+## Launch network, distance engine and pricing
+
+Run by `npm test`; 18 API tests and 9 domain tests were added for the launch network.
+
+| File | Tests | What it pins |
+|---|---|---|
+| `apps/api/test/geo-network.test.ts` | 3 | 8 unique cities with state links; 4–5 zones each; 41 hotspot candidates with NULL coordinates and no pickup/drop-off; 56 directed candidate edges; exactly one active policy matching compiled defaults; a rerun applies nothing; DB constraints refuse an operational edge without a distance and an active hotspot without coordinates + verification |
+| `apps/api/test/routing.test.ts` | 5 | Google `computeRouteMatrix` request shape; success and per-element failure mapping; HTTP 403 surfaced; an unresolved pair is a labelled estimate and becomes `routed` after a fake matrix; approved edges are never overwritten and are refused under `REQUIRE_OPERATIONAL_ROUTE`; a failed attempt is recorded and leaves the estimate available |
+| `apps/api/test/launch-quote.test.ts` | 3 | The seeded active policy is loaded, validated and matches the compiled default; activating a new policy changes the next quote and a malformed policy refuses to activate; the second active policy is blocked; a v2 quote stored in the legacy columns still satisfies `total = subtotal + platform + tax` |
+| `apps/api/test/geo-api.test.ts` | 7 | Real app through `buildApp()` + `app.inject`: the 8 cities and candidate routes; estimates labelled; anonymous and non-staff callers refused; hotspot verification ladder plus doorstep availability and the coordinate-change refusal; route calculated→approved→operational with serviceability and journey changes; a two-leg journey is not bookable; finance-only policy and benchmark CRUD; audit rows |
+| `packages/domain/test/launch-pricing.test.ts` | 9 | Reconciliation invariant, billable vs volumetric weight, minimum fare, maximum cap, explicit traveller subsidy, discount that never reduces the payout, estimate labelling, and rejection of an invalid policy |
+
+`geo-api.test.ts` and `launch-quote.test.ts` clear their dedicated PGlite directory before opening
+it, because they move seeded rows through their lifecycle; `routing.test.ts` resets the pair it
+uses. All three were run twice in a row to confirm the result does not depend on the previous run.
+
+**Not covered:** no real Google Routes call (no key exists here), so no test claims a measured road
+distance; doorstep is never *available* because no hotspot has coordinates; multi-leg custody is
+untested because it is not implemented. The staff console (`NetworkAdmin.tsx`) has **no test file** —
+it is typechecked and bundled, and its rendered state was read in a browser (see
+"Browser-verified" below), but no successful write has been driven through it; the transitions behind
+its buttons are covered by `geo-api.test.ts` at the API, not at the screen.
+
 ## What these suites do not cover
 
 * Real payment capture, real SMS/WhatsApp/email delivery, real image storage and real managed
@@ -177,6 +205,15 @@ behaviour and deep links are untested.
   renders and a message sends.
 * The staff console driving a real `incident_open` booking: queue → audited thread read → message
   removal → resolve → empty state.
+* The **Network and pricing** tab (DEFECT-029), opened as the seeded development staff account:
+  coverage `10 active` cities / `56` routes / `0 measured · 0 operational` / `0` benchmarks / one
+  active policy; 56 route rows all `candidate`, with Approve and Mark operational disabled by the
+  ladder; the status filter to `operational` returning the empty state; 41 hotspot rows with
+  coordinates `none` and **Save coordinates** disabled on empty fields; the policy draft form
+  prefilled with the launch tunables and **Save as draft** disabled until version and name are
+  typed. Pressing **Measure with the provider** surfaced the server's 503 refusal verbatim and left
+  the row `candidate` — nothing was invented, and the only console error was that deliberate 503.
+  Read through the DOM; the in-app browser has no screenshot surface.
 * Sign-in through the SPA restores the session from the HttpOnly cookie with no token in
   `localStorage`.
 * The auth lifecycle in DEFECT-024, driven against a temporary proxy that stretched `POST

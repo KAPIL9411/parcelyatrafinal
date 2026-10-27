@@ -79,7 +79,7 @@ function Shell() {
         }}
       >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="sign-in" options={{ title: 'Sign in' }} />
+        <Stack.Screen name="sign-in" options={{ headerShown: false, presentation: 'modal' }} />
         <Stack.Screen name="send" options={{ title: 'Send a parcel' }} />
         <Stack.Screen name="parcels/[id]" options={{ title: 'Parcel' }} />
         <Stack.Screen name="bookings/[id]" options={{ title: 'Booking' }} />
@@ -88,6 +88,7 @@ function Shell() {
         <Stack.Screen name="verification" options={{ title: 'Verify your ID' }} />
         <Stack.Screen name="notifications" options={{ title: 'Notifications' }} />
         <Stack.Screen name="help" options={{ title: 'Help and support' }} />
+        <Stack.Screen name="info/[topic]" options={{ title: 'Information' }} />
         <Stack.Screen name="+not-found" options={{ title: 'Not found' }} />
       </Stack>
     </>

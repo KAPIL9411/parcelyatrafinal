@@ -24,6 +24,7 @@ import type {
   ChatThread,
   CityList,
   Dispute,
+  Inbox,
   MatchResult,
   NotificationList,
   OpportunityList,
@@ -242,12 +243,21 @@ export async function requestAccountDeletion(): Promise<{ deleted_at: string; ha
   });
 }
 
+/**
+ * Asks for a copy of the account data. The pilot has no background worker, so the server answers
+ * with an honest refusal; the screen shows that message rather than a fake "queued" toast.
+ */
+export async function requestDataExport(): Promise<{ message?: string }> {
+  return http.post<{ message?: string }>('/me/export', {});
+}
+
 // ---------------------------------------------------------------------------- sender
 
 export const senderApi = {
   config: () => http.get<PublicConfig>('/config', { auth: false }),
   cities: () => http.get<CityList>('/cities', { auth: false }),
-  areas: (cityId: string) => http.get<{ items: Array<{ id: string; name: string }> }>(`/cities/${cityId}/areas`, { auth: false }),
+  areas: (cityId: string) =>
+    http.get<{ items: { id: string; name: string }[] }>(`/cities/${cityId}/areas`, { auth: false }),
 
   createParcel: (body: Record<string, unknown>) => http.post<Parcel>('/parcels', body),
   myParcels: () => http.get<ParcelList>('/parcels?limit=50'),
@@ -313,6 +323,11 @@ export const notificationsApi = {
   list: () => http.get<NotificationList>('/notifications?limit=30'),
   readAll: () => http.post<void>('/notifications/read-all', {}),
   read: (id: string) => http.post<void>(`/notifications/${id}/read`, {}),
+};
+
+export const conversationsApi = {
+  /** Every thread the caller belongs to, newest activity first, with unread counts. */
+  list: () => http.get<Inbox>('/conversations?limit=50'),
 };
 
 export const filesApi = {

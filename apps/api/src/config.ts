@@ -105,6 +105,12 @@ const schema = z.object({
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_REDIRECT_URI: z.string().optional(),
+  /**
+   * Extra ID-token audiences: the Android and iOS OAuth client IDs the mobile app signs in with.
+   * Google mints a native token with the platform client as `aud`, so accepting only the web client
+   * ID would reject every mobile sign-in. Comma-separated; the web client above is always accepted.
+   */
+  GOOGLE_ADDITIONAL_CLIENT_IDS: z.string().default(''),
 
   // Kill switch: set to true to immediately disable all new OTP sends (e.g. under wallet abuse).
   // Requires process restart to take effect.
@@ -153,6 +159,28 @@ const schema = z.object({
   ACCEPT_WINDOW_SECONDS: int(1800, 60),
   DISPUTE_WINDOW_HOURS: int(72, 1),
   REVIEW_WINDOW_DAYS: int(7, 1),
+
+  // Road-distance routing. `none` means no provider is configured: distances come from stored route
+  // edges or the cache, and any fallback is labelled an estimate. The matrix is filled by
+  // `npm run geo:matrix`, never on the request path.
+  ROUTING_PROVIDER: z.enum(['google', 'none']).default('none'),
+  /** Server-side only. The Routes API key never reaches a browser or the mobile bundle. */
+  GOOGLE_MAPS_API_KEY: z.string().optional(),
+  ROUTES_CACHE_TTL_DAYS: int(30, 1, 365),
+  ROUTING_TIMEOUT_MS: int(8000, 1_000, 30_000),
+  /** Elements per computeRouteMatrix call. Google caps a request at 625; 100 keeps cost and latency flat. */
+  ROUTING_MAX_ELEMENTS_PER_CALL: int(100, 1, 625),
+  /**
+   * When true, a quote is refused unless the city pair has an *operational* route edge. Off at
+   * launch so the site stays bookable while the matrix is being filled; turning it on is a policy
+   * decision, not a code change.
+   */
+  REQUIRE_OPERATIONAL_ROUTE: bool(false),
+  /**
+   * Whether a labelled estimate (great-circle × 1.25) may stand in for an unresolved pair. When
+   * false, an unresolved pair refuses the quote instead. Estimates always carry a warning.
+   */
+  ALLOW_ESTIMATED_DISTANCE: bool(true),
 
   // Matching tunables (docs/MATCHING_ENGINE.md §4). A trip that fails a hard constraint is never
   // ranked, so these only retune the order of eligible trips.
@@ -329,6 +357,12 @@ export function assertSafetyRails(c: Config): void {
       // The shipped template value counts as missing: Google answers a `CHANGE_ME` client id with an
       // opaque redirect_uri_mismatch, and boot is the last place an operator can be told plainly.
       if (!c[key] || c[key] === 'CHANGE_ME') problems.push(`GOOGLE_OAUTH_ENABLED=true requires ${key}.`);
+    }
+  }
+  if (c.ROUTING_PROVIDER === 'google') {
+    if (!c.GOOGLE_MAPS_API_KEY) problems.push('ROUTING_PROVIDER=google requires GOOGLE_MAPS_API_KEY.');
+    if (c.GOOGLE_MAPS_API_KEY === 'CHANGE_ME') {
+      problems.push('GOOGLE_MAPS_API_KEY is still the template placeholder.');
     }
   }
   if (c.OTP_KILL_SWITCH) {

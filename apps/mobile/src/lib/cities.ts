@@ -12,7 +12,7 @@ export function useCities() {
     staleTime: 60 * 60_000,
   });
 
-  const cities = query.data?.items ?? [];
+  const cities = useMemo(() => query.data?.items ?? [], [query.data]);
   const byId = useMemo(() => new Map(cities.map((city) => [city.id, city])), [cities]);
 
   return {

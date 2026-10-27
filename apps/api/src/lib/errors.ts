@@ -75,6 +75,7 @@ export type ErrorCode =
   | 'PAYMENT_ALREADY_EXISTS'
   | 'PAYMENT_NOT_PAYABLE'
   | 'PAYMENT_PROVIDER_UNAVAILABLE'
+  | 'ROUTING_UNAVAILABLE'
   | 'REFUND_EXCEEDS_CAPTURED_AMOUNT'
   | 'APPROVAL_REQUIRED'
   | 'SELF_APPROVAL_FORBIDDEN'
@@ -185,6 +186,10 @@ export const ERROR_TABLE: Record<ErrorCode, Spec> = {
   PAYMENT_ALREADY_EXISTS: { status: 409, message: 'A payment already exists for this booking.' },
   PAYMENT_NOT_PAYABLE: { status: 409, message: 'This booking is not payable right now.' },
   PAYMENT_PROVIDER_UNAVAILABLE: { status: 503, message: 'The payment provider did not respond. Nothing was charged.' },
+  ROUTING_UNAVAILABLE: {
+    status: 503,
+    message: 'Road distances are not available right now. Nothing was priced.',
+  },
   REFUND_EXCEEDS_CAPTURED_AMOUNT: { status: 409, message: 'That refund is larger than the amount captured.' },
   APPROVAL_REQUIRED: { status: 409, message: 'This amount needs a second approver.' },
   SELF_APPROVAL_FORBIDDEN: { status: 403, message: 'You cannot approve your own request.' },

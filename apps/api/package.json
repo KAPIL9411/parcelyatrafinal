@@ -12,7 +12,8 @@
     "test": "tsx --test test/*.test.ts",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed": "tsx src/db/seed.ts",
-    "db:reset": "tsx src/db/reset.ts"
+    "db:reset": "tsx src/db/reset.ts",
+    "geo:matrix": "tsx scripts/geo-matrix.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.11",
