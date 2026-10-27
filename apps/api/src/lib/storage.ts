@@ -109,13 +109,12 @@ async function cloudinaryPut(key: string, bytes: Buffer): Promise<void> {
 
   const publicId = toPublicId(key);
   const timestamp = Math.floor(Date.now() / 1000);
-  const folderEnd = publicId.lastIndexOf('/');
-  const folder = publicId.substring(0, folderEnd);
-  const filePublicId = publicId.substring(folderEnd + 1);
 
   const params: Record<string, string | number> = {
-    folder,
-    public_id: filePublicId,
+    // The full path goes in public_id (slashes create nested folders). Cloudinary's `folder`
+    // parameter does not accept path separators, so splitting the key across both fields makes
+    // every signed upload answer 400 and every sink PUT surface as a 500.
+    public_id: publicId,
     timestamp,
     type: 'authenticated', // private — requires signed URL to view
     // Cloudinary defaults to SHA-1 signatures. Naming the algorithm keeps an account that still

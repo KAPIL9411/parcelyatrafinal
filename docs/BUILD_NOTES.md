@@ -727,6 +727,46 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
   disk. With the default local provider on an ephemeral filesystem, uploads are lost on every
   deploy and the new error is what the person will see — correct, but a dead end.
 
+### DEFECT-028 — the upload sink answers a bare 500 when the object write fails
+
+- **OBSERVED (production console):** two `PUT /v1/files/local-upload/kyc_id/<userId>/<uuid>.png`
+  requests answered **500**. Nothing in the route can 500 by design: every refusal is an
+  `AppError` with a 4xx. Probes against the live API showed the route exists (401 without a
+  token), the CORS preflight is clean, and `GET /v1/health` reports database and storage OK —
+  so the 500 is an unmapped exception inside the handler, i.e. the storage write itself, and the
+  API logged it as `unhandled error` while the browser showed nothing actionable.
+- **Cause — three defects stacked:**
+  - `putObject` failures (unwritable volume, provider refusal, quota) fell through the error
+    handler's catch-all as 500 `INTERNAL_ERROR`; the cause went only to the log and the client
+    got the generic "something went wrong" copy.
+  - `cloudinaryPut` split the key across Cloudinary's `folder` and `public_id` parameters with
+    `folder = 'kyc_id/<userId>'`. Cloudinary's `folder` parameter does not accept path
+    separators, so **every** signed upload answered 400 and therefore **every** sink PUT
+    answered 500 on a Cloudinary-backed deployment. The full path belongs in `public_id`
+    (slashes there create the nested folders).
+  - The web client hardcoded `/files/local-upload/...` and discarded the ticket's `upload_url`,
+    so it could not follow a provider switch and bypassed the server's own contract.
+- **CHANGED:**
+  - `lib/errors.ts` — new `STORAGE_UNAVAILABLE` (503, "We could not store your upload right now.
+    Try again in a moment."), catalogued.
+  - `routes/files.ts` — both upload sinks catch `putObject` failures, log `{ err, object_key }`
+    at error level, and answer `STORAGE_UNAVAILABLE` instead of a bare 500.
+  - `lib/storage.ts` — `cloudinaryPut` sends the whole path as `public_id` and no longer uses
+    the `folder` parameter.
+  - `apps/web/src/lib/upload.ts` — the client follows `ticket.upload_url` (path part only),
+    matching the mobile client, instead of guessing the sink.
+  - `apps/web/src/lib/copy.ts`, `apps/mobile/src/lib/format.ts` — `STORAGE_UNAVAILABLE` copy.
+- **Verification:** `apps/api/test/verification-upload.test.ts` (5 tests) adds "a failed object
+  write is a retryable 503, not a 500": a file squatting on the purpose directory makes the
+  recursive mkdir fail, and the sink answers 503 `STORAGE_UNAVAILABLE` — proving the envelope,
+  not the provider. The happy-path helper now PUTs to the ticket's own URL, so the client
+  contract is what is tested. Full run: 30/30 API, 64/64 domain, 8/8 mobile, workspace typecheck
+  clean.
+- **Not covered:** no Cloudinary credentials exist here, so the Cloudinary upload branch is
+  code-reviewed, not executed. Whether Render runs `STORAGE_PROVIDER=cloudinary` or `local` is
+  not observable from outside; with this change the next failed write names itself in the
+  Render log (`object write failed` + the provider status/errno) instead of hiding behind a 500.
+
 ---
 
 ## 2. Other deviations
@@ -832,10 +872,10 @@ undefined here on purpose rather than being invented.
 - `npm run typecheck` — domain, API, web and mobile all clean.
 - `npm test` — 64/64 domain tests pass (money, pricing, eligibility, the booking state machine,
   refunds, and the matching engine: hard gates, score arithmetic, tie-breaks, policy validation,
-  low-confidence fallback, truthfulness of the reason codes), 29/29 API tests (the `ADMIN_EMAILS`
+  low-confidence fallback, truthfulness of the reason codes), 30/30 API tests (the `ADMIN_EMAILS`
   grant, the Google handshake short of the call to Google, the native session transport, the
   deletion/recovery identity cases in DEFECT-026, and the upload/submission cases in
-  DEFECT-027), and 8/8 mobile transport tests. **The Google leg
+  DEFECT-027/DEFECT-028), and 8/8 mobile transport tests. **The Google leg
   is not tested here**: it needs a real ID token from a configured OAuth client, and this build has
   no credentials. What is proven is the function that sign-in calls.
 - `node scripts/smoke.mjs --reset` — 57 checks pass, 0 fail. Covers sign-in, upload ownership,

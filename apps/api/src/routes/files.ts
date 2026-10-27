@@ -101,7 +101,14 @@ export async function fileRoutes(app: FastifyInstance): Promise<void> {
       if (!bytes) throw new AppError('UPLOAD_INVALID_TYPE');
       if (bytes.byteLength > MAX_BYTES) throw new AppError('UPLOAD_TOO_LARGE');
 
-      await putObject(key, bytes);
+      try {
+        await putObject(key, bytes);
+      } catch (err) {
+        // A failed write must not look like a crash: the provider error (or errno) goes to the log
+        // with the key, and the client gets a retryable 503 instead of a bare 500.
+        req.log.error({ err, object_key: key }, 'object write failed');
+        throw new AppError('STORAGE_UNAVAILABLE');
+      }
 
       return reply.code(201).send({ object_key: key, byte_size: bytes.byteLength });
     },
@@ -124,7 +131,14 @@ export async function fileRoutes(app: FastifyInstance): Promise<void> {
       if (bytes.byteLength > MAX_BYTES) throw new AppError('UPLOAD_TOO_LARGE');
 
       // Upload to Cloudinary via storage adapter
-      await putObject(key, bytes);
+      try {
+        await putObject(key, bytes);
+      } catch (err) {
+        // A failed write must not look like a crash: the provider error (or errno) goes to the log
+        // with the key, and the client gets a retryable 503 instead of a bare 500.
+        req.log.error({ err, object_key: key }, 'object write failed');
+        throw new AppError('STORAGE_UNAVAILABLE');
+      }
 
       return reply.code(201).send({ object_key: key, byte_size: bytes.byteLength });
     },

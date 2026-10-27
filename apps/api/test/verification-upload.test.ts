@@ -12,6 +12,8 @@
  */
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
+import { writeFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 
 process.env.PGLITE_PATH = './data/pgdata.verification-upload';
@@ -62,9 +64,8 @@ async function upload(keyOwnerToken: string, purpose: 'kyc_id' | 'kyc_selfie'): 
   const body = ticket.json() as { object_key: string; upload_url: string };
   const put = await app.inject({
     method: 'PUT',
-    // The web client writes to the local sink even when the server is on Cloudinary; the server
-    // dispatches to the configured provider, so this is the path a browser actually takes.
-    url: `/v1/files/local-upload/${body.object_key}`,
+    // The client follows the ticket: strip the origin and PUT to the path it was told to use.
+    url: body.upload_url.replace(/^https?:\/\/[^/]+/, ''),
     headers: { authorization: `Bearer ${keyOwnerToken}`, 'content-type': 'image/png' },
     payload: PNG_1X1,
   });
@@ -160,4 +161,33 @@ test('an upload URL points at the API sink and only under the caller\'s own id',
     payload: PNG_1X1,
   });
   assert.equal(put.statusCode, 404, put.body);
+});
+
+test('a failed object write is a retryable 503, not a 500', async () => {
+  const user = await newUser();
+  const ticket = await app.inject({
+    method: 'POST',
+    url: '/v1/files/upload-url',
+    headers: { authorization: `Bearer ${user.token}` },
+    payload: { purpose: 'parcel_sealed', content_type: 'image/png', byte_size: PNG_1X1.byteLength },
+  });
+  assert.equal(ticket.statusCode, 201, ticket.body);
+  const body = ticket.json() as { object_key: string; upload_url: string };
+
+  // A file squatting on the purpose directory makes the recursive mkdir under it fail, the same
+  // way an unwritable volume or a rejected provider write would.
+  const blocker = join('./data/uploads-verification-test', 'parcel_sealed');
+  await writeFile(blocker, 'blocked');
+  try {
+    const put = await app.inject({
+      method: 'PUT',
+      url: body.upload_url.replace(/^https?:\/\/[^/]+/, ''),
+      headers: { authorization: `Bearer ${user.token}`, 'content-type': 'image/png' },
+      payload: PNG_1X1,
+    });
+    assert.equal(put.statusCode, 503, put.body);
+    assert.equal((put.json() as { error?: { code?: string } }).error?.code, 'STORAGE_UNAVAILABLE');
+  } finally {
+    await rm(blocker, { force: true });
+  }
 });

@@ -4,8 +4,8 @@ export type UploadPurpose = 'kyc_id' | 'kyc_selfie' | 'parcel_sealed' | 'parcel_
 
 /**
  * Two-step upload: ask the API to authorise an object key, then write the bytes to the URL it
- * returns. In this build that URL is a local, authenticated sink (docs/BUILD_NOTES.md DEFECT-007);
- * the client does not need to know that.
+ * returns. The ticket is the contract — the client follows it instead of guessing the sink path,
+ * so the storage provider can change without a web redeploy.
  */
 export async function uploadPhoto(file: File, purpose: UploadPurpose): Promise<string> {
   const ticket = await api.post<UploadTicket>('/files/upload-url', {
@@ -13,7 +13,10 @@ export async function uploadPhoto(file: File, purpose: UploadPurpose): Promise<s
     content_type: file.type,
     byte_size: file.size,
   });
-  await api.put(`/files/local-upload/${ticket.object_key}`, file, file.type);
+  // The ticket URL is absolute (it names the API origin); the request helper joins paths onto
+  // API_BASE, so keep only the path part after the `/files/` marker.
+  const sinkPath = ticket.upload_url.slice(ticket.upload_url.indexOf('/files/'));
+  await api.put(sinkPath, file, file.type);
   return ticket.object_key;
 }
 

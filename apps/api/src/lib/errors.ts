@@ -88,6 +88,7 @@ export type ErrorCode =
   | 'UPLOAD_INVALID_TYPE'
   | 'UPLOAD_TOO_LARGE'
   | 'UPLOAD_EXPIRED'
+  | 'STORAGE_UNAVAILABLE'
   | 'WEBHOOK_SIGNATURE_INVALID'
   | 'WEBHOOK_TIMESTAMP_INVALID'
   | 'WEBHOOK_UNKNOWN_TYPE'
@@ -199,6 +200,10 @@ export const ERROR_TABLE: Record<ErrorCode, Spec> = {
   UPLOAD_EXPIRED: {
     status: 400,
     message: 'The uploaded photos are no longer available. Attach them again.',
+  },
+  STORAGE_UNAVAILABLE: {
+    status: 503,
+    message: 'We could not store your upload right now. Try again in a moment.',
   },
   WEBHOOK_SIGNATURE_INVALID: { status: 401, message: 'Signature check failed.' },
   WEBHOOK_TIMESTAMP_INVALID: { status: 401, message: 'Timestamp outside tolerance.' },

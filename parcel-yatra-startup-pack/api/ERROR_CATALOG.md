@@ -143,6 +143,7 @@ Envelope shape is defined once in `api/API_CONVENTIONS.md` §4.
 | `UPLOAD_URL_EXPIRED` | 400 | Presigned URL past 5 minutes |
 | `UPLOAD_NOT_CONFIRMED` | 400 | Object referenced before upload completed |
 | `UPLOAD_EXPIRED` | 400 | Submitted object key no longer resolves to stored bytes; the documents must be attached again |
+| `STORAGE_UNAVAILABLE` | 503 | The object write failed (provider error or disk); retryable, never a crash |
 
 ## 11. Webhooks
 

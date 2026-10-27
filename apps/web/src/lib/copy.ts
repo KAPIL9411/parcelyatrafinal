@@ -297,6 +297,10 @@ const BY_CODE: Record<string, ErrorCopy> = {
   },
   UPLOAD_URL_EXPIRED: { title: 'The upload link expired', body: 'Try the upload again.' },
   UPLOAD_NOT_CONFIRMED: { title: 'The upload did not finish', body: 'Try the upload again.' },
+  STORAGE_UNAVAILABLE: {
+    title: 'We could not save that photo',
+    body: 'Try the upload again in a moment.',
+  },
 
   RATE_LIMITED: { title: 'Too many requests', body: 'Wait a minute and try again.' },
   NOT_FOUND: {

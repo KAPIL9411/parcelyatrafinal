@@ -377,6 +377,7 @@ const ERROR_COPY: Record<string, { title: string; body: string }> = {
     title: 'Those photos are gone',
     body: 'The upload did not last until submission. Attach the document and the selfie again.',
   },
+  STORAGE_UNAVAILABLE: { title: 'We could not save that photo', body: 'Try the upload again in a moment.' },
   SESSION_NOT_TRANSPORTED: { title: 'Sign-in could not be kept', body: 'This build cannot store the session. Update the app.' },
   OTP_ATTEMPTS_EXCEEDED: { title: 'Too many wrong codes', body: 'This booking is paused for review. Contact support.' },
   BOOKING_LOCKED: { title: 'This booking is paused', body: 'Too many wrong codes. Support will review it.' },
