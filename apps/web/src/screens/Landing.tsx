@@ -4,7 +4,6 @@ import { Link, useNavigate } from "react-router-dom";
 import { CATEGORY_LABELS, type Category } from "@py/domain";
 
 import { useCities, useConfig, useDocumentTitle } from "../lib/hooks";
-import { inr } from "../lib/format";
 import { Button, Card, Field, Select, TextInput } from "../components/ui";
 import { HeroBackdrop } from "../components/HeroBackdrop";
 import {
@@ -207,24 +206,6 @@ export function Landing() {
             they were making anyway. You see the price, the person and the
             handover record before anything moves.
           </p>
-
-          {limits ? (
-            <dl className="mx-auto mt-8 grid max-w-2xl grid-cols-2 gap-x-8 gap-y-4 border-t border-brand-900/20 pt-6 text-sm sm:grid-cols-4">
-              {[
-                ["Weight", `${limits.max_weight_kg} kg`],
-                ["Each side", `${limits.max_dimension_cm} cm`],
-                ["Declared value", inr(limits.max_declared_value_paise)],
-                ["Travel mode", "Car"],
-              ].map(([label, value]) => (
-                <div key={label}>
-                  <dt className="text-xs text-ink-700">{label}</dt>
-                  <dd className="mt-1 font-semibold text-brand-900 tabular">
-                    {value}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          ) : null}
         </div>
 
         <form
