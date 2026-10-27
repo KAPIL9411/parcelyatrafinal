@@ -500,13 +500,50 @@ function GoogleButton({
     }
   }, [response, onToken, onError]);
 
+  const disabled = busy || !request;
+
+  async function prompt() {
+    try {
+      await promptAsync();
+    } catch (err) {
+      onError(
+        new ApiError(
+          'GOOGLE_AUTH_FAILED',
+          err instanceof Error ? err.message : 'Google sign-in could not start.',
+          400,
+        ),
+      );
+    }
+  }
+
   return (
-    <Button
-      label="Continue with Google"
-      variant="secondary"
-      loading={busy}
-      disabled={!request}
-      onPress={() => void promptAsync()}
-    />
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Continue with Google"
+      accessibilityState={{ disabled, busy }}
+      disabled={disabled}
+      onPress={() => void prompt()}
+      style={({ pressed }) => ({
+        minHeight: 52,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: colors.line,
+        backgroundColor: colors.surface,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
+        opacity: disabled ? 0.5 : pressed ? 0.82 : 1,
+      })}
+    >
+      {busy ? (
+        <ActivityIndicator color={colors.brand} />
+      ) : (
+        <Ionicons name="logo-google" size={18} color={colors.brand} />
+      )}
+      <AppText variant="button" style={{ color: colors.ink900 }}>
+        {busy ? 'Connecting…' : 'Continue with Google'}
+      </AppText>
+    </Pressable>
   );
 }
