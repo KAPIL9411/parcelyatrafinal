@@ -552,6 +552,74 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
 
 ---
 
+### DEFECT-025 — Google sign-in refused in production, 400 before Google was called
+
+- **OBSERVED:** the deployed web app showed "Sign-in failed — We could not complete the sign-in.
+  Please try again." The Render log has two refused callbacks:
+  - `GET /v1/auth/google/authorize` (client 223.188.135.37) answered 200, and 27.5 s later
+    `POST /v1/auth/google/callback` from the same client answered **400 in 0.716 ms** on the same pod;
+  - `POST /v1/auth/google/callback` (client 63.88.73.201) answered **400 in 0.77 ms** with **no
+    `authorize` request from that client anywhere on that pod**;
+  - a third attempt (171.76.110.173) logged `"Google OAuth successful"` with the same credentials, so
+    the OAuth client and the redirect URI were not the problem;
+  - `POST /v1/auth/refresh` answered 401 in 0.6–0.8 ms repeatedly, including twice for the failing
+    223.188.135.37 client, so those browsers held no usable session either.
+- **Why it is visible in production but not locally:** the sub-millisecond 400 rules out the Google
+  call — a request that reaches `completeOAuthFlow` cannot answer that fast — so the callback was
+  rejected by the handshake check. The handshake had two single points of failure, and the log shows
+  both of them failing:
+  1. **The state was remembered in one Node process.** `GET /authorize` stored `{codeVerifier, nonce}`
+     in a module-level `Map` keyed by a random state. Render hibernates idle instances and replaces
+     pods on every deploy (the log shows a redeploy mid-window), so a callback can arrive at a process
+     that never minted that state — 63.88.73.201's missing `authorize` line is exactly that. A local
+     single-process dev server never rotates, which is why this never reproduced on a laptop.
+  2. **The browser-side half was a cross-site cookie.** `py_oauth` is written on `onrender.com` from a
+     request made by `vercel.app` and has to come back on the POST from Google's origin. Safari's ITP,
+     Firefox's total cookie protection and Chrome incognito partition or discard that cookie, so a
+     browser that carried neither transport left `state` as the only evidence — and the old check also
+     required the cookie to match, so a correct state alone was refused.
+- **CHANGED:** the handshake is now self-contained, and the browser proves itself with a value it can
+  carry two ways:
+  - `routes/google-auth.ts` — the `Map` is gone. `authorize` seals
+    `{codeVerifier, nonce, bindingHash, expiresAt}` into the state itself (AES-256-GCM, `lib/seal.ts`)
+    and returns a 32-character random `binding` to the SPA as well as setting it as `py_oauth`.
+    `callback` opens the state, checks the expiry, and accepts **either** transport of the binding —
+    the `sessionStorage` copy in the body or the cookie — comparing SHA-256 hashes in constant time.
+    PKCE still binds the code to the verifier, and Google still enforces a single-use authorization
+    code, so dropping the server-side single-use check changes no attacker's options: a replayed state
+    with a spent code fails at Google. Every refusal logs `{reason, path}` at `warn` (unreadable,
+    expired, missing, mismatched), so a future failure names its branch instead of showing a bare 400.
+  - `lib/seal.ts` — `seal`/`open` take an optional domain tag (`'oauth_state'`), so the OAuth key is
+    derived separately from the handover-code key. The untagged call is unchanged, so existing sealed
+    pickup codes stay readable.
+  - `lib/cookies.ts` — cookie writes append to `set-cookie` instead of replacing it. Fastify's
+    `reply.header` overwrote the header, so a response that set the session cookie next to another
+    one would have silently dropped one of them.
+  - `screens/Login.tsx` / `screens/GoogleCallback.tsx` — the SPA parks `handshake_binding` in
+    `sessionStorage` beside the existing `next` value and sends it with the code; the callback screen
+    now prints `errorCopy()` copy instead of a fixed "sign-in failed" line.
+  - `lib/copy.ts` — `INVALID_STATE`, `GOOGLE_AUTH_FAILED` and `GOOGLE_OAUTH_DISABLED` get real copy.
+  - `app.ts` — the deprecated top-level `maxParamLength` moved to `routerOptions` (FSTDEP022 in the
+    Render log), keeping the 512-character limit the signed-file route needs.
+- **Consequence / verification:** `apps/api/test/google-handshake.test.ts` (9 tests, run by
+  `npm run test:api`) exercises the handshake without Google: a sealed foreign state — one this
+  process never minted, the redeploy case — is accepted with the body binding only and completes to
+  the Google call; the cookie alone is accepted (so the already-deployed pre-fix web bundle keeps
+  working); a second tab's stale body binding does not outweigh a matching cookie; forged, tampered,
+  expired, unsigned and unproven states are all refused with `INVALID_STATE`; a rejected callback
+  still expires `py_oauth`. Also checked out of process: the API was rebuilt and restarted on a new
+  PID, and a handshake minted before the restart completed afterwards — this is the claim the
+  in-process suite cannot make. Typecheck (all three workspaces), 64 domain tests, 12 API tests and
+  `vite build` pass. **Not covered:** there are no real Google credentials or client here, so the
+  suite stops at `GOOGLE_AUTH_FAILED` (the placeholder code is rejected online or offline) rather than
+  asserting a session; and no browser with third-party cookies actually blocked was used — that path
+  is covered by construction (the body transport) and by the tests, not by a device.
+- **Deploy order:** the API must go first. The new web bundle sends a `binding` field that the old
+  API's `.strict()` schema rejects; the old bundle has no such field and keeps working against the
+  new API through the cookie, so OTP sign-in and Google sign-in stay usable during the window.
+
+---
+
 ## 2. Other deviations
 
 ### PGlite as the development database

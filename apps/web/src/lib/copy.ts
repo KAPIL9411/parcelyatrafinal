@@ -44,6 +44,20 @@ const BY_CODE: Record<string, ErrorCopy> = {
   },
   OTP_CHALLENGE_NOT_FOUND: { title: 'That code is no longer valid', body: 'Ask for a new code.' },
 
+  GOOGLE_OAUTH_DISABLED: {
+    title: 'Google sign-in is switched off',
+    body: 'This build has no Google credentials configured. Sign in with a phone number and a code instead.',
+  },
+  GOOGLE_AUTH_FAILED: {
+    title: 'Google did not accept the sign-in',
+    body: 'Nothing was created. Try again, or use a phone number and a code.',
+  },
+  INVALID_STATE: {
+    title: 'That sign-in attempt has expired',
+    body: 'A sign-in attempt is only good for ten minutes, and only in the browser that started it.',
+    hint: 'Go back and press "Sign in with Google" again.',
+  },
+
   FORBIDDEN: { title: 'Not available', body: 'This action is not available for this account.' },
   ROLE_REQUIRED: {
     title: 'Staff access only',

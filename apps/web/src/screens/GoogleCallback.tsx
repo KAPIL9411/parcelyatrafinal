@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { api, type AuthResponse } from '../lib/api';
+import { errorCopy } from '../lib/copy';
 import { safeNext } from '../lib/nav';
 import { useDocumentTitle } from '../lib/hooks';
 import { useSession } from '../lib/session';
@@ -10,8 +11,10 @@ import { Button } from '../components/ui';
 /**
  * Lands here after Google redirects back with `?code=...&state=...`.
  *
- * The browser sends the OAuth cookie set at /auth/google/authorize alongside the body, and the API
- * refuses the exchange unless both match and the state is still outstanding.
+ * The `state` is the sealed handshake the API issued a moment ago: everything it carries — the PKCE
+ * verifier, the nonce, the expiry — is encrypted with the API's own key, so it can sit in a URL, a
+ * history entry and a Referer header without handing anyone a usable credential. The browser proves it
+ * started this flow by sending back the handshake binding, from `sessionStorage` or from its cookie.
  */
 export function GoogleCallback() {
   useDocumentTitle('Google Sign-In');
@@ -34,7 +37,9 @@ export function GoogleCallback() {
     // read back from where Login parked it. A destination is never taken from the query string here:
     // anything an attacker can put in the URL has already been through `safeNext` at most once.
     const next = safeNext(sessionStorage.getItem('py.next'));
+    const binding = sessionStorage.getItem('py.oauth');
     sessionStorage.removeItem('py.next');
+    sessionStorage.removeItem('py.oauth');
 
     if (oauthError) {
       setError(oauthError === 'access_denied' ? 'Sign-in was cancelled.' : 'Google reported an error.');
@@ -46,13 +51,17 @@ export function GoogleCallback() {
     }
 
     void api
-      .post<AuthResponse>('/auth/google/callback', { code, state }, { auth: false })
+      .post<AuthResponse>('/auth/google/callback', { code, state, ...(binding ? { binding } : {}) }, { auth: false })
       .then((res) => {
         adoptSession(res);
         navigate(next, { replace: true });
       })
-      .catch(() => {
-        setError('We could not complete the sign-in. Please try again.');
+      .catch((err: unknown) => {
+        // Which half failed changes what to do about it: an expired handshake needs a fresh start,
+        // a rejected code needs Google, and a rate limit needs neither. "Please try again" for all
+        // three is how a browser that blocks cookies ends up retrying the same dead link.
+        const copy = errorCopy(err);
+        setError(copy.hint ? `${copy.body} ${copy.hint}` : copy.body);
       });
   }, [params, navigate, adoptSession]);
 

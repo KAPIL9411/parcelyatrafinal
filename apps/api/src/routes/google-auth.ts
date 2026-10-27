@@ -6,6 +6,8 @@ import { AppError } from '../lib/errors.ts';
 import { createPkce, googleAuthService, type GoogleUserInfo } from '../lib/google-auth.ts';
 import { createSession } from '../lib/auth.ts';
 import { OAUTH_COOKIE, deleteCookie, readCookie, setCookie, setRefreshCookie } from '../lib/cookies.ts';
+import { open as openSealed, seal } from '../lib/seal.ts';
+import { safeEqual, sha256 } from '../lib/crypto.ts';
 import { syncAdminRoles } from '../lib/admin-access.ts';
 import { audit } from '../services/audit.ts';
 import { loadProfile } from './auth.ts';
@@ -15,7 +17,13 @@ import type { Db } from '../db/client.ts';
 const googleAuthSchema = z
   .object({
     code: z.string().min(1).max(4096),
-    state: z.string().min(1).max(512),
+    state: z.string().min(1).max(1024),
+    /**
+     * The browser's copy of the handshake binding, held in `sessionStorage`. Optional only because
+     * the same value also travels as an HttpOnly cookie, and a browser that carries the cookie has
+     * already proved who it is.
+     */
+    binding: z.string().length(32).optional(),
     device_id: z.string().max(128).optional(),
   })
   .strict();
@@ -32,23 +40,79 @@ const HANDSHAKE_TTL_MS = 10 * 60 * 1000;
 interface Handshake {
   codeVerifier: string;
   nonce: string;
+  /** `sha256` of the binding, so the value that can complete the flow is never stored in the state. */
+  bindingHash: string;
   expiresAt: number;
 }
 
 /**
- * In-flight OAuth handshakes, keyed by `state`.
+ * The handshake, sealed into the `state` Google carries back to us.
  *
- * Each record is bound to the browser that started it by an HttpOnly cookie, so a leaked `state`
- * arriving from a different browser cannot complete the flow. Entries are single-use and expire.
+ * It used to be an in-process `Map` keyed by `state`, plus an HttpOnly cookie holding that key. The
+ * two refused callbacks in the attached Render log are one of each:
+ *
+ *  - The map lived in one Node process. A redeploy, a hibernating instance waking up or a second
+ *    replica forgets every in-flight handshake, so a callback that follows an authorize served
+ *    anywhere else has a `state` with nothing behind it. One of the two arrived from a client that
+ *    made no `authorize` request anywhere in the log window at all.
+ *  - The cookie had to survive a cross-site round trip to `accounts.google.com` and come back on a
+ *    fetch from `parcelyatra.vercel.app` to an API on `onrender.com`. Browsers that refuse
+ *    third-party cookies — Safari, Firefox, Chrome in incognito — never send it. The other refused
+ *    callback had a successful `authorize` on the same live process 27 seconds earlier, so the
+ *    handshake was there and the browser's half was the only thing left to fail; the same client got
+ *    `401` on both of its `POST /auth/refresh` calls, which is the same cookie policy applied to the
+ *    session.
+ *
+ * Sealing removes the first failure entirely: nothing is remembered, so nothing can be forgotten.
+ * The binding is sent by two transports, which removes the second one — a browser that blocks
+ * cookies still has its own `sessionStorage`, and a browser whose OAuth round trip lands in a fresh
+ * tab (Android custom tabs) still has the cookie. The state itself is encrypted, so neither the PKCE
+ * verifier nor the nonce is ever readable by the browser, an extension or the history entry.
+ *
+ * What is given up is single-use: nothing on the server says "this state was already spent". PKCE
+ * covers it — the verifier is inside the sealed state, so a spent state cannot be turned into a second
+ * token exchange, because Google's authorization code is itself single-use and bound to the challenge.
  */
-const handshakes = new Map<string, Handshake>();
+function sealHandshake(handshake: Handshake): string {
+  return seal(JSON.stringify(handshake), 'oauth_state');
+}
 
-setInterval(() => {
-  const now = Date.now();
-  for (const [state, entry] of handshakes) {
-    if (entry.expiresAt < now) handshakes.delete(state);
+function unsealHandshake(state: string): Handshake | null {
+  const raw = openSealed(state, 'oauth_state');
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<Handshake>;
+    if (
+      typeof parsed.codeVerifier !== 'string' ||
+      typeof parsed.nonce !== 'string' ||
+      typeof parsed.bindingHash !== 'string' ||
+      typeof parsed.expiresAt !== 'number'
+    ) {
+      return null;
+    }
+    return {
+      codeVerifier: parsed.codeVerifier,
+      nonce: parsed.nonce,
+      bindingHash: parsed.bindingHash,
+      expiresAt: parsed.expiresAt,
+    };
+  } catch {
+    return null;
   }
-}, HANDSHAKE_TTL_MS).unref();
+}
+
+type HandshakeRejection = 'state_unreadable' | 'state_expired' | 'binding_missing' | 'binding_mismatch';
+
+/**
+ * A rejected callback is the one failure in the product that the user cannot describe and the log
+ * could not explain: it answered `400` with no reason recorded. These names are the branches of the
+ * check above, and they are safe to log. The `state`, the `code` and the binding are never logged —
+ * a live handshake in a log line is a sign-in anyone with log read access can finish.
+ */
+function rejectHandshake(req: FastifyRequest, reason: HandshakeRejection): never {
+  req.log.warn({ reason, path: req.url.split('?')[0] }, 'Google sign-in handshake rejected');
+  throw new AppError('INVALID_STATE');
+}
 
 export async function googleAuthRoutes(app: FastifyInstance): Promise<void> {
   const db = app.db;
@@ -59,17 +123,24 @@ export async function googleAuthRoutes(app: FastifyInstance): Promise<void> {
       throw new AppError('GOOGLE_OAUTH_DISABLED');
     }
 
-    const state = randomBytes(16).toString('hex');
-    const nonce = randomBytes(16).toString('hex');
     const pkce = createPkce();
+    const nonce = randomBytes(16).toString('hex');
+    // The binding is handed to the browser in plaintext so it can be sent back; the server only keeps
+    // its hash, inside the sealed state.
+    const binding = randomBytes(16).toString('hex');
 
-    handshakes.set(state, { codeVerifier: pkce.verifier, nonce, expiresAt: Date.now() + HANDSHAKE_TTL_MS });
+    const state = sealHandshake({
+      codeVerifier: pkce.verifier,
+      nonce,
+      bindingHash: sha256(binding),
+      expiresAt: Date.now() + HANDSHAKE_TTL_MS,
+    });
 
     const authUrl = googleAuthService.buildAuthorizationUrl({ state, nonce, codeChallenge: pkce.challenge });
 
-    setCookie(reply, OAUTH_COOKIE, state, { maxAgeSeconds: HANDSHAKE_TTL_MS / 1000 });
+    setCookie(reply, OAUTH_COOKIE, binding, { maxAgeSeconds: HANDSHAKE_TTL_MS / 1000 });
 
-    return reply.send({ authorization_url: authUrl, state });
+    return reply.send({ authorization_url: authUrl, state, handshake_binding: binding });
   });
 
   // POST /auth/google/callback
@@ -83,16 +154,22 @@ export async function googleAuthRoutes(app: FastifyInstance): Promise<void> {
 
       const body = googleAuthSchema.parse(req.body);
 
-      const cookieState = readCookie(req, OAUTH_COOKIE);
+      const handshake = unsealHandshake(body.state);
+      if (!handshake) rejectHandshake(req, 'state_unreadable');
+      if (handshake.expiresAt < Date.now()) rejectHandshake(req, 'state_expired');
+
+      // The state has to come back with the value we issued to that browser, or it is a link someone
+      // else obtained — which would sign the reader of that link into the account it was made for.
+      // Either copy counts: two tabs of the same browser share the cookie but not their
+      // `sessionStorage`, so the tab that did not start this attempt still carries a valid proof.
+      const supplied = [body.binding, readCookie(req, OAUTH_COOKIE)].filter(
+        (value): value is string => typeof value === 'string',
+      );
       deleteCookie(reply, OAUTH_COOKIE);
-
-      const handshake = handshakes.get(body.state);
-      handshakes.delete(body.state);
-
-      if (!handshake || handshake.expiresAt < Date.now()) throw new AppError('INVALID_STATE');
-      // The state has to come from the same browser that started the flow, not from the request body
-      // alone; otherwise an attacker can sign a victim into an account the attacker controls.
-      if (!cookieState || cookieState !== body.state) throw new AppError('INVALID_STATE');
+      if (supplied.length === 0) rejectHandshake(req, 'binding_missing');
+      if (!supplied.some((value) => safeEqual(sha256(value), handshake.bindingHash))) {
+        rejectHandshake(req, 'binding_mismatch');
+      }
 
       const googleUser = await googleAuthService.completeOAuthFlow(body.code, {
         codeVerifier: handshake.codeVerifier,

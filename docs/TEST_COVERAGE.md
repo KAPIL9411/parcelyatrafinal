@@ -28,7 +28,7 @@ broken" and stops rather than printing a pass it did not earn.
 | `node scripts/kyc-review.mjs` | supporting (staff identity review) | 25 passed, 0 failed |
 | `node scripts/concurrency.mjs` | supporting (booking atomicity) | 11 passed, 0 failed |
 | `node scripts/ratelimit.mjs` | supporting (limiters) | 14 passed, 0 failed |
-| `npm test` | unit: domain + api | 64 passed + 3 passed, 0 failed |
+| `npm test` | unit: domain + api | 64 passed + 12 passed, 0 failed |
 | `npm run typecheck` | all three workspaces | clean |
 | `npm run build` | `@py/web` production build | clean (one chunk-size warning) |
 
@@ -105,11 +105,45 @@ It caught a live defect while being written: Fastify's default `maxParamLength` 
 file token is ~190 characters, so every `GET /files/signed/:token` answered `FST_ERR_MAX_PARAM_LENGTH`
 before the route ran. See `maxParamLength` in [apps/api/src/app.ts](../apps/api/src/app.ts).
 
+## Google sign-in handshake
+
+`apps/api/test/google-handshake.test.ts` (9 tests, part of `npm run test:api`). Google itself is not
+called successfully anywhere here, so these tests stop one step short of a session and say so.
+
+The handshake is the half of the flow that production actually refused (400 in 0.7 ms, i.e. before
+the code was sent to Google — see DEFECT-025). The suite covers:
+
+* a state minted by a different process — the redeploy case, and the only thing that can explain a
+  callback with no matching `authorize` on the pod — is accepted using only the `sessionStorage`
+  binding, and reaches `GOOGLE_AUTH_FAILED` (Google rejecting the placeholder code), which is the
+  marker for "the handshake passed";
+* the cookie transport alone is accepted too, so the web bundle deployed before the binding was
+  added keeps working through a deploy window in either order;
+* two tabs: a stale body binding next to a matching cookie is accepted, because either copy is proof;
+* forged, truncated, tampered, expired and unsigned states are refused with `INVALID_STATE`;
+* a valid state with neither transport is refused (a link handed to someone else);
+* a valid state with a different binding is refused;
+* a refused callback still expires `py_oauth` rather than leaving a stale cookie in the jar.
+
+Every refusal assertion checks the error code, not just the status, so a future 400 for another
+reason cannot masquerade as a correct rejection.
+
+The "other process" claim was also checked out of process once, by hand: a state minted while one
+API process was running was accepted by a different PID after a full restart. The test above proves
+the same thing in-process by minting the state outside the app; neither is a substitute for the
+deploy.
+
+**Not covered:** no real `GOOGLE_CLIENT_ID/SECRET`, so no test reaches a session or a `py_refresh`
+cookie; no browser with third-party cookies genuinely blocked; no assertion about Google's own JWKS
+or the ID-token audience (the placeholder code never gets that far).
+
 ## What these suites do not cover
 
 * Real payment capture, real SMS/WhatsApp/email delivery, real image storage and real managed
   Postgres — none of those providers are configured here. The sandbox webhook, the dev OTP peek and
   the local file sink stand in for the transport only, and each endpoint says so in its response.
+* A real Google sign-in end to end. `google-handshake.test.ts` stops at the call to Google, and the
+  `POST /auth/google/token` path (ID token obtained by the client) has no test at all in this repo.
 * Time-based transitions (`expire`, `auto_expire`, `open_pickup`, `settle_window`) have no scheduler
   to fire them; see "Known gaps" in [docs/BOOKING_STATE_MACHINE.md](BOOKING_STATE_MACHINE.md).
 * Mobile browsers and assistive technology: the UI was verified on a desktop Chromium viewport.

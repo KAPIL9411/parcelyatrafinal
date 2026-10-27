@@ -29,6 +29,10 @@ const base: CookieAttributes = {
 };
 
 export const REFRESH_COOKIE = 'py_refresh';
+/**
+ * Holds the OAuth handshake binding: a random value whose hash is sealed inside the `state` Google
+ * round-trips. Proof that the callback is being made by the browser that started the sign-in.
+ */
 export const OAUTH_COOKIE = 'py_oauth';
 /** Scoped to the auth endpoints only; the browser never attaches it to business calls. */
 export const AUTH_COOKIE_PATH = '/v1/auth';
@@ -45,17 +49,30 @@ function serialize(name: string, value: string, attrs: CookieAttributes): string
   return parts.join('; ');
 }
 
+/**
+ * `set-cookie` is the one header that legitimately appears more than once in a response, and
+ * `reply.header` *replaces*. A sign-in that clears the handshake cookie and then sets the refresh
+ * cookie therefore used to send only the refresh cookie, leaving the handshake cookie in the jar
+ * until it expired; a route that set them in the other order would silently drop the session. So
+ * every write below appends to whatever is already queued.
+ */
+function appendCookie(reply: FastifyReply, cookie: string): void {
+  const queued = reply.getHeader('set-cookie');
+  const list: string[] = queued === undefined ? [] : (Array.isArray(queued) ? queued : [queued]).map(String);
+  reply.header('set-cookie', [...list, cookie]);
+}
+
 export function setCookie(
   reply: FastifyReply,
   name: string,
   value: string,
   opts: { maxAgeSeconds: number; path?: string },
 ): void {
-  reply.header('set-cookie', serialize(name, value, { ...base, path: opts.path ?? AUTH_COOKIE_PATH, maxAgeSeconds: opts.maxAgeSeconds }));
+  appendCookie(reply, serialize(name, value, { ...base, path: opts.path ?? AUTH_COOKIE_PATH, maxAgeSeconds: opts.maxAgeSeconds }));
 }
 
 export function deleteCookie(reply: FastifyReply, name: string, path = AUTH_COOKIE_PATH): void {
-  reply.header('set-cookie', serialize(name, '', { ...base, path, maxAgeSeconds: 0 }));
+  appendCookie(reply, serialize(name, '', { ...base, path, maxAgeSeconds: 0 }));
 }
 
 export function readCookie(req: FastifyRequest, name: string): string | null {

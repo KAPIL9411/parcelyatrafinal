@@ -44,8 +44,9 @@ export async function buildApp(): Promise<FastifyInstance> {
     // expiry and a 43-character signature, base64url-encoded. Left at the default, every
     // `/files/signed/:token` read — the one the staff console hands to an `<img>` — answers
     // FST_ERR_MAX_PARAM_LENGTH before the route ever runs. 512 covers a key up to the 256 characters
-    // the submission schema allows.
-    maxParamLength: 512,
+    // the submission schema allows. It lives under `routerOptions` because Fastify 5 deprecates the
+    // top-level key, which printed FSTDEP022 into the production log on every boot.
+    routerOptions: { maxParamLength: 512 },
     logger: {
       level: config.LOG_LEVEL,
       // Structured logs only. Never log request bodies: they contain names, phones and addresses.

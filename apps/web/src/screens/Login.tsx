@@ -96,14 +96,19 @@ export function Login() {
     setError(null);
     
     try {
-      // The API returns the Google URL and remembers `state`, the PKCE verifier and the nonce
-      // against an HttpOnly cookie, so nothing security-relevant is kept on this side.
-      const response = await api.get<{ authorization_url: string; state: string }>(
-        '/auth/google/authorize',
-        { auth: false }
-      );
+      // The API answers with the Google URL, a `state` that carries the PKCE verifier and the nonce
+      // sealed so only the API can read them, and the handshake binding. The binding is what proves,
+      // at the callback, that the browser finishing the flow is the browser that started it.
+      const response = await api.get<{
+        authorization_url: string;
+        state: string;
+        handshake_binding: string;
+      }>('/auth/google/authorize', { auth: false });
 
       sessionStorage.setItem('py.next', next);
+      // The API also sets it as an HttpOnly cookie. Keeping this copy is what lets a browser that
+      // refuses third-party cookies — Safari, Firefox, Chrome incognito — complete the sign-in.
+      sessionStorage.setItem('py.oauth', response.handshake_binding);
       window.location.href = response.authorization_url;
     } catch (err) {
       setError(err);
