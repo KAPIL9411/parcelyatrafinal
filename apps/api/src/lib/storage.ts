@@ -85,15 +85,21 @@ function toPublicId(key: string): string {
 }
 
 /**
- * Generate a Cloudinary API authentication signature for upload.
+ * Generate a Cloudinary API authentication signature.
  * https://cloudinary.com/documentation/upload_images#generating_authentication_signatures
+ *
+ * The algorithm is the account's setting, not the adapter's choice. Default accounts validate
+ * SHA-1 and answer every SHA-256 attempt with `Invalid Signature` — verified against the live
+ * API: the "String to sign" Cloudinary reported excluded `signature_algorithm` entirely. An
+ * account configured to require SHA-256 must set `CLOUDINARY_SIGNATURE_ALGORITHM=sha256`, and
+ * only then may `signature_algorithm` appear among the signed parameters.
  */
-function cloudinarySignature(params: Record<string, string | number>, apiSecret: string): string {
+export function cloudinarySignature(params: Record<string, string | number>, apiSecret: string): string {
   const sorted = Object.keys(params)
     .sort()
     .map((k) => `${k}=${params[k]}`)
     .join('&');
-  return createHash('sha256')
+  return createHash(config.CLOUDINARY_SIGNATURE_ALGORITHM)
     .update(sorted + apiSecret)
     .digest('hex');
 }
@@ -117,10 +123,10 @@ async function cloudinaryPut(key: string, bytes: Buffer): Promise<void> {
     public_id: publicId,
     timestamp,
     type: 'authenticated', // private — requires signed URL to view
-    // Cloudinary defaults to SHA-1 signatures. Naming the algorithm keeps an account that still
-    // uses the default from rejecting the SHA-256 digest this adapter computes.
-    signature_algorithm: 'sha256',
   };
+  if (config.CLOUDINARY_SIGNATURE_ALGORITHM === 'sha256') {
+    params.signature_algorithm = 'sha256';
+  }
 
   const signature = cloudinarySignature(params, apiSecret);
 
@@ -167,8 +173,10 @@ async function cloudinaryGet(key: string): Promise<StoredObject | null> {
     public_id: publicId,
     timestamp,
     type: 'authenticated',
-    signature_algorithm: 'sha256',
   };
+  if (config.CLOUDINARY_SIGNATURE_ALGORITHM === 'sha256') {
+    params.signature_algorithm = 'sha256';
+  }
   const signature = cloudinarySignature(params, apiSecret);
   const query = new URLSearchParams({
     ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])),

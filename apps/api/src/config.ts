@@ -129,6 +129,12 @@ const schema = z.object({
   CLOUDINARY_CLOUD_NAME: z.string().optional(),
   CLOUDINARY_API_KEY: z.string().optional(),
   CLOUDINARY_API_SECRET: z.string().optional(),
+  /**
+   * Signature algorithm the Cloudinary account validates. Default accounts use SHA-1 and refuse
+   * a SHA-256 signature with "Invalid Signature"; flip to sha256 only when the account's own
+   * security setting requires it.
+   */
+  CLOUDINARY_SIGNATURE_ALGORITHM: z.enum(['sha1', 'sha256']).default('sha1'),
 
   // Payments — sandbox only.
   PAYMENTS_LIVE: bool(false),

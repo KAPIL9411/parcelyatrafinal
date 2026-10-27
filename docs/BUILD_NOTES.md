@@ -767,6 +767,39 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
   not observable from outside; with this change the next failed write names itself in the
   Render log (`object write failed` + the provider status/errno) instead of hiding behind a 500.
 
+### DEFECT-028 follow-up — every signed Cloudinary upload still answers 503
+
+- **OBSERVED (production console):** after the first fix the ticket switched to
+  `PUT /v1/files/cloudinary-upload/...` (proving Render runs `STORAGE_PROVIDER=cloudinary`) and
+  the sink answered **503** `STORAGE_UNAVAILABLE` on every PUT. The error text is the one the
+  new envelope emits, so the write itself was refused by Cloudinary.
+- **Cause:** the signature was wrong. `cloudinaryGet`/`cloudinaryPut` signed with SHA-256 and put
+  `signature_algorithm=sha256` inside the signed string. A live probe (placeholder credentials,
+  real Cloudinary endpoint) answered `Invalid Signature` and reported its
+  **String to sign — `public_id=...&timestamp=...&type=authenticated`** — no
+  `signature_algorithm`. The account validates **SHA-1**, which is Cloudinary's default:
+  default accounts reject any signature that signs `signature_algorithm`; only accounts whose own
+  security setting requires SHA-256 accept it. The signing also had to include `timestamp` and
+  `type=authenticated` — parameters missing from earlier attempts.
+- **CHANGED:**
+  - `lib/storage.ts` — `cloudinarySignature` (now exported) hashes with
+    `config.CLOUDINARY_SIGNATURE_ALGORITHM` (default `sha1`); `signature_algorithm: 'sha256'` is
+    added to the signed params only in sha256 mode. Signed string: sorted `k=v` pairs joined by
+    `&`, then the API secret appended — exactly as Cloudinary builds it (`file` and `api_key`
+    are never in it).
+  - `config.ts` — new `CLOUDINARY_SIGNATURE_ALGORITHM` (`sha1` | `sha256`, default `sha1`); flip
+    to `sha256` only when the account's security setting requires it.
+  - `apps/api/test/cloudinary-signature.test.ts` — two tests pin the construction: the SHA-1
+    signature reproduces Cloudinary's documented worked example (secret `abcd`,
+    `{timestamp: 1315060510}` → `a21ad0f63beb4de2e5575204b79ab90bffb02c10`) and the sorted
+    params + secret string.
+- **Verification:** both signature tests pass; full run 32/32 API, workspace typecheck clean.
+- **Honest limit:** the signature is proven against Cloudinary's published vector, and the live
+  probe proved the previous string was not what the account validates. An upload against the
+  user's real account needs the deployed build on Render; if that still refuses, the account has
+  been switched to SHA-256 in Cloudinary settings and the fix is
+  `CLOUDINARY_SIGNATURE_ALGORITHM=sha256` in the Render environment.
+
 ---
 
 ## 2. Other deviations
@@ -872,10 +905,11 @@ undefined here on purpose rather than being invented.
 - `npm run typecheck` — domain, API, web and mobile all clean.
 - `npm test` — 64/64 domain tests pass (money, pricing, eligibility, the booking state machine,
   refunds, and the matching engine: hard gates, score arithmetic, tie-breaks, policy validation,
-  low-confidence fallback, truthfulness of the reason codes), 30/30 API tests (the `ADMIN_EMAILS`
+  low-confidence fallback, truthfulness of the reason codes), 32/32 API tests (the `ADMIN_EMAILS`
   grant, the Google handshake short of the call to Google, the native session transport, the
-  deletion/recovery identity cases in DEFECT-026, and the upload/submission cases in
-  DEFECT-027/DEFECT-028), and 8/8 mobile transport tests. **The Google leg
+  deletion/recovery identity cases in DEFECT-026, the upload/submission cases in
+  DEFECT-027/DEFECT-028, and the Cloudinary signature construction), and 8/8 mobile transport
+  tests. **The Google leg
   is not tested here**: it needs a real ID token from a configured OAuth client, and this build has
   no credentials. What is proven is the function that sign-in calls.
 - `node scripts/smoke.mjs --reset` — 57 checks pass, 0 fail. Covers sign-in, upload ownership,
