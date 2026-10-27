@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   Link,
   NavLink,
@@ -73,6 +73,15 @@ function UnreadBadge({ total, className }: { total: number; className?: string }
   );
 }
 
+function navLinkClass(isActive: boolean) {
+  return cn(
+    "rounded-full px-3.5 py-1.5 text-sm font-semibold transition-colors",
+    isActive
+      ? "bg-brand-600 text-white shadow-sm"
+      : "text-ink-700 hover:bg-brand-50 hover:text-ink-900",
+  );
+}
+
 export function Layout() {
   const { user, status, isStaff, signOut } = useSession();
   const online = useOnline();
@@ -81,34 +90,48 @@ export function Layout() {
   const { pathname } = useLocation();
   // The landing page owns its own full-bleed hero, so it must not be boxed by the container.
   const isHome = pathname === "/";
+  // The transparent header shows the hero photograph through it; once content scrolls beneath,
+  // a light tint and hairline fade in so the links stay legible over anything.
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   return (
     <div className="flex min-h-dvh flex-col">
       <ScrollToTop />
 
-      <header className="sticky top-0 z-30 border-b border-line bg-surface/90 backdrop-blur">
+      <header
+        className={cn(
+          "sticky top-0 z-30 transition-[background-color,border-color,box-shadow] duration-300",
+          isHome && !scrolled
+            ? "border-b border-transparent bg-transparent"
+            : "border-b border-line bg-surface/85 shadow-card backdrop-blur-md",
+        )}
+      >
         <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-8 px-4 sm:px-6">
           <Link
             to="/"
-            className="shrink-0 rounded-input"
+            className={cn(
+              "shrink-0 rounded-input transition-colors",
+              // The wordmark has an opaque white backing, so over the photograph it sits on a
+              // frosted chip instead of floating as a white rectangle.
+              isHome && !scrolled && "bg-white/90 px-2.5 py-1.5 shadow-card backdrop-blur-md",
+            )}
             aria-label="Parcel Yatra home"
           >
             <Wordmark />
           </Link>
 
-          <nav className="hidden items-center gap-7 md:flex" aria-label="Main">
+          <nav className="hidden items-center gap-1.5 md:flex" aria-label="Main">
             {NAV.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
-                className={({ isActive }) =>
-                  cn(
-                    "-my-1 border-b-2 py-1 text-sm font-medium transition-colors",
-                    isActive
-                      ? "border-brand-600 text-ink-900"
-                      : "border-transparent text-ink-500 hover:text-ink-900",
-                  )
-                }
+                className={({ isActive }) => navLinkClass(isActive)}
               >
                 {item.label}
               </NavLink>
@@ -116,14 +139,7 @@ export function Layout() {
             {isStaff ? (
               <NavLink
                 to="/admin"
-                className={({ isActive }) =>
-                  cn(
-                    "-my-1 border-b-2 py-1 text-sm font-medium transition-colors",
-                    isActive
-                      ? "border-brand-600 text-ink-900"
-                      : "border-transparent text-ink-500 hover:text-ink-900",
-                  )
-                }
+                className={({ isActive }) => navLinkClass(isActive)}
               >
                 Operations
               </NavLink>
@@ -143,7 +159,7 @@ export function Layout() {
               <>
                 <Link
                   to="/profile"
-                  className="hidden items-center gap-2 rounded-input px-3 py-2 text-sm font-medium text-ink-700 hover:bg-canvas sm:flex"
+                  className="hidden items-center gap-2 rounded-full px-3 py-2 text-sm font-medium text-ink-700 hover:bg-brand-50 sm:flex"
                 >
                   {user.name ? user.name.split(" ")[0] : "Account"}
                   <UnreadBadge total={unread.total} />
@@ -151,7 +167,7 @@ export function Layout() {
                 <button
                   type="button"
                   onClick={() => void signOut().then(() => navigate("/"))}
-                  className="grid h-10 w-10 place-items-center rounded-full text-ink-500 hover:bg-canvas hover:text-ink-900"
+                  className="grid h-10 w-10 place-items-center rounded-full text-ink-500 hover:bg-brand-50 hover:text-ink-900"
                   aria-label="Sign out"
                   title="Sign out"
                 >
@@ -162,7 +178,7 @@ export function Layout() {
               <div className="flex items-center gap-2">
                 <Link
                   to="/help"
-                  className="hidden rounded-input px-3 py-2 text-sm font-medium text-ink-500 hover:text-ink-900 sm:inline-block"
+                  className="hidden rounded-full px-3 py-2 text-sm font-medium text-ink-700 hover:bg-brand-50 sm:inline-block"
                 >
                   Help
                 </Link>

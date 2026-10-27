@@ -191,7 +191,9 @@ export function Landing() {
 
   return (
     <div>
-      <section className="hero-panel relative w-full px-4 pt-12 pb-28 sm:px-6 sm:pt-16 sm:pb-36">
+      {/* The header is transparent here, so the panel slides up under it and the photograph
+          fills the top of the viewport; the extra top padding keeps the content clear of it. */}
+      <section className="hero-panel relative w-full -mt-16 px-4 pt-28 pb-28 sm:px-6 sm:pt-32 sm:pb-36">
         <HeroBackdrop />
         <div className="relative mx-auto w-full max-w-3xl text-center text-brand-900">
           <p className="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold tracking-wide uppercase">
