@@ -1,33 +1,34 @@
-import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 
-import { CATEGORY_LABELS, type Category } from "@py/domain";
-
-import { useCities, useConfig, useDocumentTitle } from "../lib/hooks";
-import { Button, Card, Field, Select, TextInput } from "../components/ui";
-import { HeroBackdrop } from "../components/HeroBackdrop";
+import { APP_DOWNLOAD_READY } from "../lib/app-download";
+import { useDocumentTitle } from "../lib/hooks";
+import { DownloadButton } from "../components/DownloadButton";
+import { PhoneMockup, PhonePreview } from "../components/PhoneMockup";
+import { Card } from "../components/ui";
 import {
   ArrowRightIcon,
-  AwardIcon,
   CameraIcon,
-  CarIcon,
+  CheckCircleIcon,
+  ChevronDownIcon,
   CoinsIcon,
-  DocIcon,
   LockIcon,
   ParcelIcon,
-  PhoneIcon,
   RouteIcon,
-  SearchIcon,
   ShieldCheckIcon,
-  SwapIcon,
   TagIcon,
 } from "../components/icons";
+
+const TRUST = [
+  { icon: ShieldCheckIcon, label: "Verified travellers" },
+  { icon: CameraIcon, label: "Sealed-parcel photo" },
+  { icon: LockIcon, label: "A code at both ends" },
+];
 
 const STEPS = [
   {
     icon: ParcelIcon,
     title: "Describe the parcel",
-    body: "What is inside, how heavy it is, and the window it must arrive in. The price is calculated and shown before you pay.",
+    body: "What is inside, how heavy it is and the window it must arrive in. The price is calculated and shown before you pay.",
   },
   {
     icon: RouteIcon,
@@ -35,9 +36,32 @@ const STEPS = [
     body: "Verified travellers already driving your route, ranked on time window, capacity and reliability — with the reasons for each match.",
   },
   {
-    icon: ShieldCheckIcon,
+    icon: LockIcon,
     title: "Hand over with a code",
     body: "A six-digit code at pickup and another at delivery. Both sides keep a photo of the sealed parcel.",
+  },
+];
+
+const FEATURES = [
+  {
+    icon: ShieldCheckIcon,
+    title: "Verified travellers",
+    body: "One photo ID and a selfie, checked by a person before a trip can go live. Aadhaar is never accepted.",
+  },
+  {
+    icon: TagIcon,
+    title: "Transparent pricing",
+    body: "One price, calculated from route, weight and category, with GST as its own line. You see it before anything is charged.",
+  },
+  {
+    icon: LockIcon,
+    title: "Secure handovers",
+    body: "A code at pickup, a code at delivery, and a photo of the sealed parcel kept on the booking.",
+  },
+  {
+    icon: RouteIcon,
+    title: "Recorded status",
+    body: "Every update from the sender and the traveller lands on the booking. Live vehicle location is not offered.",
   },
 ];
 
@@ -58,368 +82,215 @@ const INCLUDED = [
     body: "Nothing changes hands without the handover code.",
   },
   {
-    icon: PhoneIcon,
-    title: "Dispute support",
-    body: "Raise a case for 72 hours after delivery.",
-  },
-];
-
-const FEATURES = [
-  {
-    icon: ShieldCheckIcon,
-    title: "Verified travellers",
-    body: "Every traveller’s ID is checked by a person before their trip goes live.",
-  },
-  {
-    icon: TagIcon,
-    title: "Transparent pricing",
-    body: "One price, calculated from weight and route, shown before anything is charged.",
-  },
-  {
-    icon: LockIcon,
-    title: "Secure handovers",
-    body: "A code at pickup, a code at delivery, and a photo of the sealed parcel.",
-  },
-  {
-    icon: RouteIcon,
-    title: "Recorded status",
-    body: "Each step lands on your booking. Live vehicle location is not offered.",
-  },
-];
-
-/**
- * Each card points at a route that exists. The four sending cards preselect a real, offerable
- * category — `electronics` is prohibited at launch, so the closest honest one is low-value
- * accessories.
- */
-const QUICK_LINKS: Array<{
-  icon: typeof DocIcon;
-  title: string;
-  label: string;
-  to: string;
-}> = [
-  {
-    icon: DocIcon,
-    title: "Documents",
-    label: "Papers, contracts, invoices",
-    to: "/send?category=documents",
-  },
-  {
-    icon: AwardIcon,
-    title: "Certificates",
-    label: "Degrees, marksheets, transcripts",
-    to: "/send?category=educational_certificates",
-  },
-  {
     icon: ParcelIcon,
-    title: "Business samples",
-    label: "Swatches, catalogues, dry parts",
-    to: "/send?category=business_samples",
+    title: "A written history",
+    body: "Each status change stays attached to the booking.",
+  },
+];
+
+const FAQ = [
+  {
+    q: "Where does Parcel Yatra run?",
+    a: "At launch, parcels move on the Bareilly ⇄ Delhi NCR and Bareilly ⇄ Lucknow corridors. More routes open as travellers publish trips.",
   },
   {
-    icon: TagIcon,
-    title: "Low-value accessories",
-    label: "Cables, cases, chargers",
-    to: "/send?category=electronics_accessories_low_value",
+    q: "What can I send?",
+    a: "Documents, educational certificates, business samples, dry spare parts, sealed cosmetics and low-value accessories. The limits are 5 kg, 45 cm on each side and ₹5,000 declared value.",
   },
   {
-    icon: CoinsIcon,
-    title: "Travelling & earning",
-    label: "Carry a parcel on a trip you are making",
-    to: "/trips/new",
+    q: "Is my parcel insured?",
+    a: "No. Cover does not exist in this build. If something goes wrong you can raise a problem within 72 hours of delivery; we investigate and may offer a goodwill amount, but we cannot repay the full value.",
   },
   {
-    icon: SearchIcon,
-    title: "Track a parcel",
-    label: "Status and handover codes",
-    to: "/bookings",
+    q: "How are travellers verified?",
+    a: "A person checks one photo ID and a selfie before a trip can be published. A traveller can always refuse a parcel at the door if the seal is broken or the weight does not match.",
+  },
+  {
+    q: "How is the price calculated?",
+    a: "The server prices the route, weight, category and platform fee, and shows GST separately. The quote is held for a short window and is exactly what you pay.",
+  },
+  {
+    q: "Where do I get the app?",
+    a: "The Android app is the product. The direct download link is being finalised and will appear on this page as soon as it is available.",
+  },
+  {
+    q: "Do you track my parcel live?",
+    a: "No. Status updates come from the people involved, not from a live map. Each update is recorded on the booking.",
   },
 ];
 
 export function Landing() {
-  useDocumentTitle("");
-  const navigate = useNavigate();
-  const { data: config } = useConfig();
-  const cities = useCities();
-  const limits = config?.limits;
-
-  const serviceable = (cities.data ?? []).filter((city) => city.is_serviceable);
-
-  const [originCityId, setOriginCityId] = useState("");
-  const [destCityId, setDestCityId] = useState("");
-  const [weight, setWeight] = useState("1.5");
-  const [category, setCategory] = useState<Category>("documents");
-  const [error, setError] = useState("");
-
-  const maxWeight = limits?.max_weight_kg ?? 5;
-
-  function swapCities() {
-    setOriginCityId(destCityId);
-    setDestCityId(originCityId);
-  }
-
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    if (cities.isLoading || cities.isError) {
-      setError("City list unavailable right now. Try again in a moment.");
-      return;
-    }
-    if (!originCityId || !destCityId) {
-      setError("Choose both cities to continue.");
-      return;
-    }
-    if (originCityId === destCityId) {
-      setError("Pickup and destination must be different cities.");
-      return;
-    }
-    const w = Number(weight);
-    if (!Number.isFinite(w) || w < 0.1 || w > maxWeight) {
-      setError(`We carry between 0.1 and ${maxWeight} kg at launch.`);
-      return;
-    }
-    const query = new URLSearchParams({
-      origin: originCityId,
-      dest: destCityId,
-      weight: String(w),
-      category,
-    });
-    const target = `/send?${query.toString()}`;
-    // Always head for the real screen and let `RequireAuth` decide. Guessing here from a session that
-    // may still be loading is what sends a returning visitor to the sign-in page for a second.
-    navigate(target);
-  }
+  useDocumentTitle("Parcels carried by travellers between cities");
 
   return (
     <div>
-      {/* The header is transparent here, so the panel slides up under it and the photograph
-          fills the top of the viewport; the extra top padding keeps the content clear of it. */}
-      <section className="hero-panel relative w-full -mt-16 px-4 pt-28 pb-28 sm:px-6 sm:pt-32 sm:pb-36">
-        <HeroBackdrop />
-        <div className="relative mx-auto w-full max-w-3xl text-center text-brand-900">
-          <p className="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold tracking-wide uppercase">
-            Bareilly ⇄ Delhi NCR · Bareilly ⇄ Lucknow
-          </p>
-          <h1 className="mt-5 text-[34px] leading-[1.1] font-bold tracking-tight text-balance sm:text-5xl">
-            Send it with{" "}
-            <span className="text-brand-700">someone already going</span>.
-          </h1>
-          <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-ink-700 sm:text-lg">
-            A small sealed parcel, carried by a verified traveller on a journey
-            they were making anyway. You see the price, the person and the
-            handover record before anything moves.
-          </p>
-        </div>
+      <section className="site-hero relative overflow-hidden">
+        <div className="mx-auto grid w-full max-w-6xl gap-12 px-4 pt-12 pb-16 sm:px-6 sm:pt-16 sm:pb-20 lg:grid-cols-[1.05fr_0.95fr] lg:items-center lg:gap-10">
+          <div>
+            <p className="inline-flex items-center gap-2 rounded-full border border-brand-200 bg-surface/80 px-3 py-1 text-xs font-semibold text-brand-700 backdrop-blur">
+              <span className="h-1.5 w-1.5 rounded-full bg-accent-500" />
+              Android app · inter-city parcels
+            </p>
 
-        <form
-          onSubmit={submit}
-          aria-label="Quick booking"
-          className="relative mx-auto mt-9 w-full max-w-4xl rounded-sheet bg-surface p-4 text-ink-900 shadow-float sm:p-6"
-        >
-          <p className="text-xs font-semibold tracking-wide text-ink-500 uppercase">
-            Book in under a minute
-          </p>
+            <h1 className="mt-5 text-[2.15rem] leading-[1.08] font-bold tracking-tight text-ink-900 text-balance sm:text-5xl lg:text-[3.4rem]">
+              Your parcel rides with{" "}
+              <span className="text-brand-700">someone already going</span>.
+            </h1>
 
-          <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto_1fr] md:items-end">
-            <Field label="Pickup city" htmlFor="hp-origin">
-              <Select
-                id="hp-origin"
-                value={originCityId}
-                onChange={(event) => {
-                  setOriginCityId(event.target.value);
-                  setError("");
-                }}
+            <p className="mt-5 max-w-xl text-base leading-relaxed text-ink-700 sm:text-lg">
+              Parcel Yatra matches a small, sealed parcel with a verified
+              traveller on a journey they were making anyway. Price before you
+              pay, a code at pickup, a code at delivery, and the sealed-parcel
+              photo on record.
+            </p>
+
+            <div className="mt-7 flex flex-wrap items-center gap-3">
+              <DownloadButton size="lg" />
+              <a
+                href="#how-it-works"
+                className="inline-flex h-12 items-center gap-2 rounded-input px-2 text-[15px] font-semibold text-brand-700 hover:underline hover:underline-offset-4"
               >
-                <option value="">Choose a city</option>
-                {serviceable.map((city) => (
-                  <option key={city.id} value={city.id}>
-                    {city.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-
-            <div className="flex justify-center">
-              <button
-                type="button"
-                onClick={swapCities}
-                aria-label="Swap pickup and destination cities"
-                className="inline-flex h-11 items-center gap-1.5 rounded-full border border-line-strong bg-canvas px-4 text-xs font-semibold text-ink-700 hover:border-ink-300 hover:text-ink-900"
-              >
-                <SwapIcon size={15} />
-                Swap
-              </button>
+                See how it works
+                <ArrowRightIcon size={17} />
+              </a>
             </div>
 
-            <Field label="Destination city" htmlFor="hp-dest">
-              <Select
-                id="hp-dest"
-                value={destCityId}
-                onChange={(event) => {
-                  setDestCityId(event.target.value);
-                  setError("");
-                }}
-              >
-                <option value="">Choose a city</option>
-                {serviceable.map((city) => (
-                  <option key={city.id} value={city.id}>
-                    {city.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-          </div>
-
-          <div className="mt-3 grid grid-cols-2 gap-3">
-            <Field label="Weight (kg)" htmlFor="hp-weight">
-              <TextInput
-                id="hp-weight"
-                type="number"
-                inputMode="decimal"
-                min={0.1}
-                max={maxWeight}
-                step={0.1}
-                value={weight}
-                onChange={(event) => {
-                  setWeight(event.target.value);
-                  setError("");
-                }}
-              />
-            </Field>
-            <Field label="Category" htmlFor="hp-category">
-              <Select
-                id="hp-category"
-                value={category}
-                onChange={(event) =>
-                  setCategory(event.target.value as Category)
-                }
-              >
-                {(config?.categories ?? []).map((value) => (
-                  <option key={value} value={value}>
-                    {CATEGORY_LABELS[value as Category]}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-          </div>
-
-          {error ? (
-            <p className="mt-3 text-sm text-danger-600" role="alert">
-              {error}
+            <p className="mt-3 max-w-md text-xs leading-relaxed text-ink-500">
+              {APP_DOWNLOAD_READY
+                ? "Android · direct download. Posting, matching and handover codes all live in the app."
+                : "The direct Android download link is being finalised and will be published here. This page explains how the service works in the meantime."}
             </p>
-          ) : null}
 
-          <Button
-            type="submit"
-            size="lg"
-            fullWidth
-            className="mt-4"
-            disabled={cities.isLoading || cities.isError}
-          >
-            See price and travellers
-            <ArrowRightIcon size={18} />
-          </Button>
+            <ul className="mt-8 flex flex-wrap gap-x-6 gap-y-2.5">
+              {TRUST.map((item) => (
+                <li
+                  key={item.label}
+                  className="flex items-center gap-2 text-sm font-medium text-ink-700"
+                >
+                  <item.icon size={17} className="shrink-0 text-success-600" />
+                  {item.label}
+                </li>
+              ))}
+            </ul>
+          </div>
 
-          <p className="mt-3 text-center text-xs leading-relaxed text-ink-500">
-            Nothing is charged until you confirm a price. Next: the parcel
-            photo, the time window, then a verified traveller.
-          </p>
-        </form>
+          <div className="relative">
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute top-1/2 left-1/2 h-[26rem] w-[26rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand-200/50 blur-3xl"
+            />
+            <PhoneMockup screen="home" className="relative" />
+
+            <div className="absolute top-24 -left-2 hidden rounded-xl border border-line bg-surface/95 px-3 py-2 shadow-float backdrop-blur sm:block lg:-left-6">
+              <p className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-900">
+                <LockIcon size={13} className="text-success-600" />
+                Pickup code verified
+              </p>
+              <p className="mt-0.5 text-[10px] text-ink-500">
+                Bareilly · sealed and photographed
+              </p>
+            </div>
+
+            <div className="absolute right-0 bottom-20 hidden rounded-xl border border-line bg-surface/95 px-3 py-2 shadow-float backdrop-blur sm:block lg:-right-4">
+              <p className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-900">
+                <ShieldCheckIcon size={13} className="text-brand-600" />
+                Verified traveller
+              </p>
+              <p className="mt-0.5 text-[10px] text-ink-500">
+                Delhi NCR · trip published
+              </p>
+            </div>
+          </div>
+        </div>
       </section>
 
-      <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
-        <section
-          aria-labelledby="quick-links"
-          className="relative z-10 -mt-16 sm:-mt-24"
-        >
-          <h2 id="quick-links" className="sr-only">
-            What you can send or do
-          </h2>
-          <ul className="no-scrollbar -mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2 sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-x-visible sm:px-0 md:grid-cols-3 lg:grid-cols-6">
-            {QUICK_LINKS.map((link) => (
-              <li
-                key={link.title}
-                className="w-[15rem] shrink-0 snap-start sm:w-auto"
-              >
-                <Link
-                  to={link.to}
-                  className="flex h-full flex-col rounded-card border border-line bg-surface p-4 shadow-card transition-shadow hover:border-brand-200 hover:shadow-float"
-                >
-                  <span className="grid h-10 w-10 place-items-center rounded-full bg-brand-50 text-brand-700">
-                    <link.icon size={19} />
-                  </span>
-                  <p className="mt-3 text-sm font-semibold text-ink-900">
-                    {link.title}
-                  </p>
-                  <p className="mt-1 text-xs leading-relaxed text-ink-500">
-                    {link.label}
-                  </p>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </section>
+      <div className="border-y border-line bg-surface">
+        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-center gap-x-8 gap-y-2 px-4 py-3 text-xs font-medium text-ink-700 sm:px-6">
+          <span className="text-[11px] font-bold tracking-wide text-ink-500 uppercase">
+            Open at launch
+          </span>
+          <span className="flex items-center gap-1.5">
+            <RouteIcon size={14} className="text-brand-700" />
+            Bareilly ⇄ Delhi NCR
+          </span>
+          <span className="flex items-center gap-1.5">
+            <RouteIcon size={14} className="text-brand-700" />
+            Bareilly ⇄ Lucknow
+          </span>
+          <span className="flex items-center gap-1.5">
+            <CoinsIcon size={14} className="text-brand-700" />
+            5 kg · 45 cm · ₹5,000 declared value
+          </span>
+        </div>
+      </div>
 
-        <section aria-labelledby="why-py" className="mt-14 sm:mt-20">
+      <section id="app" className="scroll-mt-20 bg-canvas py-16 sm:py-20">
+        <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
           <div className="mx-auto max-w-2xl text-center">
-            <h2
-              id="why-py"
-              className="text-2xl font-bold tracking-tight text-ink-900 text-balance sm:text-3xl"
-            >
-              Inter-city parcel delivery, made simpler
+            <p className="text-xs font-semibold tracking-wide text-brand-700 uppercase">
+              The app is the product
+            </p>
+            <h2 className="mt-2 text-2xl font-bold tracking-tight text-ink-900 text-balance sm:text-3xl">
+              The whole journey lives on your phone
             </h2>
             <p className="mt-3 text-base leading-relaxed text-ink-500">
-              Courier rates price a parcel like freight. A seat in a car already
-              making the trip is not freight — so we price it as a handover
-              between two people, and record both ends.
+              Posting, matching and handovers happen in the Android app. This
+              website is the introduction — there is no booking form here.
             </p>
-            <span
-              aria-hidden="true"
-              className="mx-auto mt-5 block h-px w-48 bg-gradient-to-r from-transparent via-brand-200 to-transparent"
-            />
           </div>
 
-          <ul className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {FEATURES.map((feature) => (
-              <li key={feature.title}>
-                <Card className="h-full">
-                  <span className="grid h-10 w-10 place-items-center rounded-full bg-brand-50 text-brand-700">
-                    <feature.icon size={19} />
-                  </span>
-                  <h3 className="mt-4 text-base font-semibold text-ink-900">
-                    {feature.title}
-                  </h3>
-                  <p className="mt-1.5 text-sm leading-relaxed text-ink-500">
-                    {feature.body}
-                  </p>
-                </Card>
-              </li>
+          <div className="no-scrollbar mt-10 -mx-4 flex snap-x snap-mandatory gap-8 overflow-x-auto px-4 pb-2 sm:mx-0 sm:px-0 lg:grid lg:grid-cols-3 lg:overflow-visible">
+            {(["home", "send", "track"] as const).map((screen) => (
+              <div
+                key={screen}
+                className="w-[268px] shrink-0 snap-center lg:w-auto"
+              >
+                <PhonePreview screen={screen} />
+              </div>
             ))}
-          </ul>
-        </section>
+          </div>
 
-        <section aria-labelledby="how-it-works" className="mt-14 sm:mt-20">
+          <p className="mt-8 text-center text-xs text-ink-500 lg:hidden">
+            Swipe to see all three screens.
+          </p>
+          <p className="mt-2 text-center text-xs text-ink-500">
+            Illustrative screens of the Android app. Real screenshots will
+            replace them.
+          </p>
+        </div>
+      </section>
+
+      <section
+        id="how-it-works"
+        className="scroll-mt-20 py-16 sm:py-20"
+      >
+        <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
           <div className="mx-auto max-w-2xl text-center">
             <p className="text-xs font-semibold tracking-wide text-brand-700 uppercase">
               How it works
             </p>
-            <h2
-              id="how-it-works"
-              className="mt-2 text-2xl font-bold tracking-tight text-ink-900 text-balance sm:text-3xl"
-            >
+            <h2 className="mt-2 text-2xl font-bold tracking-tight text-ink-900 text-balance sm:text-3xl">
               Three steps, both sides recorded
             </h2>
+            <p className="mt-3 text-base leading-relaxed text-ink-500">
+              The sender and the traveller each confirm the handover. Nothing
+              depends on a phone call or a guess.
+            </p>
           </div>
-          <ol className="mt-8 grid gap-4 sm:grid-cols-3">
+
+          <ol className="mt-10 grid gap-4 sm:grid-cols-3">
             {STEPS.map((step, index) => (
               <li key={step.title}>
                 <Card className="h-full">
-                  <span className="grid h-9 w-9 place-items-center rounded-full bg-brand-50 text-brand-700">
-                    <step.icon size={18} />
-                  </span>
-                  <p className="mt-4 text-xs font-semibold text-ink-500 tabular">
-                    Step {index + 1}
-                  </p>
-                  <h3 className="mt-1 text-base font-semibold text-ink-900">
+                  <div className="flex items-center justify-between">
+                    <span className="grid h-10 w-10 place-items-center rounded-full bg-brand-50 text-brand-700">
+                      <step.icon size={19} />
+                    </span>
+                    <span className="tabular text-3xl font-bold text-brand-100">
+                      0{index + 1}
+                    </span>
+                  </div>
+                  <h3 className="mt-4 text-base font-semibold text-ink-900">
                     {step.title}
                   </h3>
                   <p className="mt-1.5 text-sm leading-relaxed text-ink-500">
@@ -429,18 +300,49 @@ export function Landing() {
               </li>
             ))}
           </ol>
-        </section>
+        </div>
+      </section>
 
-        <section
-          aria-labelledby="what-you-get"
-          className="mt-14 grid gap-4 lg:grid-cols-[1.05fr_0.95fr] sm:mt-20"
-        >
+      <section className="border-y border-line bg-brand-50/60 py-16 sm:py-20">
+        <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
+          <div className="mx-auto max-w-2xl text-center">
+            <p className="text-xs font-semibold tracking-wide text-brand-700 uppercase">
+              Why Parcel Yatra
+            </p>
+            <h2 className="mt-2 text-2xl font-bold tracking-tight text-ink-900 text-balance sm:text-3xl">
+              Built for a handover, not a warehouse
+            </h2>
+            <p className="mt-3 text-base leading-relaxed text-ink-500">
+              A seat in a car already making the trip is not freight. We price
+              it as a handover between two people — and record both ends.
+            </p>
+          </div>
+
+          <ul className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {FEATURES.map((feature) => (
+              <li key={feature.title}>
+                <div className="h-full rounded-card border border-line bg-surface p-5">
+                  <span className="grid h-10 w-10 place-items-center rounded-full bg-brand-50 text-brand-700">
+                    <feature.icon size={19} />
+                  </span>
+                  <h3 className="mt-4 text-base font-semibold text-ink-900">
+                    {feature.title}
+                  </h3>
+                  <p className="mt-1.5 text-sm leading-relaxed text-ink-500">
+                    {feature.body}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
+      <section id="safety" className="scroll-mt-20 py-16 sm:py-20">
+        <div className="mx-auto grid w-full max-w-6xl gap-4 px-4 sm:px-6 lg:grid-cols-[1.05fr_0.95fr]">
           <Card>
-            <h2
-              id="what-you-get"
-              className="text-lg font-semibold text-ink-900"
-            >
-              What every booking includes
+            <h2 className="text-lg font-semibold text-ink-900">
+              Built into every booking
             </h2>
             <ul className="mt-5 grid gap-5 sm:grid-cols-2">
               {INCLUDED.map((item) => (
@@ -460,6 +362,14 @@ export function Landing() {
                 </li>
               ))}
             </ul>
+
+            <Link
+              to="/safety"
+              className="mt-6 inline-flex items-center gap-1 text-sm font-semibold text-brand-700 underline underline-offset-4"
+            >
+              How a handover works
+              <ArrowRightIcon size={15} />
+            </Link>
           </Card>
 
           <Card>
@@ -481,58 +391,149 @@ export function Landing() {
             </p>
             <Link
               to="/prohibited"
-              className="mt-5 inline-flex items-center gap-1 text-sm font-semibold text-brand-700 underline underline-offset-4"
+              className="mt-6 inline-flex items-center gap-1 text-sm font-semibold text-brand-700 underline underline-offset-4"
             >
               Read the prohibited items list
               <ArrowRightIcon size={15} />
             </Link>
           </Card>
-        </section>
+        </div>
 
-        <section className="mt-14 space-y-4 sm:mt-20">
+        <div className="mx-auto mt-4 w-full max-w-6xl px-4 sm:px-6">
           <Card className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-start gap-3">
-              <SearchIcon
+              <CoinsIcon
                 size={20}
                 className="mt-0.5 shrink-0 text-brand-700"
               />
               <div>
                 <h2 className="text-lg font-semibold text-ink-900">
-                  Where is my parcel?
+                  One price, before you pay
                 </h2>
                 <p className="mt-1 max-w-xl text-sm leading-relaxed text-ink-500">
-                  Sign in to see every booking, the handover codes and the
-                  current status.
+                  Route, weight, category and platform fee — each its own line,
+                  with GST shown separately. No hidden “convenience” charge
+                  appears at payment.
                 </p>
               </div>
             </div>
-            <Link to="/bookings" className="shrink-0">
-              <Button variant="secondary">Track a parcel</Button>
+            <Link
+              to="/pricing"
+              className="inline-flex shrink-0 items-center gap-1 text-sm font-semibold text-brand-700 underline underline-offset-4"
+            >
+              See pricing
+              <ArrowRightIcon size={15} />
             </Link>
           </Card>
+        </div>
+      </section>
 
-          <Card className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-start gap-3">
-              <CarIcon size={20} className="mt-0.5 shrink-0 text-brand-700" />
-              <div>
-                <h2 className="text-lg font-semibold text-ink-900">
-                  Already driving that way?
-                </h2>
-                <p className="mt-1 max-w-xl text-sm leading-relaxed text-ink-500">
-                  Carry a small sealed parcel on a trip you were making anyway.
-                  You’re paid after delivery, once the dispute window has
-                  passed.
+      <section id="faq" className="scroll-mt-20 border-t border-line bg-canvas py-16 sm:py-20">
+        <div className="mx-auto w-full max-w-3xl px-4 sm:px-6">
+          <div className="text-center">
+            <p className="text-xs font-semibold tracking-wide text-brand-700 uppercase">
+              Questions
+            </p>
+            <h2 className="mt-2 text-2xl font-bold tracking-tight text-ink-900 text-balance sm:text-3xl">
+              Straight answers before you download
+            </h2>
+          </div>
+
+          <div className="mt-8 space-y-3">
+            {FAQ.map((item) => (
+              <details
+                key={item.q}
+                className="group rounded-card border border-line bg-surface px-5 py-4 shadow-card open:border-brand-200"
+              >
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-sm font-semibold text-ink-900 [&::-webkit-details-marker]:hidden">
+                  {item.q}
+                  <ChevronDownIcon
+                    size={18}
+                    className="shrink-0 text-ink-500 transition-transform group-open:rotate-180"
+                  />
+                </summary>
+                <p className="mt-3 text-sm leading-relaxed text-ink-500">
+                  {item.a}
                 </p>
-              </div>
-            </div>
-            <Link to="/trips/new" className="shrink-0">
-              <Button variant="secondary" size="lg">
-                Post a trip
-              </Button>
+              </details>
+            ))}
+          </div>
+
+          <p className="mt-6 text-center text-sm text-ink-500">
+            Still stuck?{" "}
+            <Link
+              to="/help"
+              className="font-semibold text-brand-700 underline underline-offset-4"
+            >
+              Read the help page
             </Link>
-          </Card>
-        </section>
-      </div>
+            .
+          </p>
+        </div>
+      </section>
+
+      <section id="download" className="scroll-mt-20 px-4 py-16 sm:px-6 sm:py-20">
+        <div className="relative mx-auto w-full max-w-6xl overflow-hidden rounded-sheet bg-brand-900 px-6 py-12 text-white sm:px-12 sm:py-16">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute -top-24 -right-24 h-72 w-72 rounded-full bg-brand-600/40 blur-3xl"
+          />
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute -bottom-32 -left-16 h-72 w-72 rounded-full bg-accent-500/20 blur-3xl"
+          />
+
+          <div className="relative grid gap-10 lg:grid-cols-[1.15fr_0.85fr] lg:items-center">
+            <div>
+              <p className="text-xs font-semibold tracking-wide text-brand-200 uppercase">
+                Get the app
+              </p>
+              <h2 className="mt-2 text-3xl font-bold tracking-tight text-balance sm:text-4xl">
+                Ready when you are.
+              </h2>
+              <p className="mt-3 max-w-lg text-sm leading-relaxed text-brand-100 sm:text-base">
+                Post a parcel, follow each update and keep both handover codes
+                in one place. The app is where the journey happens — this page is
+                just the front door.
+              </p>
+
+              <div className="mt-7 flex flex-wrap items-center gap-4">
+                <DownloadButton tone="inverse" size="lg" />
+                <Link
+                  to="/help"
+                  className="text-sm font-semibold text-brand-100 underline underline-offset-4 hover:text-white"
+                >
+                  Questions? Read the help page
+                </Link>
+              </div>
+
+              {!APP_DOWNLOAD_READY ? (
+                <p className="mt-3 max-w-md text-xs leading-relaxed text-brand-200/80">
+                  The direct APK link is being finalised and will appear here.
+                  No store listing exists yet.
+                </p>
+              ) : null}
+            </div>
+
+            <ul className="space-y-3 rounded-card border border-white/10 bg-white/5 p-5 text-sm">
+              {[
+                "Price shown before payment",
+                "Codes at pickup and delivery",
+                "Sealed-parcel photo on record",
+                "Problem window for 72 hours",
+              ].map((line) => (
+                <li key={line} className="flex items-center gap-2.5">
+                  <CheckCircleIcon
+                    size={17}
+                    className="shrink-0 text-brand-200"
+                  />
+                  {line}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

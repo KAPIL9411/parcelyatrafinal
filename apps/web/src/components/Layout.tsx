@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, type MouseEvent, type ReactNode } from "react";
 import {
   Link,
   NavLink,
@@ -10,6 +10,7 @@ import {
 import { useSession } from "../lib/session";
 import { useOnline, useUnreadChats, useUnreadNotifications } from "../lib/hooks";
 import { Button, cn } from "./ui";
+import { DownloadButton } from "./DownloadButton";
 import { DocIcon, LogoutIcon, ParcelIcon, RouteIcon, UserIcon } from "./icons";
 
 function Wordmark() {
@@ -22,11 +23,12 @@ function Wordmark() {
   );
 }
 
-const NAV = [
-  { to: "/send", label: "Send a parcel" },
-  { to: "/bookings", label: "My parcels" },
-  { to: "/trips", label: "Travelling" },
-  { to: "/help", label: "Help" },
+/** Marketing sections on the landing page, reachable from every route. */
+const SECTION_LINKS = [
+  { id: "app", label: "App preview" },
+  { id: "how-it-works", label: "How it works" },
+  { id: "safety", label: "Safety" },
+  { id: "faq", label: "FAQ" },
 ];
 
 const MOBILE_NAV = [
@@ -37,12 +39,73 @@ const MOBILE_NAV = [
   { to: "/profile", label: "Account", icon: UserIcon },
 ];
 
+/** Routes that belong to the signed-in web app, where the tab bar still makes sense. */
+const APP_ROUTES = [
+  "/send",
+  "/bookings",
+  "/parcels",
+  "/trips",
+  "/verification",
+  "/profile",
+  "/admin",
+];
+
+function scrollToSection(id: string): boolean {
+  const element = document.getElementById(id);
+  if (!element) return false;
+  element.scrollIntoView({ behavior: "smooth" });
+  window.history.replaceState(null, "", `/#${id}`);
+  return true;
+}
+
 function ScrollToTop() {
-  const { pathname } = useLocation();
+  const location = useLocation();
+  const target = (location.state as { scrollTo?: string } | null)?.scrollTo;
+
   useEffect(() => {
+    // A cross-page section link navigates home with a target; the landing page is committed by
+    // the time effects run, so the section is there to scroll to. A reloaded `/#section` URL gets
+    // the same treatment, which the native anchor jump cannot be trusted to survive.
+    if (target && scrollToSection(target)) return;
+    const hash = location.hash.slice(1);
+    if (hash && scrollToSection(hash)) return;
     window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
-  }, [pathname]);
+  }, [location.pathname, location.key, location.hash, target]);
+
   return null;
+}
+
+/**
+ * A link to a landing-page section that also works from another route: navigate home first and let
+ * `ScrollToTop` scroll once the landing page has committed. `scroll-mt-*` on each section clears the
+ * sticky header.
+ */
+function SectionLink({
+  id,
+  children,
+  className,
+}: {
+  id: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+
+  function jump(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    if (pathname !== "/") {
+      navigate("/", { state: { scrollTo: id } });
+      return;
+    }
+    scrollToSection(id);
+  }
+
+  return (
+    <a href={`/#${id}`} onClick={jump} className={className}>
+      {children}
+    </a>
+  );
 }
 
 /**
@@ -73,80 +136,67 @@ function UnreadBadge({ total, className }: { total: number; className?: string }
   );
 }
 
-function navLinkClass(isActive: boolean) {
-  return cn(
-    "rounded-full px-3.5 py-1.5 text-sm font-semibold transition-colors",
-    isActive
-      ? "bg-brand-600 text-white shadow-sm"
-      : "text-ink-700 hover:bg-brand-50 hover:text-ink-900",
-  );
-}
-
 export function Layout() {
   const { user, status, isStaff, signOut } = useSession();
   const online = useOnline();
   const unread = useUnreadTotal(Boolean(user));
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  // The landing page owns its own full-bleed hero, so it must not be boxed by the container.
+  // The landing page owns its own full-bleed sections, so it must not be boxed by the container.
   const isHome = pathname === "/";
-  // The transparent header shows the hero photograph through it; once content scrolls beneath,
-  // a light tint and hairline fade in so the links stay legible over anything.
-  const [scrolled, setScrolled] = useState(false);
-  useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 8);
-    onScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, []);
+  // The app-style tab bar is for the signed-in product screens, not the marketing site.
+  const showAppNav = APP_ROUTES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  );
 
   return (
     <div className="flex min-h-dvh flex-col">
       <ScrollToTop />
 
-      <header
-        className={cn(
-          "sticky top-0 z-30 transition-[background-color,border-color,box-shadow] duration-300",
-          isHome && !scrolled
-            ? "border-b border-transparent bg-transparent"
-            : "border-b border-line bg-surface/85 shadow-card backdrop-blur-md",
-        )}
-      >
-        <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-8 px-4 sm:px-6">
+      <header className="sticky top-0 z-30 border-b border-line bg-surface/90 shadow-card backdrop-blur-md">
+        <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-6 px-4 sm:px-6">
           <Link
             to="/"
-            className={cn(
-              "shrink-0 rounded-input transition-colors",
-              // The wordmark has an opaque white backing, so over the photograph it sits on a
-              // frosted chip instead of floating as a white rectangle.
-              isHome && !scrolled && "bg-white/90 px-2.5 py-1.5 shadow-card backdrop-blur-md",
-            )}
+            className="shrink-0 rounded-input"
             aria-label="Parcel Yatra home"
           >
             <Wordmark />
           </Link>
 
-          <nav className="hidden items-center gap-1.5 md:flex" aria-label="Main">
-            {NAV.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                className={({ isActive }) => navLinkClass(isActive)}
+          <nav
+            className="hidden items-center gap-1 lg:flex"
+            aria-label="Sections"
+          >
+            {SECTION_LINKS.map((item) => (
+              <SectionLink
+                key={item.id}
+                id={item.id}
+                className="rounded-full px-3 py-1.5 text-sm font-semibold text-ink-700 transition-colors hover:bg-brand-50 hover:text-ink-900"
               >
                 {item.label}
-              </NavLink>
+              </SectionLink>
             ))}
+            <Link
+              to="/help"
+              className="rounded-full px-3 py-1.5 text-sm font-semibold text-ink-700 transition-colors hover:bg-brand-50 hover:text-ink-900"
+            >
+              Help
+            </Link>
             {isStaff ? (
-              <NavLink
+              <Link
                 to="/admin"
-                className={({ isActive }) => navLinkClass(isActive)}
+                className="rounded-full px-3 py-1.5 text-sm font-semibold text-ink-700 transition-colors hover:bg-brand-50 hover:text-ink-900"
               >
                 Operations
-              </NavLink>
+              </Link>
             ) : null}
           </nav>
 
-          <div className="ml-auto flex items-center gap-1">
+          <div className="ml-auto flex items-center gap-2">
+            <div className="hidden md:block">
+              <DownloadButton size="sm" label="Get the app" />
+            </div>
+
             {status === 'loading' ? (
               // The shape of the signed-in cluster, so the header does not change width when the
               // answer arrives. A Sign In button here would be a promise the session may break.
@@ -175,17 +225,15 @@ export function Layout() {
                 </button>
               </>
             ) : (
-              <div className="flex items-center gap-2">
-                <Link
-                  to="/help"
-                  className="hidden rounded-full px-3 py-2 text-sm font-medium text-ink-700 hover:bg-brand-50 sm:inline-block"
+              pathname !== "/login" && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => navigate("/login")}
                 >
-                  Help
-                </Link>
-                <Button size="sm" onClick={() => navigate("/login")}>
                   Sign in
                 </Button>
-              </div>
+              )
             )}
           </div>
         </div>
@@ -201,23 +249,41 @@ export function Layout() {
       </header>
 
       <main
-        className={
-          isHome
-            ? "flex-1 pb-28 md:pb-16"
-            : "mx-auto w-full max-w-6xl flex-1 px-4 pt-8 pb-28 sm:px-6 md:pb-16"
-        }
+        className={cn(
+          "flex-1",
+          !isHome && "mx-auto w-full max-w-6xl px-4 pt-8 sm:px-6",
+          showAppNav && "pb-28 md:pb-16",
+        )}
       >
         <Outlet />
       </main>
 
-      <footer className="mt-auto border-t border-line bg-surface pb-24 md:pb-0">
+      <footer
+        className={cn(
+          "mt-auto border-t border-line bg-surface",
+          showAppNav && "pb-24 md:pb-0",
+        )}
+      >
         <div className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6">
           <div className="flex flex-col gap-8 md:flex-row md:items-start md:justify-between">
             <div className="max-w-sm space-y-3">
               <Wordmark />
               <p className="text-sm leading-relaxed text-ink-500">
                 Inter-city parcels carried by people already making the journey.
+                The Android app is where parcels are posted, matched and handed
+                over.
               </p>
+              <div className="flex flex-wrap items-center gap-3 pt-1">
+                <DownloadButton size="sm" />
+                {!user && pathname !== "/login" ? (
+                  <Link
+                    to="/login"
+                    className="text-sm font-semibold text-brand-700 underline underline-offset-4"
+                  >
+                    Sign in
+                  </Link>
+                ) : null}
+              </div>
             </div>
 
             <nav
@@ -255,36 +321,38 @@ export function Layout() {
         </div>
       </footer>
 
-      <nav
-        className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 backdrop-blur pb-[env(safe-area-inset-bottom)] md:hidden"
-        aria-label="Mobile"
-      >
-        <div className="mx-auto grid max-w-md grid-cols-5">
-          {MOBILE_NAV.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === "/"}
-              className={({ isActive }) =>
-                cn(
-                  "flex min-h-14 flex-col items-center justify-center gap-1 text-[11px] font-medium transition-colors",
-                  isActive
-                    ? "text-brand-700"
-                    : "text-ink-500 hover:text-ink-900",
-                )
-              }
-            >
-              <span className="relative">
-                <item.icon size={20} />
-                {item.to === "/profile" ? (
-                  <UnreadBadge total={unread.total} className="absolute -right-3 -top-2" />
-                ) : null}
-              </span>
-              {item.label}
-            </NavLink>
-          ))}
-        </div>
-      </nav>
+      {showAppNav ? (
+        <nav
+          className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 backdrop-blur pb-[env(safe-area-inset-bottom)] md:hidden"
+          aria-label="Mobile"
+        >
+          <div className="mx-auto grid max-w-md grid-cols-5">
+            {MOBILE_NAV.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.to === "/"}
+                className={({ isActive }) =>
+                  cn(
+                    "flex min-h-14 flex-col items-center justify-center gap-1 text-[11px] font-medium transition-colors",
+                    isActive
+                      ? "text-brand-700"
+                      : "text-ink-500 hover:text-ink-900",
+                  )
+                }
+              >
+                <span className="relative">
+                  <item.icon size={20} />
+                  {item.to === "/profile" ? (
+                    <UnreadBadge total={unread.total} className="absolute -right-3 -top-2" />
+                  ) : null}
+                </span>
+                {item.label}
+              </NavLink>
+            ))}
+          </div>
+        </nav>
+      ) : null}
     </div>
   );
 }

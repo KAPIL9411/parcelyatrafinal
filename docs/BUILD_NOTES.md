@@ -1420,3 +1420,59 @@ rebuild to contain the JS bundle.
   React Native Web preview pass here, but Android has only run as the owner's EAS-built APK on a
   physical phone (2026-10-28): Google sign-in worked, and the blank screens of DEFECT-032 were found
   that way. iOS has never run at all.
+
+## 7. Website (marketing) — 2026-10-28
+
+The public site at `apps/web` is now the introduction to the Android product, not a second booking
+surface. The signed-in screens (`/send`, `/bookings`, `/trips`, …) still exist and still work; they
+are simply no longer promoted by the landing page.
+
+- **Landing** (`src/screens/Landing.tsx`). Hero with a download CTA, an app-preview gallery, three
+  "how it works" steps, the feature set, safety and prohibited-item notes, a pricing pointer, an
+  FAQ built from `<details>`, and a final download band. The quick-booking form and the quick-link
+  cards that sent people into the web app were removed, along with their `useConfig`/`useCities`
+  calls; the landing page now makes no API request of its own. All product claims come from the
+  existing pages (`/pricing`, `/prohibited`, `/safety`, `/help`) rather than new copy.
+- **Download plumbing** (`src/lib/app-download.ts`). `APP_DOWNLOAD_URL` is the single place the
+  public link is set. While it is empty, every download control renders a non-interactive
+  `Get the Android app · Soon` state with no `href`, and the hero and final band say the link is
+  being finalised. A value is accepted only when it starts with `https://`; once set, the same four
+  controls become anchors with `target="_blank" rel="noopener noreferrer"` and the "being finalised"
+  copy disappears. No APK/store URL exists in the repository, so the constant is deliberately empty.
+- **App preview** (`src/components/PhoneMockup.tsx`). Three CSS-drawn screens (home, send, track)
+  use the product's real vocabulary and the existing icons/tokens. The artwork is inside
+  `aria-hidden` frames with visible captions and an "illustrative screens … real screenshots will
+  replace them" note, so no mock value is announced or mistaken for live data. Swapping in the
+  owner's screenshots later means replacing the frame contents, not the page layout.
+- **Shell** (`src/components/Layout.tsx`). The header is a solid sticky bar with section links
+  (`#app`, `#how-it-works`, `#safety`, `#faq`) that work from every route, a desktop download
+  button, and the existing session cluster. Sections carry `scroll-mt-20`; a cross-route click
+  navigates home with a `scrollTo` state and `ScrollToTop` scrolls after the landing page commits.
+  Reloaded `/#section` URLs are handled the same way. The app-style bottom tab bar is now limited
+  to the signed-in routes (`/send`, `/bookings`, `/parcels`, `/trips`, `/verification`, `/profile`,
+  `/admin`), so the marketing pages do not pretend to be the app.
+- **Cleanup.** `HeroBackdrop.tsx`, the `.hero-panel`/`.hero-backdrop`/`.hero-photo` rules and the
+  `hero-background.webp` preload were removed. The image files remain in `public/` in case the owner
+  wants them later. `index.html` now carries the marketing title, description and Open Graph tags.
+
+**OBSERVED on 2026-10-28**, in the Vite dev server with no API running (the expected
+`/v1/auth/refresh` 502 is the only console entry, and the UI treats the visitor as signed out):
+
+- At 1280, 1024, 768, 640, 478, 390 and 320 px the document `scrollWidth` equalled the viewport —
+  no horizontal overflow. The nav is hidden below `lg`; the header download control is hidden below
+  `md`; the signed-out mobile header is the wordmark plus **Sign in**.
+- The four download controls were spans with `aria-disabled="true"`, no `href` and a visible `SOON`
+  tag. Temporarily setting the constant to `https://example.com/parcel-yatra-latest.apk` turned all
+  four into anchors with `target="_blank"` and `rel="noopener noreferrer"`, and removed the "being
+  finalised" copy; the constant was then reverted to empty.
+- Clicking **How it works** from `/help` landed on `/` with `#how-it-works`, the section top at
+  80 px (the 64 px sticky header plus `scroll-mt-20`). Clicking **Safety** while already on `/` did
+  the same. Loading `/#faq` directly landed with the FAQ top at 80 px.
+- The first FAQ item opened with its chevron rotated and the open card outlined in brand blue.
+  `/help` and `/login` rendered with the new header and footer and no bottom tab bar.
+- `npm run typecheck` and `npm run build` pass in `apps/web`.
+
+**Not verified:** the site with a signed-in session (no local API in this run), real device
+screenshots, and the real download destination — the owner still has to supply the APK/EAS URL for
+`APP_DOWNLOAD_URL`. The wide-width visual check used a same-origin iframe at 1280 px inside the
+478 px browser pane, not a native desktop window. No file under `apps/mobile` was touched.
