@@ -1,10 +1,38 @@
+/**
+ * The homepage.
+ *
+ * Two kinds of content meet here and must not be confused:
+ *
+ *  - **remote content** — hero, theme, section order, copy, artwork. It arrives from `/v1/homepage`,
+ *    is validated before use, is cached, and can change without an app update. This screen renders it
+ *    and nothing else; it never hardcodes a headline or a campaign colour.
+ *  - **local state** — the live booking, recent bookings, unread counts, the chosen pickup city.
+ *    That is the app's own data, fetched through the normal authenticated client.
+ *
+ * The composition is fixed even though the content is not: a full-bleed hero under a floating header,
+ * a From→To card on the seam, the live booking, then whatever sections the server sends in the order
+ * it sends them. A campaign can hide, retitle or recolour a section; it cannot move the search card or
+ * introduce a new kind of UI.
+ */
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { router } from 'expo-router';
-import { Pressable, ScrollView, View } from 'react-native';
+import {
+  Animated,
+  Platform,
+  Pressable,
+  ScrollView,
+  View,
+  useWindowDimensions,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+} from 'react-native';
+import { StatusBar } from 'expo-status-bar';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { visibleHeroes, visibleSections } from '@py/domain';
 
-import { bookingsApi, conversationsApi, notificationsApi, senderApi } from '../../src/api/client.ts';
+import { bookingsApi, conversationsApi, notificationsApi } from '../../src/api/client.ts';
 import { useSession } from '../../src/session.tsx';
 import {
   AppText,
@@ -14,20 +42,13 @@ import {
   EmptyState,
   ErrorNotice,
   LoadingBlock,
+  PickerSheet,
   Refresh,
   Row,
-  Screen,
 } from '../../src/components/ui.tsx';
-import {
-  Avatar,
-  IconBubble,
-  InfoNote,
-  QuickTile,
-  RouteTimeline,
-  SearchPill,
-  SectionHead,
-  StatusTrack,
-} from '../../src/components/kit.tsx';
+import { Avatar, IconBubble, RouteTimeline, SectionHead, StatusTrack } from '../../src/components/kit.tsx';
+import { useCities } from '../../src/lib/cities.ts';
+import { useOriginCity } from '../../src/lib/origin.ts';
 import {
   categoryLabel,
   formatDateTime,
@@ -38,6 +59,14 @@ import {
   timeAgo,
 } from '../../src/lib/format.ts';
 import { colors, font, radius, shadow, spacing } from '../../src/theme.ts';
+import { openRouteToSend, runHomeAction } from '../../src/homepage/actions.ts';
+import { useHomepage } from '../../src/homepage/use-homepage.ts';
+import { withAlpha } from '../../src/homepage/theme.ts';
+import { HERO_SEAM, HeroCarousel, heroHeight } from '../../src/homepage/components/HeroCarousel.tsx';
+import { HomeHeader } from '../../src/homepage/components/HomeHeader.tsx';
+import { Reveal } from '../../src/homepage/components/Reveal.tsx';
+import { SearchCard } from '../../src/homepage/components/SearchCard.tsx';
+import { SectionRenderer } from '../../src/homepage/components/Sections.tsx';
 
 const CLOSED_STATUSES = new Set([
   'delivered',
@@ -51,30 +80,28 @@ const CLOSED_STATUSES = new Set([
   'refunded',
 ]);
 
-const CATEGORY_ICONS: Record<string, React.ComponentProps<typeof Ionicons>['name']> = {
-  documents: 'document-text-outline',
-  educational_certificates: 'school-outline',
-  business_samples: 'briefcase-outline',
-  spare_parts_dry: 'construct-outline',
-  cosmetics_sealed: 'sparkles-outline',
-  printed_material: 'newspaper-outline',
-  religious_items: 'flower-outline',
-  keys: 'key-outline',
-  electronics_accessories_low_value: 'headset-outline',
-};
+/** Clearance for the floating pill tab bar: its height plus its distance from the bottom. */
+const TAB_BAR_CLEARANCE = 104;
 
-function greeting(): string {
-  const hour = new Date().getHours();
-  if (hour < 12) return 'Good morning';
-  if (hour < 17) return 'Good afternoon';
-  return 'Good evening';
+interface CityChoice {
+  id: string;
+  name: string;
 }
 
 export default function HomeScreen() {
   const { status, user } = useSession();
+  const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const homepage = useHomepage();
+  const cities = useCities();
+  const { origin, setOrigin, ready: originReady } = useOriginCity();
+  const [dest, setDest] = useState<CityChoice | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerMode, setPickerMode] = useState<'origin' | 'dest'>('origin');
+  const [pastHero, setPastHero] = useState(false);
 
-  const config = useQuery({ queryKey: ['config'], queryFn: senderApi.config, staleTime: 10 * 60_000 });
+  const scrollY = useRef(new Animated.Value(0)).current;
+
   const bookings = useQuery({
     queryKey: ['bookings', 'recent'],
     queryFn: () => bookingsApi.list(),
@@ -93,332 +120,267 @@ export default function HomeScreen() {
     refetchInterval: 60_000,
   });
 
-  const refreshing =
-    config.isRefetching || bookings.isRefetching || inbox.isRefetching || notifications.isRefetching;
+  const palette = homepage.palette;
+  const document = homepage.document;
+  const heroes = useMemo(() => visibleHeroes(document), [document]);
+  const sections = useMemo(() => visibleSections(document), [document]);
+
   const all = bookings.data?.items ?? [];
   const active = all.find((booking) => !CLOSED_STATUSES.has(booking.status));
   const recent = all.slice(0, 3);
   const unread = notifications.data?.unread_count ?? 0;
   const unreadMessages = inbox.data?.total_unread ?? 0;
-  const firstName = user?.name?.trim().split(/\s+/)[0];
+
+  // A city can be taken out of service between releases. A remembered city that is no longer
+  // serviceable would silently pre-fill a route the sender cannot book, so it is forgotten.
+  useEffect(() => {
+    if (!origin || !originReady || cities.isLoading) return;
+    if (cities.serviceable.length === 0) return;
+    if (!cities.serviceable.some((city) => city.id === origin.id)) setOrigin(null);
+  }, [cities.isLoading, cities.serviceable, origin, originReady, setOrigin]);
+
+  useEffect(() => {
+    if (!dest || cities.isLoading) return;
+    if (cities.serviceable.length === 0) return;
+    if (!cities.serviceable.some((city) => city.id === dest.id)) setDest(null);
+  }, [cities.isLoading, cities.serviceable, dest]);
+
+  const cityOptions = useMemo(
+    () =>
+      cities.serviceable
+        .filter((city) => pickerMode === 'dest' ? city.id !== origin?.id : true)
+        .map((city) => ({
+          value: city.id,
+          label: city.name,
+          ...(city.state ? { meta: city.state } : {}),
+        })),
+    [cities.serviceable, origin?.id, pickerMode],
+  );
+
+  const refreshing =
+    homepage.refreshing ||
+    bookings.isRefetching ||
+    inbox.isRefetching ||
+    notifications.isRefetching;
+
+  const heroBottom = heroHeight(width, insets.top);
+  const headerSwitch = heroBottom - insets.top - 64;
+  const overlayOpacity = scrollY.interpolate({
+    inputRange: [Math.max(0, headerSwitch - 48), headerSwitch],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
+  const solidOpacity = scrollY.interpolate({
+    inputRange: [Math.max(0, headerSwitch - 48), headerSwitch],
+    outputRange: [0, 1],
+    extrapolate: 'clamp',
+  });
+
+  function openPicker(mode: 'origin' | 'dest'): void {
+    setPickerMode(mode);
+    setPickerOpen(true);
+  }
+
+  function chooseCity(value: string): void {
+    const city = cities.city(value);
+    if (!city) return;
+    const choice = { id: city.id, name: city.name };
+    if (pickerMode === 'origin') {
+      setOrigin(choice);
+      if (dest?.id === choice.id) setDest(null);
+    } else {
+      setDest(choice);
+      if (origin?.id === choice.id) setOrigin(null);
+    }
+  }
+
+  function onRefresh(): void {
+    void homepage.refresh();
+    if (status === 'signed_in') {
+      void bookings.refetch();
+      void inbox.refetch();
+      void notifications.refetch();
+    }
+  }
+
+  function onSubmitRoute(): void {
+    if (!origin) {
+      openPicker('origin');
+      return;
+    }
+    if (!dest) {
+      openPicker('dest');
+      return;
+    }
+    openRouteToSend(origin.name, dest.name);
+  }
+
+  function onSwap(): void {
+    if (!origin || !dest) return;
+    setOrigin({ id: dest.id, name: dest.name });
+    setDest({ id: origin.id, name: origin.name });
+  }
+
+  const headerProps = {
+    palette,
+    originName: origin?.name ?? null,
+    onPressOrigin: () => openPicker('origin'),
+    unreadNotifications: unread,
+    unreadMessages,
+    onPressNotifications: () => router.push('/notifications'),
+    onPressInbox: () => router.push('/inbox'),
+    userName: user?.name ?? null,
+    onPressProfile: () => router.push('/profile'),
+  } as const;
 
   return (
-    <Screen
-      contentStyle={{ padding: 0 }}
-      background={colors.canvas}
-      refreshControl={
-        <Refresh
-          refreshing={refreshing}
-          onRefresh={() => {
-            void config.refetch();
-            if (status === 'signed_in') {
-              void bookings.refetch();
-              void inbox.refetch();
-              void notifications.refetch();
-            }
-          }}
-        />
-      }
-    >
-      {/* ---------------------------------------------------------------- hero */}
-      <View
-        style={{
-          backgroundColor: colors.navy,
-          paddingTop: insets.top + spacing.sm,
-          paddingHorizontal: spacing.lg,
-          paddingBottom: 62,
-          overflow: 'hidden',
-        }}
+    <View style={{ flex: 1, backgroundColor: palette.canvas }}>
+      <StatusBar style={pastHero ? 'dark' : 'light'} />
+
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: TAB_BAR_CLEARANCE + insets.bottom }}
+        showsVerticalScrollIndicator={false}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+          useNativeDriver: false,
+          listener: (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+            const next = event.nativeEvent.contentOffset.y > headerSwitch;
+            setPastHero((current) => (current === next ? current : next));
+          },
+        })}
+        scrollEventThrottle={16}
+        refreshControl={
+          Platform.OS === 'web' ? undefined : <Refresh refreshing={refreshing} onRefresh={onRefresh} />
+        }
       >
-        <View
-          style={{
-            position: 'absolute',
-            width: 230,
-            height: 230,
-            borderRadius: 115,
-            backgroundColor: 'rgba(10,87,255,0.30)',
-            top: -110,
-            right: -70,
-          }}
-        />
-        <View
-          style={{
-            position: 'absolute',
-            width: 130,
-            height: 130,
-            borderRadius: 65,
-            backgroundColor: 'rgba(232,179,60,0.12)',
-            bottom: -70,
-            left: -30,
-          }}
+        <HeroCarousel
+          heroes={heroes}
+          palette={palette}
+          width={width}
+          topInset={insets.top}
+          onAction={(action) => runHomeAction(action, { ...(origin ? { originCity: origin.name } : {}) })}
         />
 
-        <Row style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <View style={{ flex: 1 }}>
-            <Row gap={6}>
-              <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: colors.accent }} />
-              <AppText variant="label" style={{ color: colors.accent, letterSpacing: 1.2 }}>
-                PARCEL YATRA
+        {/* The search card is the primary action, so it sits on the seam between hero and page. */}
+        <View style={{ marginTop: -HERO_SEAM, paddingHorizontal: spacing.lg }}>
+          <SearchCard
+            palette={palette}
+            originName={origin?.name ?? null}
+            destName={dest?.name ?? null}
+            onPressOrigin={() => openPicker('origin')}
+            onPressDest={() => openPicker('dest')}
+            onSwap={onSwap}
+            onSubmit={onSubmitRoute}
+          />
+        </View>
+
+        {homepage.error && homepage.source !== 'network' ? (
+          <View
+            style={{
+              marginTop: spacing.md,
+              marginHorizontal: spacing.lg,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: spacing.sm,
+              backgroundColor: withAlpha(palette.navy, 0.05),
+              borderRadius: radius.md,
+              paddingHorizontal: spacing.md,
+              paddingVertical: spacing.sm,
+            }}
+          >
+            <Ionicons name="cloud-offline-outline" size={15} color={withAlpha(palette.navy, 0.7)} />
+            <AppText variant="micro" style={{ flex: 1, color: withAlpha(palette.navy, 0.75) }}>
+              Showing the last saved page. Pull down to try again.
+            </AppText>
+            <Pressable accessibilityRole="button" onPress={() => void homepage.refresh()} hitSlop={8}>
+              <AppText variant="micro" style={{ color: palette.brandDark, fontFamily: font.semibold }}>
+                Retry
               </AppText>
-            </Row>
-            <AppText variant="title" tone="white" style={{ marginTop: spacing.sm }}>
-              {greeting()}
-              {firstName ? `, ${firstName}` : ''}
-            </AppText>
-            <AppText variant="small" tone="onDark" style={{ marginTop: 2 }}>
-              Send it with someone already going your way.
-            </AppText>
-          </View>
-          <Row gap={spacing.sm}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={unreadMessages ? `${unreadMessages} unread messages` : 'Inbox'}
-              onPress={() => router.push('/inbox')}
-              style={styles.heroIcon}
-            >
-              <Ionicons name="chatbubble-ellipses-outline" size={20} color={colors.white} />
-              {unreadMessages > 0 ? <View style={styles.heroDot} /> : null}
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={unread ? `${unread} unread notifications` : 'Notifications'}
-              onPress={() => router.push('/notifications')}
-              style={styles.heroIcon}
-            >
-              <Ionicons name={unread ? 'notifications' : 'notifications-outline'} size={20} color={colors.white} />
-              {unread > 0 ? (
-                <View style={styles.heroBadge}>
-                  <AppText style={{ color: colors.white, fontFamily: font.bold, fontSize: 9 }}>
-                    {unread > 9 ? '9+' : unread}
-                  </AppText>
-                </View>
-              ) : null}
-            </Pressable>
-          </Row>
-        </Row>
-
-        <Row gap={spacing.sm} style={{ marginTop: spacing.lg }}>
-          <View style={styles.heroPill}>
-            <Ionicons name="shield-checkmark" size={12} color={colors.accent} />
-            <AppText variant="micro" style={{ color: colors.white, fontFamily: font.regular }}>
-              ID-verified travellers
-            </AppText>
-          </View>
-          <View style={styles.heroPill}>
-            <Ionicons name="cube-outline" size={12} color={colors.accent} />
-            <AppText variant="micro" style={{ color: colors.white, fontFamily: font.regular }}>
-              Up to {config.data?.limits.max_weight_kg ?? 5} kg
-            </AppText>
-          </View>
-        </Row>
-      </View>
-
-      {/* ---------------------------------------------------------------- search */}
-      <View style={{ marginTop: -40, paddingHorizontal: spacing.lg }}>
-        <SearchPill
-          placeholder="Where should we send it?"
-          badge="Send"
-          onPress={() => router.push('/send')}
-        />
-      </View>
-
-      <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.xl }}>
-        {/* -------------------------------------------------------------- quick actions */}
-        <Row gap={spacing.md} style={{ alignItems: 'stretch' }}>
-          <QuickTile
-            icon="cube"
-            title="Send a parcel"
-            subtitle="City to city, on your schedule"
-            onPress={() => router.push('/send')}
-          />
-          <QuickTile
-            icon="car-sport"
-            title="Carry & earn"
-            subtitle="Use the space you already have"
-            onPress={() => router.push('/trips/new')}
-            tint={colors.partnerSoft}
-            iconColor={colors.partner}
-          />
-        </Row>
-        <Row gap={spacing.md} style={{ alignItems: 'stretch', marginTop: spacing.md }}>
-          <QuickTile
-            icon="receipt"
-            title="My bookings"
-            subtitle="Track every shipment"
-            onPress={() => router.push('/bookings')}
-            tint={colors.accentSoft}
-            iconColor={colors.warn}
-            badge={active ? '1 live' : undefined}
-          />
-          <QuickTile
-            icon="help-circle"
-            title="Help & safety"
-            subtitle="Policies, FAQ and support"
-            onPress={() => router.push('/help')}
-            tint={colors.canvasAlt}
-            iconColor={colors.navy}
-          />
-        </Row>
-
-        {/* -------------------------------------------------------------- active shipment */}
-        {status === 'signed_in' && active ? (
-          <View style={{ marginTop: spacing.xxl }}>
-            <SectionHead
-              eyebrow="Live now"
-              title="Your parcel is moving"
-              actionLabel="All bookings"
-              onAction={() => router.push('/bookings')}
-            />
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => router.push(`/bookings/${active.id}`)}
-              style={({ pressed }) => [styles.activeCard, shadow.card, pressed && { opacity: 0.92 }]}
-            >
-              <Row style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                <Row gap={spacing.sm}>
-                  <View style={styles.liveDot} />
-                  <AppText variant="micro" tone="brand" style={{ letterSpacing: 0.6 }}>
-                    {active.role === 'sender' ? 'YOU ARE SENDING' : 'YOU ARE CARRYING'}
-                  </AppText>
-                </Row>
-                <Badge label={statusLabel(active.status)} tone={statusTone(active.status)} />
-              </Row>
-              <View style={{ marginTop: spacing.md }}>
-                <RouteTimeline
-                  origin={active.origin_city}
-                  dest={active.dest_city}
-                  originMeta={`${categoryLabel(active.category)} · ${kg(active.weight_kg)}`}
-                  destMeta={`Booked ${timeAgo(active.created_at)}`}
-                  compact
-                />
-              </View>
-              <View style={{ marginTop: spacing.md }}>
-                <StatusTrack status={active.status} tone={active.role === 'traveller' ? 'partner' : 'brand'} />
-              </View>
-              <Row style={{ justifyContent: 'space-between', marginTop: spacing.md }}>
-                <AppText variant="small" tone="muted">
-                  {active.role === 'sender' ? 'Traveller' : 'Sender'} ·{' '}
-                  {active.role === 'sender' ? 'verified partner' : 'sender'}
-                </AppText>
-                <Row gap={4}>
-                  <AppText variant="subheading" tone="brand">
-                    Track
-                  </AppText>
-                  <Ionicons name="arrow-forward" size={15} color={colors.brandDark} />
-                </Row>
-              </Row>
             </Pressable>
           </View>
         ) : null}
 
-        {/* -------------------------------------------------------------- categories */}
-        <View style={{ marginTop: spacing.xxl }}>
-          <SectionHead
-            eyebrow="What can travel"
-            title="Pack it. We'll find a carrier."
-            actionLabel="See all"
-            onAction={() => router.push('/send')}
-          />
-          {config.isLoading ? (
-            <Card>
-              <LoadingBlock lines={2} />
-            </Card>
-          ) : config.isError ? (
-            <ErrorNotice error={config.error} onRetry={() => void config.refetch()} />
-          ) : (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ gap: spacing.sm, paddingRight: spacing.lg }}
-            >
-              {(config.data?.categories ?? []).map((category) => (
-                <Pressable
-                  key={category}
-                  accessibilityRole="button"
-                  onPress={() => router.push({ pathname: '/send', params: { category } })}
-                  style={({ pressed }) => [styles.categoryCard, pressed && { opacity: 0.85 }]}
-                >
-                  <IconBubble
-                    name={CATEGORY_ICONS[category] ?? 'cube-outline'}
-                    size={38}
-                    background={colors.brandTint}
-                    color={colors.brandDark}
+        {/* -------------------------------------------------------------- live shipment */}
+        {status === 'signed_in' && active ? (
+          <Reveal delay={40}>
+            <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.lg }}>
+              <SectionHead
+                eyebrow="Live now"
+                title="Your parcel is moving"
+                actionLabel="All bookings"
+                onAction={() => router.push('/bookings')}
+              />
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`${active.origin_city} to ${active.dest_city}, ${statusLabel(active.status)}`}
+                onPress={() => router.push(`/bookings/${active.id}`)}
+                style={({ pressed }) => [
+                  styles.activeCard,
+                  shadow.card,
+                  { backgroundColor: palette.surface, borderColor: withAlpha(palette.navy, 0.08) },
+                  pressed && { opacity: 0.92 },
+                ]}
+              >
+                <Row style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Row gap={spacing.sm}>
+                    <View style={[styles.liveDot, { backgroundColor: palette.brand }]} />
+                    <AppText variant="micro" style={{ letterSpacing: 0.6, color: palette.brandDark }}>
+                      {active.role === 'sender' ? 'YOU ARE SENDING' : 'YOU ARE CARRYING'}
+                    </AppText>
+                  </Row>
+                  <Badge label={statusLabel(active.status)} tone={statusTone(active.status)} />
+                </Row>
+                <View style={{ marginTop: spacing.md }}>
+                  <RouteTimeline
+                    origin={active.origin_city}
+                    dest={active.dest_city}
+                    originMeta={`${categoryLabel(active.category)} · ${kg(active.weight_kg)}`}
+                    destMeta={`Booked ${timeAgo(active.created_at)}`}
+                    compact
                   />
-                  <AppText
-                    variant="micro"
-                    numberOfLines={2}
-                    style={{ marginTop: spacing.sm, color: colors.ink700, lineHeight: 14 }}
-                  >
-                    {categoryLabel(category)}
+                </View>
+                <View style={{ marginTop: spacing.md }}>
+                  <StatusTrack
+                    status={active.status}
+                    tone={active.role === 'traveller' ? 'partner' : 'brand'}
+                  />
+                </View>
+                <Row style={{ justifyContent: 'space-between', marginTop: spacing.md }}>
+                  <AppText variant="small" tone="muted">
+                    {active.role === 'sender' ? 'Traveller' : 'Sender'} ·{' '}
+                    {active.role === 'sender' ? 'verified partner' : 'sender'}
                   </AppText>
-                </Pressable>
-              ))}
-            </ScrollView>
-          )}
-        </View>
-
-        {/* -------------------------------------------------------------- partner banner */}
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => router.push(status === 'signed_in' ? '/trips' : '/trips/new')}
-          style={({ pressed }) => [styles.partnerBanner, pressed && { opacity: 0.94 }]}
-        >
-          <View style={{ flex: 1 }}>
-            <AppText variant="label" style={{ color: '#9fe3cd', letterSpacing: 1 }}>
-              PARTNER
-            </AppText>
-            <AppText variant="heading" tone="white" style={{ marginTop: 4 }}>
-              Going that way anyway?
-            </AppText>
-            <AppText variant="small" style={{ color: '#c8ded6', marginTop: 2 }}>
-              Publish your drive and earn from the space in your boot.
-            </AppText>
-            <View style={styles.partnerCta}>
-              <AppText variant="micro" style={{ color: colors.navy, fontFamily: font.bold }}>
-                Start earning
-              </AppText>
-              <Ionicons name="arrow-forward" size={13} color={colors.navy} />
+                  <Row gap={4}>
+                    <AppText variant="subheading" style={{ color: palette.brandDark }}>
+                      Track
+                    </AppText>
+                    <Ionicons name="arrow-forward" size={15} color={palette.brandDark} />
+                  </Row>
+                </Row>
+              </Pressable>
             </View>
+          </Reveal>
+        ) : status === 'signed_in' && bookings.isLoading ? (
+          <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.lg }}>
+            <Card>
+              <LoadingBlock lines={3} />
+            </Card>
           </View>
-          <View style={styles.partnerArt}>
-            <Ionicons name="car-sport" size={46} color="rgba(255,255,255,0.92)" />
-            <View style={styles.partnerRoad} />
-          </View>
-        </Pressable>
+        ) : null}
 
-        {/* -------------------------------------------------------------- how it works */}
-        <View style={{ marginTop: spacing.xxl }}>
-          <SectionHead eyebrow="How it works" title="Three steps, both sides protected" />
-          <View style={styles.stepsCard}>
-            <Step
-              number="1"
-              title="Post the parcel"
-              body="Route, pickup window and what is inside. Your price is fixed before you choose."
+        {/* -------------------------------------------------------------- remote sections */}
+        {sections.map((section, index) => (
+          <Reveal key={section.id} delay={80 + index * 45}>
+            <SectionRenderer
+              section={section}
+              palette={palette}
+              originCity={origin?.name ?? null}
             />
-            <Step
-              number="2"
-              title="Pick a traveller"
-              body="See who is already going, their ID status and completed trips."
-            />
-            <Step
-              number="3"
-              title="Hand over with a code"
-              body="One code at pickup, another at delivery. Chat stays attached to the booking."
-            />
-          </View>
-        </View>
+          </Reveal>
+        ))}
 
-        <View style={{ marginTop: spacing.lg }}>
-          <InfoNote
-            icon="shield-checkmark"
-            title="No cash, jewellery, medicines, food or batteries"
-            body="Every parcel is declared and screened. Prohibited items end the account."
-          />
-        </View>
-
-        {/* -------------------------------------------------------------- recent */}
+        {/* -------------------------------------------------------------- account */}
         {status === 'signed_in' ? (
-          <View style={{ marginTop: spacing.xxl }}>
+          <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.xxl }}>
             <SectionHead
               title="Recent bookings"
               actionLabel={recent.length ? 'See all' : undefined}
@@ -446,7 +408,11 @@ export default function HomeScreen() {
                     key={booking.id}
                     accessibilityRole="button"
                     onPress={() => router.push(`/bookings/${booking.id}`)}
-                    style={({ pressed }) => [styles.recentRow, pressed && { opacity: 0.85 }]}
+                    style={({ pressed }) => [
+                      styles.recentRow,
+                      { backgroundColor: palette.surface, borderColor: withAlpha(palette.navy, 0.08) },
+                      pressed && { opacity: 0.85 },
+                    ]}
                   >
                     <IconBubble
                       name={booking.role === 'sender' ? 'cube-outline' : 'car-outline'}
@@ -459,178 +425,106 @@ export default function HomeScreen() {
                         {booking.origin_city} → {booking.dest_city}
                       </AppText>
                       <AppText variant="small" tone="muted" numberOfLines={1}>
-                        {booking.role === 'sender' ? 'Sending' : 'Carrying'} · {formatDateTime(booking.created_at)}
+                        {booking.role === 'sender' ? 'Sending' : 'Carrying'} ·{' '}
+                        {formatDateTime(booking.created_at)}
                       </AppText>
                       <View style={{ flexDirection: 'row', marginTop: 5 }}>
                         <Badge label={statusLabel(booking.status)} tone={statusTone(booking.status)} />
                       </View>
                     </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <AppText variant="subheading" style={{ fontFamily: font.semibold }}>
-                        {inr(booking.agreed_total_paise)}
-                      </AppText>
-                    </View>
+                    <AppText variant="subheading" style={{ fontFamily: font.semibold }}>
+                      {inr(booking.agreed_total_paise)}
+                    </AppText>
                   </Pressable>
                 ))}
               </View>
             )}
           </View>
         ) : (
-          <Card style={{ marginTop: spacing.xxl }}>
-            <Row gap={spacing.md} style={{ alignItems: 'flex-start' }}>
-              <Avatar name={user?.name} size={48} />
-              <View style={{ flex: 1 }}>
-                <AppText variant="heading">One account, both sides</AppText>
-                <AppText variant="small" tone="muted" style={{ marginTop: 2 }}>
-                  Sign in to send parcels, carry on your own route and keep every booking in one place.
-                </AppText>
-              </View>
-            </Row>
-            <Button
-              label="Sign in with phone"
-              onPress={() => router.push({ pathname: '/sign-in', params: { next: '/send' } })}
-              style={{ marginTop: spacing.md }}
-            />
-          </Card>
+          <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.xxl }}>
+            <Card>
+              <Row gap={spacing.md} style={{ alignItems: 'flex-start' }}>
+                <Avatar name={user?.name} size={48} />
+                <View style={{ flex: 1 }}>
+                  <AppText variant="heading">One account, both sides</AppText>
+                  <AppText variant="small" tone="muted" style={{ marginTop: 2 }}>
+                    Sign in to send parcels, carry on your own route and keep every booking in one
+                    place.
+                  </AppText>
+                </View>
+              </Row>
+              <Button
+                label="Sign in with phone"
+                onPress={() => router.push({ pathname: '/sign-in', params: { next: '/send' } })}
+                style={{ marginTop: spacing.md }}
+              />
+            </Card>
+          </View>
         )}
 
-        <AppText variant="micro" tone="muted" style={{ textAlign: 'center', marginTop: spacing.xxl, fontFamily: font.regular }}>
+        <AppText
+          variant="micro"
+          tone="muted"
+          style={{
+            textAlign: 'center',
+            marginTop: spacing.xxl,
+            paddingHorizontal: spacing.lg,
+            fontFamily: font.regular,
+          }}
+        >
           Parcel Yatra · intercity parcels carried by people, not trucks
         </AppText>
-      </View>
-    </Screen>
-  );
-}
+      </ScrollView>
 
-function Step({ number, title, body }: { number: string; title: string; body: string }) {
-  return (
-    <Row gap={spacing.md} style={{ alignItems: 'flex-start', marginBottom: spacing.md }}>
-      <View style={styles.stepNumber}>
-        <AppText variant="micro" tone="brand" style={{ fontFamily: font.bold }}>
-          {number}
-        </AppText>
-      </View>
-      <View style={{ flex: 1 }}>
-        <AppText variant="subheading">{title}</AppText>
-        <AppText variant="small" tone="muted" style={{ marginTop: 1 }}>
-          {body}
-        </AppText>
-      </View>
-    </Row>
+      {/* Two headers cross-fade on the same scroll offset: white on the hero, solid over the page. */}
+      <Animated.View
+        pointerEvents={pastHero ? 'none' : 'auto'}
+        style={[styles.headerLayer, { opacity: overlayOpacity }]}
+      >
+        <HomeHeader variant="overlay" {...headerProps} />
+      </Animated.View>
+      <Animated.View
+        pointerEvents={pastHero ? 'auto' : 'none'}
+        style={[styles.headerLayer, { opacity: solidOpacity }]}
+      >
+        <HomeHeader variant="solid" {...headerProps} />
+      </Animated.View>
+
+      <PickerSheet
+        visible={pickerOpen}
+        title={pickerMode === 'origin' ? 'Where is the parcel?' : 'Where is it going?'}
+        options={cityOptions}
+        selected={pickerMode === 'origin' ? (origin?.id ?? null) : (dest?.id ?? null)}
+        onSelect={chooseCity}
+        onClose={() => setPickerOpen(false)}
+        emptyText={
+          cities.isLoading ? 'Loading cities…' : 'No serviceable cities are available right now.'
+        }
+      />
+    </View>
   );
 }
 
 const styles = {
-  heroIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    alignItems: 'center' as const,
-    justifyContent: 'center' as const,
-  },
-  heroDot: {
+  headerLayer: {
     position: 'absolute' as const,
-    top: 9,
-    right: 10,
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: colors.accent,
-  },
-  heroBadge: {
-    position: 'absolute' as const,
-    top: 2,
-    right: 2,
-    minWidth: 16,
-    height: 16,
-    paddingHorizontal: 3,
-    borderRadius: 8,
-    backgroundColor: colors.danger,
-    alignItems: 'center' as const,
-    justifyContent: 'center' as const,
-  },
-  heroPill: {
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    gap: 5,
-    backgroundColor: 'rgba(255,255,255,0.10)',
-    borderRadius: radius.pill,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
   },
   activeCard: {
-    backgroundColor: colors.surface,
     borderRadius: radius.xl,
     borderWidth: 1,
-    borderColor: colors.line,
     padding: spacing.lg,
   },
-  liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.brand },
-  categoryCard: {
-    width: 104,
-    minHeight: 104,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.line,
-    padding: spacing.md,
-    justifyContent: 'flex-start' as const,
-  },
-  partnerBanner: {
-    flexDirection: 'row' as const,
-    backgroundColor: colors.partner,
-    borderRadius: radius.xl,
-    padding: spacing.lg,
-    marginTop: spacing.xxl,
-    overflow: 'hidden' as const,
-  },
-  partnerCta: {
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    gap: 4,
-    alignSelf: 'flex-start' as const,
-    backgroundColor: colors.accent,
-    borderRadius: radius.pill,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    marginTop: spacing.md,
-  },
-  partnerArt: {
-    width: 82,
-    alignItems: 'center' as const,
-    justifyContent: 'center' as const,
-  },
-  partnerRoad: {
-    width: 58,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.30)',
-    marginTop: 6,
-  },
-  stepsCard: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.line,
-    padding: spacing.lg,
-  },
-  stepNumber: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: colors.brandSoft,
-    alignItems: 'center' as const,
-    justifyContent: 'center' as const,
-  },
+  liveDot: { width: 7, height: 7, borderRadius: 4 },
   recentRow: {
     flexDirection: 'row' as const,
     alignItems: 'center' as const,
     gap: spacing.md,
-    backgroundColor: colors.surface,
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: colors.line,
     padding: spacing.md,
   },
 };

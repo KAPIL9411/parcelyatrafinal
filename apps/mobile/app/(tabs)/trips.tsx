@@ -42,7 +42,7 @@ export default function TripsScreen() {
 
   if (status !== 'signed_in') {
     return (
-      <Screen>
+      <Screen contentStyle={{ paddingBottom: 128 }}>
         <View
           style={{
             backgroundColor: colors.partner,
@@ -78,6 +78,7 @@ export default function TripsScreen() {
 
   return (
     <Screen
+      contentStyle={{ paddingBottom: 128 }}
       refreshControl={
         <Refresh
           refreshing={trips.isRefetching || verification.isRefetching}

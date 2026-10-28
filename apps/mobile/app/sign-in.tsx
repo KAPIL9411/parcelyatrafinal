@@ -1,5 +1,15 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Animated,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Google from 'expo-auth-session/providers/google';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,19 +19,27 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ApiError } from '../src/api/http.ts';
 import { peekDevOtp } from '../src/api/client.ts';
 import { useSession } from '../src/session.tsx';
-import { AppText, Button, Card, ErrorNotice, Field, Row, Screen } from '../src/components/ui.tsx';
+import { AppText, Button, Card, ErrorNotice, Field, Row } from '../src/components/ui.tsx';
+import { AnimatedProductGallery } from '../src/components/AnimatedProductGallery.tsx';
 import { colors, font, radius, spacing } from '../src/theme.ts';
 import { maskPhone, normalisePhone } from '../src/lib/format.ts';
 
-const extra = Constants.expoConfig?.extra as { googleWebClientId?: string } | undefined;
+const extra = Constants.expoConfig?.extra as
+  | { googleWebClientId?: string; googleAndroidClientId?: string; googleIosClientId?: string }
+  | undefined;
+
 const WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ?? extra?.googleWebClientId;
-const IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? WEB_CLIENT_ID;
-const ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? WEB_CLIENT_ID;
+const IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? extra?.googleIosClientId;
+const ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? extra?.googleAndroidClientId;
+
+const PLATFORM_CLIENT_ID =
+  Platform.OS === 'android' ? ANDROID_CLIENT_ID : Platform.OS === 'ios' ? IOS_CLIENT_ID : WEB_CLIENT_ID;
 
 export default function SignInScreen() {
   const { next } = useLocalSearchParams<{ next?: string }>();
   const { sendOtp, verifyOtp, googleSignIn } = useSession();
   const insets = useSafeAreaInsets();
+  const { height: screenHeight } = useWindowDimensions();
 
   const [phone, setPhone] = useState('');
   const [challengeId, setChallengeId] = useState<string | null>(null);
@@ -32,6 +50,20 @@ export default function SignInScreen() {
   const [busy, setBusy] = useState<'send' | 'verify' | 'google' | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [resendIn, setResendIn] = useState(0);
+
+  const [logoAnim] = useState(() => new Animated.Value(0));
+
+  // Gallery occupies exactly ~61% of screen height as measured from the Blinkit reference
+  const galleryHeight = Math.round(screenHeight * 0.61);
+
+  useEffect(() => {
+    Animated.spring(logoAnim, {
+      toValue: 1,
+      friction: 6,
+      tension: 40,
+      useNativeDriver: Platform.OS !== 'web',
+    }).start();
+  }, [logoAnim]);
 
   useEffect(() => {
     if (resendIn <= 0) return;
@@ -98,378 +130,269 @@ export default function SignInScreen() {
   }
 
   return (
-    <Screen keyboard contentStyle={{ padding: 0 }}>
-      {/* hero */}
-      <View
-        style={{
-          backgroundColor: colors.navy,
-          paddingTop: insets.top + spacing.md,
-          paddingHorizontal: spacing.lg,
-          paddingBottom: 64,
-          overflow: 'hidden',
-        }}
+    <View style={styles.container}>
+      {/* Top-left Circular Back Button (Exact Blinkit Style) */}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Go back"
+        onPress={() => (router.canGoBack() ? router.back() : router.replace('/(tabs)'))}
+        hitSlop={12}
+        style={[
+          styles.circularBackButton,
+          { top: Math.max(insets.top + 8, 20), left: 16 },
+        ]}
       >
-        <View
-          style={{
-            position: 'absolute',
-            width: 220,
-            height: 220,
-            borderRadius: 110,
-            backgroundColor: 'rgba(10,87,255,0.32)',
-            top: -100,
-            right: -60,
-          }}
-        />
-        <View
-          style={{
-            position: 'absolute',
-            width: 120,
-            height: 120,
-            borderRadius: 60,
-            backgroundColor: 'rgba(232,179,60,0.10)',
-            bottom: -50,
-            left: -30,
-          }}
-        />
-        {/* route motif */}
-        <View
-          style={{
-            position: 'absolute',
-            right: 24,
-            bottom: 26,
-            width: 120,
-            height: 90,
-            opacity: 0.9,
-          }}
+        <Ionicons name="chevron-back" size={20} color="#111827" />
+      </Pressable>
+
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.keyboardContainer}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          bounces={false}
+          keyboardShouldPersistTaps="handled"
         >
-          <View
-            style={{
-              position: 'absolute',
-              left: 8,
-              bottom: 8,
-              width: 4,
-              height: 44,
-              borderRadius: 2,
-              backgroundColor: 'rgba(255,255,255,0.35)',
-              transform: [{ rotate: '12deg' }],
-            }}
-          />
-          <View
-            style={{
-              position: 'absolute',
-              left: 14,
-              bottom: 46,
-              width: 70,
-              height: 4,
-              borderRadius: 2,
-              backgroundColor: 'rgba(255,255,255,0.35)',
-              transform: [{ rotate: '-18deg' }],
-            }}
-          />
-          <View
-            style={{
-              position: 'absolute',
-              left: 4,
-              bottom: 4,
-              width: 16,
-              height: 16,
-              borderRadius: 8,
-              borderWidth: 4,
-              borderColor: colors.accent,
-              backgroundColor: colors.navy,
-            }}
-          />
-          <View
-            style={{
-              position: 'absolute',
-              right: 2,
-              top: 2,
-              width: 26,
-              height: 26,
-              borderRadius: 8,
-              backgroundColor: colors.brand,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
+          {/* Top Section: Straight Horizontal Product Gallery with exact Blinkit height (~61%) */}
+          <AnimatedProductGallery galleryHeight={galleryHeight} />
+
+          {/* Middle Section: Official Parcel Yatra Squircle Logo positioned exactly where Blinkit logo starts */}
+          <Animated.View
+            style={[
+              styles.logoWrapper,
+              {
+                opacity: logoAnim,
+                transform: [
+                  {
+                    scale: logoAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0.85, 1],
+                    }),
+                  },
+                ],
+              },
+            ]}
           >
-            <Ionicons name="flag" size={12} color={colors.white} />
-          </View>
-        </View>
+            <Animated.Image
+              source={require('../assets/parcel-yatra-logo.png')}
+              style={styles.officialLogo}
+              resizeMode="contain"
+            />
+          </Animated.View>
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-          onPress={() => (router.canGoBack() ? router.back() : router.replace('/(tabs)'))}
-          hitSlop={10}
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: 18,
-            backgroundColor: 'rgba(255,255,255,0.12)',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <Ionicons name="close" size={18} color={colors.white} />
-        </Pressable>
+          {/* Bottom Content Area: Tightly organized without excessive stretching */}
+          <View style={styles.contentSection}>
+            {challengeId ? (
+              /* Verification Screen for Phone OTP */
+              <Card style={styles.phoneCard}>
+                <Row gap={spacing.sm} style={{ alignItems: 'center' }}>
+                  <View style={styles.otpIconBadge}>
+                    <Ionicons name="chatbubble-ellipses-outline" size={17} color={colors.brandDark} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <AppText variant="heading">Enter the code</AppText>
+                    <AppText variant="small" tone="muted">
+                      Sent to {phoneMasked}
+                    </AppText>
+                  </View>
+                </Row>
 
-        <Row gap={spacing.sm} style={{ marginTop: spacing.lg }}>
-          <View
-            style={{
-              width: 38,
-              height: 38,
-              borderRadius: 11,
-              backgroundColor: colors.accent,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Ionicons name="cube" size={20} color={colors.navy} />
-          </View>
-          <View>
-            <AppText variant="heading" tone="white">
-              Parcel Yatra
-            </AppText>
-            <AppText variant="micro" style={{ color: '#9fb0cc', fontFamily: font.regular }}>
-              Intercity parcels, carried by people
-            </AppText>
-          </View>
-        </Row>
+                {devCode ? (
+                  <View style={styles.devCodeBadge}>
+                    <AppText variant="small" style={{ color: colors.warn }}>
+                      Sandbox build: use code {devCode}
+                    </AppText>
+                  </View>
+                ) : null}
 
-        <AppText variant="display" tone="white" style={{ marginTop: spacing.lg, maxWidth: 280 }}>
-          Send it with someone already going.
-        </AppText>
-        <AppText variant="small" tone="onDark" style={{ marginTop: spacing.sm, maxWidth: 300 }}>
-          Post a parcel, pick an ID-verified traveller on that route, and hand over with a one-time code.
-        </AppText>
-      </View>
-
-      {/* form */}
-      <View style={{ marginTop: -38, paddingHorizontal: spacing.lg }}>
-        <Card style={{ borderRadius: radius.xl, padding: spacing.lg }}>
-          {challengeId ? (
-            <>
-              <Row gap={spacing.sm} style={{ alignItems: 'center' }}>
-                <View
-                  style={{
-                    width: 34,
-                    height: 34,
-                    borderRadius: 17,
-                    backgroundColor: colors.brandSoft,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <Ionicons name="chatbubble-ellipses-outline" size={17} color={colors.brandDark} />
+                <View style={{ marginTop: spacing.lg }}>
+                  <Field
+                    label="Six-digit code"
+                    value={code}
+                    onChangeText={(value) => setCode(value.replace(/\D/g, '').slice(0, 6))}
+                    keyboardType="number-pad"
+                    textContentType="oneTimeCode"
+                    autoFocus
+                    maxLength={6}
+                    placeholder="000000"
+                    style={{ fontSize: 26, letterSpacing: 10, fontFamily: font.semibold, textAlign: 'center' }}
+                  />
                 </View>
-                <View style={{ flex: 1 }}>
-                  <AppText variant="heading">Enter the code</AppText>
-                  <AppText variant="small" tone="muted">
-                    Sent to {phoneMasked}
-                  </AppText>
-                </View>
-              </Row>
 
-              {devCode ? (
-                <View
-                  style={{
-                    backgroundColor: colors.accentSoft,
-                    borderRadius: radius.md,
-                    padding: spacing.sm,
-                    marginTop: spacing.md,
-                  }}
-                >
-                  <AppText variant="small" style={{ color: colors.warn }}>
-                    Sandbox build: use code {devCode}
-                  </AppText>
-                </View>
-              ) : null}
+                {error ? <ErrorNotice error={error} /> : null}
 
-              <View style={{ marginTop: spacing.lg }}>
-                <Field
-                  label="Six-digit code"
-                  value={code}
-                  onChangeText={(value) => setCode(value.replace(/\D/g, '').slice(0, 6))}
-                  keyboardType="number-pad"
-                  textContentType="oneTimeCode"
-                  autoFocus
-                  maxLength={6}
-                  placeholder="000000"
-                  style={{ fontSize: 26, letterSpacing: 10, fontFamily: font.semibold, textAlign: 'center' }}
+                <Button
+                  label="Verify and continue"
+                  onPress={verify}
+                  loading={busy === 'verify'}
+                  style={{ marginTop: spacing.sm }}
                 />
-              </View>
 
-              {error ? <ErrorNotice error={error} /> : null}
+                <Row style={{ justifyContent: 'space-between', marginTop: spacing.md }}>
+                  <Pressable
+                    onPress={() => {
+                      setChallengeId(null);
+                      setCode('');
+                      setDevCode(null);
+                      setError(null);
+                    }}
+                    hitSlop={8}
+                  >
+                    <AppText variant="small" tone="brand" style={{ fontFamily: font.semibold }}>
+                      Change number
+                    </AppText>
+                  </Pressable>
+                  <Pressable onPress={resendIn > 0 ? undefined : send} hitSlop={8}>
+                    <AppText
+                      variant="small"
+                      tone={resendIn > 0 ? 'muted' : 'brand'}
+                      style={{ fontFamily: font.semibold }}
+                    >
+                      {resendIn > 0 ? `Resend in ${resendIn}s` : 'Send a new code'}
+                    </AppText>
+                  </Pressable>
+                </Row>
+              </Card>
+            ) : showPhone ? (
+              /* Phone number entry alternative */
+              <Card style={styles.phoneCard}>
+                <AppText variant="heading">Sign in with phone</AppText>
+                <AppText variant="small" tone="muted" style={{ marginTop: 2 }}>
+                  We’ll text you a six-digit verification code.
+                </AppText>
 
-              <Button label="Verify and continue" onPress={verify} loading={busy === 'verify'} style={{ marginTop: spacing.sm }} />
+                <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm, marginTop: spacing.md }}>
+                  <View style={{ marginBottom: spacing.md }}>
+                    <AppText variant="label" tone="muted" style={{ textTransform: 'uppercase', marginBottom: 6 }}>
+                      Code
+                    </AppText>
+                    <View style={styles.countryCodeBadge}>
+                      <AppText variant="body">+91</AppText>
+                    </View>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Field
+                      label="Mobile number"
+                      value={phone}
+                      onChangeText={setPhone}
+                      keyboardType="phone-pad"
+                      textContentType="telephoneNumber"
+                      placeholder="98765 43210"
+                      maxLength={14}
+                    />
+                  </View>
+                </View>
 
-              <Row style={{ justifyContent: 'space-between', marginTop: spacing.md }}>
+                {error ? (
+                  <View style={{ marginTop: spacing.sm }}>
+                    <ErrorNotice error={error} />
+                  </View>
+                ) : null}
+
+                <Button label="Send code" onPress={send} loading={busy === 'send'} style={{ marginTop: spacing.sm }} />
+
                 <Pressable
                   onPress={() => {
-                    setChallengeId(null);
-                    setCode('');
-                    setDevCode(null);
+                    setShowPhone(false);
                     setError(null);
                   }}
                   hitSlop={8}
+                  style={{ marginTop: spacing.md, alignSelf: 'center' }}
                 >
                   <AppText variant="small" tone="brand" style={{ fontFamily: font.semibold }}>
-                    Change number
+                    Back to Google Sign-In
                   </AppText>
                 </Pressable>
-                <Pressable onPress={resendIn > 0 ? undefined : send} hitSlop={8}>
-                  <AppText
-                    variant="small"
-                    tone={resendIn > 0 ? 'muted' : 'brand'}
-                    style={{ fontFamily: font.semibold }}
-                  >
-                    {resendIn > 0 ? `Resend in ${resendIn}s` : 'Send a new code'}
+              </Card>
+            ) : (
+              /* Standard Production View: Matching Blinkit layout exactly */
+              <>
+                {/* Headline & Subtitle */}
+                <View style={styles.textContainer}>
+                  <AppText style={styles.headline}>
+                    Every parcel has a way.
                   </AppText>
-                </Pressable>
-              </Row>
-            </>
-          ) : (
-            <>
-              <AppText variant="heading">Sign in to Parcel Yatra</AppText>
-              <AppText variant="small" tone="muted" style={{ marginTop: 2 }}>
-                One tap with Google. No password, no phone number needed.
-              </AppText>
-
-              <View style={{ marginTop: spacing.lg }}>
-                <GoogleButton busy={busy === 'google'} onToken={google} onError={setError} />
-              </View>
-
-              {!showPhone && error ? (
-                <View style={{ marginTop: spacing.sm }}>
-                  <ErrorNotice error={error} />
+                  <AppText style={styles.subtitle}>
+                    Fast, trusted intercity deliveries.
+                  </AppText>
                 </View>
-              ) : null}
 
-              <Row gap={6} style={{ marginTop: spacing.md, alignItems: 'flex-start' }}>
-                <Ionicons name="lock-closed-outline" size={13} color={colors.ink500} style={{ marginTop: 2 }} />
-                <AppText variant="micro" tone="muted" style={{ flex: 1, fontFamily: font.regular }}>
-                  We receive only your name, email and profile photo. Nothing is posted.
-                </AppText>
-              </Row>
-
-              {showPhone ? (
-                <>
-                  <Row gap={spacing.md} style={{ marginTop: spacing.lg, marginBottom: spacing.md }}>
-                    <View style={{ flex: 1, height: 1, backgroundColor: colors.line }} />
-                    <AppText variant="micro" tone="muted">
-                      OR USE A NUMBER
-                    </AppText>
-                    <View style={{ flex: 1, height: 1, backgroundColor: colors.line }} />
-                  </Row>
-
-                  <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm }}>
-                    <View style={{ marginBottom: spacing.md }}>
-                      <AppText variant="label" tone="muted" style={{ textTransform: 'uppercase', marginBottom: 6 }}>
-                        Code
+                {/* Primary Google Auth Button */}
+                <View style={styles.authActionWrapper}>
+                  {PLATFORM_CLIENT_ID ? (
+                    <GoogleButton
+                      busy={busy === 'google'}
+                      onToken={google}
+                      onError={setError}
+                    />
+                  ) : (
+                    <View style={styles.missingConfigBadge}>
+                      <AppText variant="small" style={{ color: colors.warn, textAlign: 'center' }}>
+                        Google sign-in is not configured in this build
+                        {Platform.OS === 'android' ? ' (missing Android OAuth client ID).' : '.'}
                       </AppText>
-                      <View
-                        style={{
-                          borderWidth: 1,
-                          borderColor: colors.line,
-                          borderRadius: radius.md,
-                          paddingHorizontal: spacing.md,
-                          height: 46,
-                          backgroundColor: colors.canvas,
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        <AppText variant="body">+91</AppText>
-                      </View>
                     </View>
-                    <View style={{ flex: 1 }}>
-                      <Field
-                        label="Mobile number"
-                        value={phone}
-                        onChangeText={setPhone}
-                        keyboardType="phone-pad"
-                        textContentType="telephoneNumber"
-                        placeholder="98765 43210"
-                        maxLength={14}
-                      />
-                    </View>
-                  </View>
+                  )}
 
                   {error ? (
-                    <View style={{ marginTop: spacing.md }}>
+                    <View style={{ marginTop: spacing.sm, width: '100%' }}>
                       <ErrorNotice error={error} />
                     </View>
                   ) : null}
 
-                  <Button label="Send code" onPress={send} loading={busy === 'send'} style={{ marginTop: spacing.sm }} />
+                  {/* Security Assurance text */}
+                  <AppText style={styles.securePrompt}>
+                    Sign in securely with your Google account
+                  </AppText>
 
+                  {/* Optional phone fallback */}
                   <Pressable
                     onPress={() => {
-                      setShowPhone(false);
+                      setShowPhone(true);
                       setError(null);
                     }}
                     hitSlop={8}
-                    style={{ marginTop: spacing.md, alignSelf: 'center' }}
+                    style={styles.phoneFallbackButton}
                   >
-                    <AppText variant="small" tone="brand" style={{ fontFamily: font.semibold }}>
-                      Use Google instead
+                    <AppText style={styles.phoneFallbackText}>
+                      Or sign in with a phone number
                     </AppText>
                   </Pressable>
-                </>
-              ) : (
-                <Pressable
-                  onPress={() => {
-                    setShowPhone(true);
-                    setError(null);
-                  }}
-                  hitSlop={8}
-                  style={{ marginTop: spacing.lg, alignSelf: 'center' }}
-                >
-                  <AppText variant="small" tone="brand" style={{ fontFamily: font.semibold }}>
-                    Use a phone number instead
-                  </AppText>
-                </Pressable>
-              )}
-            </>
-          )}
-        </Card>
+                </View>
 
-        <View
-          style={{
-            flexDirection: 'row',
-            gap: spacing.sm,
-            marginTop: spacing.md,
-            backgroundColor: colors.surface,
-            borderRadius: radius.lg,
-            borderWidth: 1,
-            borderColor: colors.line,
-            padding: spacing.md,
-          }}
-        >
-          <Ionicons name="shield-checkmark-outline" size={17} color={colors.success} style={{ marginTop: 1 }} />
-          <View style={{ flex: 1 }}>
-            <AppText variant="micro" style={{ fontFamily: font.semibold }}>
-              Your number stays private
-            </AppText>
-            <AppText variant="micro" tone="muted" style={{ fontFamily: font.regular, marginTop: 1 }}>
-              The other side sees a masked number. Chat stays inside the booking.
-            </AppText>
+                {/* Terms of Service & Privacy Policy matching Blinkit footer */}
+                <View style={[styles.legalSection, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+                  <View style={styles.legalLinksRow}>
+                    <AppText style={styles.legalNotice}>
+                      By continuing, you agree to our:
+                    </AppText>
+                    <Pressable
+                      onPress={() => router.push('/info/terms')}
+                      hitSlop={8}
+                      accessibilityRole="link"
+                      accessibilityLabel="Terms of Service"
+                    >
+                      <AppText style={styles.legalLink}>Terms of Service</AppText>
+                    </Pressable>
+                    <AppText style={styles.legalSeparator}> & </AppText>
+                    <Pressable
+                      onPress={() => router.push('/info/privacy')}
+                      hitSlop={8}
+                      accessibilityRole="link"
+                      accessibilityLabel="Privacy Policy"
+                    >
+                      <AppText style={styles.legalLink}>Privacy policy</AppText>
+                    </Pressable>
+                  </View>
+                </View>
+              </>
+            )}
           </View>
-        </View>
-
-        <AppText variant="micro" tone="muted" style={{ marginTop: spacing.lg, textAlign: 'center', fontFamily: font.regular }}>
-          By continuing you agree to our{' '}
-          <AppText variant="micro" tone="brand" onPress={() => router.push('/info/terms')}>
-            terms
-          </AppText>{' '}
-          and{' '}
-          <AppText variant="micro" tone="brand" onPress={() => router.push('/info/privacy')}>
-            privacy policy
-          </AppText>
-          .
-        </AppText>
-      </View>
-    </Screen>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -523,27 +446,211 @@ function GoogleButton({
       accessibilityState={{ disabled, busy }}
       disabled={disabled}
       onPress={() => void prompt()}
-      style={({ pressed }) => ({
-        minHeight: 52,
-        borderRadius: radius.md,
-        borderWidth: 1,
-        borderColor: colors.line,
-        backgroundColor: colors.surface,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 10,
-        opacity: disabled ? 0.5 : pressed ? 0.82 : 1,
-      })}
+      style={({ pressed }) => [
+        styles.googleButton,
+        {
+          opacity: disabled ? 0.6 : pressed ? 0.88 : 1,
+          transform: [{ scale: pressed ? 0.99 : 1 }],
+        },
+      ]}
     >
       {busy ? (
-        <ActivityIndicator color={colors.brand} />
+        <ActivityIndicator color={colors.brand} size="small" />
       ) : (
-        <Ionicons name="logo-google" size={18} color={colors.brand} />
+        <Animated.Image
+          source={require('../assets/google-g-logo.png')}
+          style={styles.googleIcon}
+          resizeMode="contain"
+        />
       )}
-      <AppText variant="button" style={{ color: colors.ink900 }}>
+      <AppText style={styles.googleButtonLabel}>
         {busy ? 'Connecting…' : 'Continue with Google'}
       </AppText>
     </Pressable>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  keyboardContainer: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  circularBackButton: {
+    position: 'absolute',
+    zIndex: 30,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4,
+  },
+  logoWrapper: {
+    alignSelf: 'center',
+    marginTop: -30,
+    zIndex: 10,
+    shadowColor: '#0a57ff',
+    shadowOpacity: 0.14,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 5,
+  },
+  officialLogo: {
+    width: 62,
+    height: 62,
+    borderRadius: 16,
+  },
+  contentSection: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  textContainer: {
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  headline: {
+    fontSize: 23,
+    fontFamily: font.bold,
+    color: '#111827',
+    textAlign: 'center',
+    letterSpacing: -0.3,
+  },
+  subtitle: {
+    fontSize: 14.5,
+    fontFamily: font.regular,
+    color: '#6B7280',
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  authActionWrapper: {
+    width: '100%',
+    alignItems: 'center',
+    marginTop: 18,
+    marginBottom: 12,
+  },
+  googleButton: {
+    width: '100%',
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    shadowColor: '#0a57ff',
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+    paddingHorizontal: spacing.lg,
+  },
+  googleIcon: {
+    width: 22,
+    height: 22,
+  },
+  googleButtonLabel: {
+    fontSize: 16,
+    fontFamily: font.semibold,
+    color: '#111827',
+  },
+  missingConfigBadge: {
+    backgroundColor: colors.warnBg,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    width: '100%',
+  },
+  securePrompt: {
+    fontSize: 13,
+    fontFamily: font.regular,
+    color: '#6B7280',
+    textAlign: 'center',
+    marginTop: 10,
+  },
+  phoneFallbackButton: {
+    marginTop: 10,
+    paddingVertical: 4,
+    paddingHorizontal: 12,
+  },
+  phoneFallbackText: {
+    fontSize: 12,
+    fontFamily: font.semibold,
+    color: '#0a57ff',
+  },
+  legalSection: {
+    alignItems: 'center',
+    marginTop: 16,
+  },
+  legalLinksRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+  },
+  legalNotice: {
+    fontSize: 11.5,
+    fontFamily: font.regular,
+    color: '#9CA3AF',
+    marginRight: 4,
+  },
+  legalLink: {
+    fontSize: 11.5,
+    fontFamily: font.regular,
+    color: '#6B7280',
+    textDecorationLine: 'underline',
+  },
+  legalSeparator: {
+    fontSize: 11.5,
+    fontFamily: font.regular,
+    color: '#9CA3AF',
+  },
+  phoneCard: {
+    width: '100%',
+    borderRadius: radius.xl,
+    padding: spacing.lg,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  otpIconBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.brandSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  devCodeBadge: {
+    backgroundColor: colors.accentSoft,
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    marginTop: spacing.md,
+  },
+  countryCodeBadge: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    height: 46,
+    backgroundColor: colors.canvas,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});

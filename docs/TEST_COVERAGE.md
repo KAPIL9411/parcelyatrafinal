@@ -9,6 +9,10 @@ quotes onto the v2 pricing engine and added the launch-network routes. The count
 which is the point of re-running them: the new quote response and the new `cities.status` gate broke
 nothing on the paths these scripts walk.
 
+The unit row was re-run on 2026-10-28 after the homepage/campaign suite was added: domain 87, API
+69, mobile 8, 0 failed and 0 skipped. The browser suites were not re-run that day; their rows above
+still describe the 2026-10-27 run.
+
 ## How to run
 
 The API must be listening on `127.0.0.1:3000` with the isolated parity database:
@@ -33,7 +37,7 @@ broken" and stops rather than printing a pass it did not earn.
 | `node scripts/kyc-review.mjs` | supporting (staff identity review) | 25 passed, 0 failed |
 | `node scripts/concurrency.mjs` | supporting (booking atomicity) | 11 passed, 0 failed |
 | `node scripts/ratelimit.mjs` | supporting (limiters) | 14 passed, 0 failed |
-| `npm test` | unit: domain + api + mobile | 73 passed + 50 passed + 8 passed, 0 failed |
+| `npm test` | unit: domain + api + mobile | 87 passed + 69 passed + 8 passed, 0 failed (re-run 2026-10-28) |
 | `npm run typecheck` | all four workspaces | clean |
 | `npm run build` | `@py/web` production build | clean (one chunk-size warning) |
 
@@ -186,6 +190,24 @@ it is typechecked and bundled, and its rendered state was read in a browser (see
 "Browser-verified" below), but no successful write has been driven through it; the transitions behind
 its buttons are covered by `geo-api.test.ts` at the API, not at the screen.
 
+## Remote homepage and campaign CMS
+
+Run by `npm test`; 18 API tests in `apps/api/test/homepage.test.ts` drive the real Fastify app
+through `app.inject` against a dedicated PGlite directory. They assert the default page and its
+cache semantics (`ETag`/`304`, `x-homepage-version`), that the served document passes the app-side
+parser, the authorisation matrix (anonymous `401`, ordinary user `403`, support can read but not
+write, `admin_readonly` can read but is refused every write), draft privacy, publish re-validation
+of a corrupted row, linear rollback, strict editor validation (unknown section, `https://` route,
+foreign image host, non-hex colour) with no half-written draft, permissive reader parsing of an
+unknown section, campaign window/platform/priority resolution and expiry through
+`resolveHomepage(at)`, refusal of an already-ended window, immutability of a published campaign,
+and media ownership/purpose/existence plus immutable public serving. The full table is in
+[docs/HOMEPAGE_CMS.md](HOMEPAGE_CMS.md) §7.
+
+**Not covered by a test:** the Expo app's homepage hook (cache → network → fallback), the web
+console's rendered state, and the 60-second foreground-refresh branch. The hook is typechecked and
+its call sites were exercised in a browser; no unit test drives it.
+
 ## What these suites do not cover
 
 * Real payment capture, real SMS/WhatsApp/email delivery, real image storage and real managed
@@ -228,3 +250,19 @@ its buttons are covered by `geo-api.test.ts` at the API, not at the screen.
 * The verification decision sheet rendering all three identity captures: opened as the seeded
   reviewer, each `<img>` reached `naturalWidth` 240 with the shimmer removed, and the full-size
   overlay opened on click with the file's size, type, capture time and hash, then closed on Escape.
+* The **Homepage** tab (2026-10-28): the seeded page previewed; a draft headline saved and confirmed
+  absent from `GET /v1/homepage`; published, after which the public version moved and the draft was
+  consumed; a future-dated campaign stayed dark while an open-window campaign applied its theme,
+  `expires_at` and shortened `refresh_after_seconds`; the campaign then expired on server time with
+  no job and no deploy, and the public page returned to the default theme; restoring an older
+  version produced a new, higher version with the old content. Every public read used
+  `cache-control: no-cache` to defeat the browser's own cache.
+* **Remote campaign delivery in the Expo app** (2026-10-28, Expo Web): a campaign created and
+  published only through the API appeared in the running app as its own eyebrow and headline with
+  no rebuild. The app's own 5-minute refresh timer was then observed: the campaign it was showing
+  was unpublished at 04:51:21Z, and at 04:56:29Z the app issued a new `GET /v1/homepage` and changed
+  to the fallback campaign in place, with no reload or manual action. When that campaign was also
+  unpublished, the next poll (05:01:47Z) returned the shipped default page in place. The app was
+  rendered through Expo Web, not on a device; the synthetic `visibilitychange` used by the harness
+  did not trigger the app's foreground refresh, so that branch is implemented and typechecked but
+  not observed.

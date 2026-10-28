@@ -52,7 +52,7 @@ export default function InboxScreen() {
 
   if (status !== 'signed_in') {
     return (
-      <Screen>
+      <Screen contentStyle={{ paddingBottom: 128 }}>
         <SignInPanel
           title="Your messages"
           body="Sign in to coordinate pickup and delivery with the other side of each booking."
@@ -83,6 +83,7 @@ export default function InboxScreen() {
 
   return (
     <Screen
+      contentStyle={{ paddingBottom: 128 }}
       refreshControl={
         <Refresh
           refreshing={inbox.isRefetching || bookings.isRefetching}

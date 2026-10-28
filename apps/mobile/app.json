@@ -7,12 +7,6 @@
     "icon": "./assets/icon.png",
     "scheme": "parcelyatra",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0a1730"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "in.parcelyatra.app"
@@ -26,7 +20,10 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -35,7 +32,15 @@
       "expo-secure-store",
       "expo-web-browser",
       "expo-font",
-      "expo-splash-screen",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#0a1730"
+        }
+      ],
       "expo-router",
       "@react-native-community/datetimepicker",
       [
@@ -48,7 +53,16 @@
     ],
     "extra": {
       "apiBase": "https://parcelyatrafinal.onrender.com/v1",
-      "googleWebClientId": "130100214583-b8jp20gsi8teqgoqk116o6pnlb1tqlnm.apps.googleusercontent.com"
+      "googleWebClientId": "130100214583-b8jp20gsi8teqgoqk116o6pnlb1tqlnm.apps.googleusercontent.com",
+      "googleAndroidClientId": "130100214583-klk76hu3g39912dsp5e1tldobslqp7l7.apps.googleusercontent.com",
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "4d16ca7e-ffd5-474f-bbde-34c0739de03c"
+      }
     }
   }
 }

@@ -24,6 +24,8 @@ import { notificationRoutes } from './routes/notifications.ts';
 import { fileRoutes, filePublicRoutes } from './routes/files.ts';
 import { adminRoutes } from './routes/admin.ts';
 import { adminGeoRoutes } from './routes/admin-geo.ts';
+import { adminHomepageRoutes } from './routes/admin-homepage.ts';
+import { homepageRoutes } from './routes/homepage.ts';
 import { geoRoutes } from './routes/geo.ts';
 import { googleAuthRoutes } from './routes/google-auth.ts';
 import { webhookRoutes } from './routes/webhooks.ts';
@@ -226,6 +228,9 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(catalogueRoutes, { prefix: '/v1' });
   await app.register(geoRoutes, { prefix: '/v1' });
   await app.register(webhookRoutes, { prefix: '/v1' });
+  // The homepage and its artwork are public and cacheable: an app opening on a cold start must not
+  // need a session to draw its first screen.
+  await app.register(homepageRoutes, { prefix: '/v1' });
   // Signed file reads carry their own credential in the path, so they sit outside the auth hook.
   await app.register(filePublicRoutes, { prefix: '/v1' });
 
@@ -253,6 +258,7 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   await app.register(adminRoutes, { prefix: '/v1' });
   await app.register(adminGeoRoutes, { prefix: '/v1' });
+  await app.register(adminHomepageRoutes, { prefix: '/v1' });
 
   if (config.ENABLE_DEV_ENDPOINTS) {
     await app.register(devRoutes, { prefix: '/v1' });

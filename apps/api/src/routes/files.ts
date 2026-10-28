@@ -29,13 +29,23 @@ const ALLOWED: Record<string, string[]> = {
   parcel_sealed: ['image/jpeg', 'image/png'],
   parcel_delivery: ['image/jpeg', 'image/png'],
   dispute_evidence: ['image/jpeg', 'image/png'],
+  // Homepage artwork. Staff-only in practice: the registration endpoint that makes an upload
+  // addressable requires a staff role, and an unregistered object is unreachable.
+  campaign_art: ['image/jpeg', 'image/png'],
 };
 
 const MAX_BYTES = 10_485_760;
 
 const requestSchema = z
   .object({
-    purpose: z.enum(['kyc_id', 'kyc_selfie', 'parcel_sealed', 'parcel_delivery', 'dispute_evidence']),
+    purpose: z.enum([
+      'kyc_id',
+      'kyc_selfie',
+      'parcel_sealed',
+      'parcel_delivery',
+      'dispute_evidence',
+      'campaign_art',
+    ]),
     content_type: z.enum(['image/jpeg', 'image/png']),
     byte_size: z.number().int().min(1).max(MAX_BYTES),
   })

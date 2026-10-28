@@ -65,7 +65,7 @@ export default function BookingsScreen() {
 
   if (status !== 'signed_in') {
     return (
-      <Screen>
+      <Screen contentStyle={{ paddingBottom: 128 }}>
         <SignInPanel
           title="Your bookings"
           body="Sign in to see parcels you have sent and parcels you are carrying."
@@ -79,6 +79,7 @@ export default function BookingsScreen() {
 
   return (
     <Screen
+      contentStyle={{ paddingBottom: 128 }}
       refreshControl={<Refresh refreshing={active.isRefetching} onRefresh={() => void active.refetch()} />}
     >
       {/* summary */}

@@ -26,6 +26,10 @@ sets.
 - Static pricing, prohibited items, safety, help, and draft legal pages.
 - An Expo (React Native) app in `apps/mobile` that uses the same API and session rules; see
   [`docs/BUILD_NOTES.md` §6](docs/BUILD_NOTES.md#6-mobile-app-expo--what-exists-and-what-it-refuses-to-fake).
+- A server-driven home screen: hero, gradient, decoration, sections and their order come from
+  `GET /v1/home`, so a campaign ships without an app update. Staff edit it in the console under
+  **Homepage** (presets, drag reorder, raw JSON with validator errors, publish, rollback); see
+  [`docs/HOMEPAGE_CMS.md`](docs/HOMEPAGE_CMS.md).
 
 ## What is deliberately off
 
@@ -101,6 +105,45 @@ Both the cache and `apps/api/data/` are gitignored.
 
 ---
 
+## Deploy
+
+The API, web console, database and app deploy independently. The repo already contains the pieces
+each host needs; nothing below requires a new service.
+
+| Piece | Host | Build / config |
+| --- | --- | --- |
+| API | Render web service from `Dockerfile` | Image runs `dist/migrate.js` then `dist/index.js` |
+| Web + staff console | Vercel, root `apps/web` | `vercel.json` rewrites all paths to `index.html` |
+| Database | Neon Postgres | Set `DATABASE_URL`; `DATABASE_SSL=require` |
+| App | EAS, `apps/mobile/eas.json` | `EXPO_PUBLIC_API_BASE` baked into the bundle |
+
+1. **Database.** Create a Neon project and copy its connection string. The container migrates before
+   it listens, so no separate migration step is needed; a failed migration stops the boot.
+2. **API.** Set `NODE_ENV=production`, `DATABASE_URL`, `DATABASE_SSL=require`, and every secret from
+   `.env.example` to a generated value (`node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`).
+   `PUBLIC_API_URL` must include `/v1`. `WEB_ORIGINS` lists exact origins — a `https://*.vercel.app`
+   pattern is refused. `ADMIN_WEB_URL` must differ from `PUBLIC_WEB_URL`. `PAYMENTS_LIVE` and
+   `ENABLE_DEV_ENDPOINTS` must stay false; `assertSafetyRails` refuses to boot otherwise, and it also
+   refuses default secrets. Leave `AUTO_SEED` unset (it defaults to false in production).
+3. **Web.** On Vercel, set the project root to `apps/web`, build with `npm run build -w @py/web`, and
+   set `VITE_API_BASE=https://<api-origin>/v1`. It is read at build time, so changing it needs a
+   redeploy. Production cookies are `SameSite=None; Secure`, which is why the API must list the exact
+   Vercel origin in `WEB_ORIGINS`.
+4. **App.** Build with EAS (`eas build --platform android --profile preview`, or `production`). Every
+   `EXPO_PUBLIC_*` value is embedded in the binary: a wrong API URL is fixed by a new build, not by a
+   setting on the phone. `apps/mobile/eas.json` currently points at
+   `https://parcelyatrafinal.onrender.com/v1`.
+5. **Storage.** `STORAGE_PROVIDER=local` writes to the host's disk. Render's disk is ephemeral, so
+   uploads — including homepage campaign artwork — disappear on redeploy. Switch to
+   `STORAGE_PROVIDER=cloudinary` with the three `CLOUDINARY_*` keys before relying on uploaded files
+   in production.
+6. **Homepage content.** Deployment order for the server-driven home (API before console) is in
+   [`docs/HOMEPAGE_CMS.md` §6](docs/HOMEPAGE_CMS.md#6-environment-and-deployment).
+
+Never commit a filled `.env`; the example is placeholders only.
+
+---
+
 ## Layout
 
 ```
@@ -112,7 +155,7 @@ apps/
   mobile/         Expo SDK 58 + Expo Router. Routes in app/, shared code in src/. Android/iOS target;
                   a React Native Web preview exists for local development only.
 packages/
-  domain/         Framework-free pricing, enums, booking state machine, status copy. 15 tests.
+  domain/         Framework-free pricing, enums, booking state machine, homepage contract. 90 tests.
 scripts/
   smoke.mjs       End-to-end HTTP checks.
 docs/

@@ -38,15 +38,24 @@ import {
 } from '../components/ui';
 import { StatusChip, VerificationChip } from '../components/StatusChip';
 import { NetworkAdmin } from '../components/NetworkAdmin';
+import { HomepageAdmin } from '../components/HomepageAdmin';
 import { ShieldCheckIcon, AlertTriangleIcon, SearchIcon, DocIcon, LockIcon } from '../components/icons';
 
-type Tab = 'verifications' | 'bookings' | 'disputes' | 'incidents' | 'network' | 'audit';
+type Tab =
+  | 'verifications'
+  | 'bookings'
+  | 'disputes'
+  | 'incidents'
+  | 'homepage'
+  | 'network'
+  | 'audit';
 
 const TABS: Array<{ value: Tab; label: string }> = [
   { value: 'verifications', label: 'Verification queue' },
   { value: 'bookings', label: 'Bookings' },
   { value: 'disputes', label: 'Cases' },
   { value: 'incidents', label: 'Incidents' },
+  { value: 'homepage', label: 'Homepage' },
   { value: 'network', label: 'Network and pricing' },
   { value: 'audit', label: 'Audit log' },
 ];
@@ -89,6 +98,7 @@ export function Admin() {
       {tab === 'bookings' ? <BookingSearch /> : null}
       {tab === 'disputes' ? <DisputeQueue /> : null}
       {tab === 'incidents' ? <IncidentQueue /> : null}
+      {tab === 'homepage' ? <HomepageAdmin /> : null}
       {tab === 'network' ? <NetworkAdmin /> : null}
       {tab === 'audit' ? <AuditLog /> : null}
     </div>

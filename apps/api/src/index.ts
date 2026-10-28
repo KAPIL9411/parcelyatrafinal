@@ -3,6 +3,7 @@ import { buildApp } from './app.ts';
 import { closeDb, getDb, schemaExists } from './db/client.ts';
 import { pendingMigrations, runMigrations } from './db/migrations.ts';
 import { seedDatabase } from './db/seed.ts';
+import { ensureHomepageSeed } from './lib/homepage.ts';
 
 /**
  * Boot sequence.
@@ -49,6 +50,10 @@ async function main(): Promise<void> {
       }
     }
   }
+
+  // The homepage is content, not schema: seed the default page once, in every environment, so the
+  // console always has a published version to diff a draft against. Idempotent.
+  await ensureHomepageSeed(db);
 
   const app = await buildApp();
 

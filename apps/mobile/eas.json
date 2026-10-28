@@ -1,0 +1,27 @@
+{
+  "cli": {
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_BASE": "https://parcelyatrafinal.onrender.com/v1",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "130100214583-klk76hu3g39912dsp5e1tldobslqp7l7.apps.googleusercontent.com"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_BASE": "https://parcelyatrafinal.onrender.com/v1",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "130100214583-klk76hu3g39912dsp5e1tldobslqp7l7.apps.googleusercontent.com"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

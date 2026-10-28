@@ -50,6 +50,7 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
 | DEFECT-022 | Presentation | Web UI | Landing hero: the user-supplied cityscape image (`hero-background.png`) is the hero background (`cover`/`center`/`no-repeat`, subtle 25% navy overlay), visible on both sides of the navy card; the card is flush with the hero's bottom edge so the grey strip below it is gone; `overflow-x: clip` on `html` absorbs the scrollbar-width overflow of the full-bleed breakout. **Superseded by DEFECT-023**, which removed the viewport-unit breakout entirely. |
 | DEFECT-023 | Presentation | Web UI | Homepage redesigned around a reference visual language: curved full-bleed navy hero with the cityscape layered under a navy scrim, centred headline, pill booking bar, and a row of six floating category cards straddling the curve; below-the-fold re-rhythmed with a centred section heading and four feature cards. Full-bleed is now achieved by giving the `/` route its own un-boxed `<main>` instead of viewport-unit negative margins. |
 | DEFECT-024 | Presentation / Auth lifecycle | Web UI | Signed-out UI was rendered while the session was still being restored, so a returning visitor saw a Sign In button, a sign-in form and `/login?next=` call-to-action links that were then pulled away. The session context now carries `loading` / `authenticated` / `unauthenticated`, every consumer waits for the answer, and the restore runs once per page load. |
+| DEFECT-030 | Additive | Homepage / campaigns | `0011_homepage_cms.sql` adds immutable homepage and campaign releases plus a media allowlist; `GET /v1/homepage` serves the resolved page and the app renders it over a fixed composition; a **Homepage** console tab edits, schedules, publishes and restores releases. Writes are limited to `trust_safety`. |
 
 ### DEFECT-001 — traveller-share cap basis
 
@@ -859,9 +860,38 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
 - **Verification:** `geo-network`, `routing`, `launch-quote` and `geo-api` suites run against the
   real app and PGlite; counts are recorded in `docs/TEST_COVERAGE.md`.
 
----
+### DEFECT-030 — remote homepage and festive campaign CMS
 
-## 2. Other deviations
+- **PACK:** the brief asks for a server-driven homepage with scheduled festive campaigns, a web
+  CMS, draft/publish/rollback and no app update needed. The pack's `Homepage` contract is a static
+  page description with no release, campaign or media tables.
+- **ADDITIVE:** `0011_homepage_cms.sql` adds `homepage_releases` (immutable `draft` / `published` /
+  `archived` rows for both the base page and campaigns, one live homepage enforced by a partial
+  unique index) and `homepage_media` (the artwork allowlist). `@py/domain` owns the contract and the
+  parser; the API validates on write, the app validates before render. `GET /v1/homepage` and
+  `GET /v1/homepage/media/:id` are public and cacheable; fifteen `/admin/homepage…` routes manage
+  drafts, publish, rollback, campaigns and media.
+- **ROLES:** all five staff roles may read the console; only `trust_safety` may write. `admin_readonly`
+  is excluded on purpose — its name promises it cannot change anything, and publishing under it
+  would be a trap. The configured `ADMIN_EMAILS` owner receives `trust_safety` at sign-in.
+- **UI:** the Expo home screen now renders the remote document over a fixed composition (header,
+  hero carousel, search bar, live shipment, ordered sections, account block). The web console gains
+  a **Homepage** tab with page and campaign editors, preview, schedule, publish, unpublish and
+  restore. Campaign content may restyle, retitle, reorder and hide sections; it cannot add a
+  component, move the search bar or install code.
+- **NOT DONE:** per-user or per-city targeting (campaigns target platforms only); push delivery (a
+  closed app sees the change on next open); a scheduler (windows are evaluated against server time
+  per request, so there is nothing to be late).
+- **VERIFICATION:** 18 API tests against the real app and PGlite. Browser: draft privacy, publish,
+  scheduled dark, live campaign, automatic expiry on real elapsed time, rollback as a new version.
+  App: a campaign published only through the API appeared in the running Expo Web build with no
+  rebuild, and its 5-minute timer was observed applying the fallback campaign after the shown one
+  was unpublished. **Not verified:** any device or emulator, the native file cache, the
+  foreground-refresh branch (a synthetic `visibilitychange` did not trigger it), and image upload
+  driven through the console end to end (upload and media registration are covered at the API). See
+  [docs/HOMEPAGE_CMS.md](HOMEPAGE_CMS.md).
+
+
 
 ### PGlite as the development database
 
@@ -1181,6 +1211,14 @@ history); Trips showed the verification lock; Profile showed the masked phone, v
 API base; the send wizard's step 1 rendered with the web date fields and refused an empty route with
 inline errors. `localStorage`, `sessionStorage` and `document.cookie` stayed empty throughout.
 
+**OBSERVED on 2026-10-28**, same preview: the redesigned home screen rendered the remote document —
+compact header with logo, pickup-city selector and unread badges; hero carousel ("Your parcel. Their
+journey." with its badges and CTA); the search pill overlapping the hero; the category strip;
+popular routes; then the ordered sections. A campaign created and published **only through the API**
+appeared in the running app as its own eyebrow and headline with no rebuild and no reload of the
+bundle. The app was not run on a device: native caching and native foreground events are unverified.
+See [docs/HOMEPAGE_CMS.md](HOMEPAGE_CMS.md) §8.
+
 ### Deliberate limitations
 
 - **No push notifications.** The bell polls `GET /notifications` every 60 s while the app is open;
@@ -1192,8 +1230,10 @@ inline errors. `localStorage`, `sessionStorage` and `document.cookie` stayed emp
 - **No payout, wallet or cash collection.** The API refuses these, so the UI does not offer them.
 - **No account export.** `POST /me/export` returns `BACKGROUND_WORKER_UNAVAILABLE`; the app exposes
   deletion but not export, rather than showing a button that always fails.
-- **No offline cache.** TanStack Query keeps data in memory only; a cold start without a network
-  shows named errors, not stale bookings.
+- **No offline cache for API data.** TanStack Query keeps bookings, trips and messages in memory
+  only; a cold start without a network shows named errors, not stale bookings. The homepage is the
+  exception: it has its own validated cache (a file on native, a module variable on web) so the
+  first frame is never blank. That cache holds public page content and no account data.
 - **No emulator or device run.** Type checking, unit tests and the Metro export pass, and a React
   Native Web preview was rendered in a desktop browser against a local sandbox, but no screen in
   this app has been rendered on Android or iOS. Treat the native visual layer as unverified.

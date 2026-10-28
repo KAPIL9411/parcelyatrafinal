@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -74,7 +74,7 @@ function todayIn(hours: number): Date {
 }
 
 function SendWizard() {
-  const params = useLocalSearchParams<{ category?: string }>();
+  const params = useLocalSearchParams<{ category?: string; origin?: string; dest?: string }>();
   const cities = useCities();
   const config = useQuery({ queryKey: ['config'], queryFn: senderApi.config, staleTime: 10 * 60_000 });
   const queryClient = useQueryClient();
@@ -120,6 +120,34 @@ function SendWizard() {
   const [selectedTrip, setSelectedTrip] = useState<string | null>(null);
   const [bookingBusy, setBookingBusy] = useState(false);
   const [bookingError, setBookingError] = useState<unknown>(null);
+
+  /**
+   * A link from the homepage may name a city rather than an id ("Bareilly"), because the homepage is
+   * content, not a form. Resolve it once, against the live city list, and only if the user has not
+   * already chosen something. A name that no longer matches anything is ignored rather than guessed.
+   */
+  const appliedParams = useRef(false);
+  useEffect(() => {
+    if (appliedParams.current || cities.cities.length === 0) return;
+    appliedParams.current = true;
+
+    const resolve = (value: string | undefined) => {
+      if (typeof value !== 'string') return undefined;
+      const needle = value.trim().toLowerCase();
+      if (!needle) return undefined;
+      return (
+        cities.cities.find((city) => city.name.toLowerCase() === needle) ??
+        cities.cities.find((city) => city.name.toLowerCase().startsWith(needle))
+      );
+    };
+
+    const from = resolve(params.origin);
+    const to = resolve(params.dest);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (from) setOriginId((current) => current || from.id);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (to) setDestId((current) => current || to.id);
+  }, [cities.cities, params.origin, params.dest]);
 
   const originAreas = useQuery({
     queryKey: ['areas', originId],

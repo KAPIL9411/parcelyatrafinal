@@ -38,7 +38,7 @@ export default function ProfileScreen() {
 
   if (status !== 'signed_in' || !user) {
     return (
-      <Screen>
+      <Screen contentStyle={{ paddingBottom: 128 }}>
         <View
           style={{
             backgroundColor: colors.navy,
@@ -175,7 +175,7 @@ function ProfileBody({
   }
 
   return (
-    <Screen>
+    <Screen contentStyle={{ paddingBottom: 128 }}>
       {offline ? (
         <View style={{ marginBottom: spacing.md }}>
           <Banner
@@ -514,7 +514,7 @@ function ProfileBody({
       <Sheet visible={signOutOpen} onClose={() => setSignOutOpen(false)} title="Sign out?">
         <AppText variant="body">
           Signing out of every device also ends sessions on other phones and browsers. You can sign in again
-          with a phone code.
+          with Google.
         </AppText>
         <Button label="Sign out everywhere" variant="danger" onPress={() => void doSignOut(true)} style={{ marginTop: spacing.lg }} />
         <Button label="Cancel" variant="secondary" onPress={() => setSignOutOpen(false)} style={{ marginTop: spacing.sm }} />

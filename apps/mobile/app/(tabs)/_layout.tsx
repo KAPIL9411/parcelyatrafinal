@@ -1,11 +1,12 @@
+import type { ReactNode } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs, router } from 'expo-router';
-import { Pressable, View, Text } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 
 import { conversationsApi, notificationsApi } from '../../src/api/client.ts';
 import { useSession } from '../../src/session.tsx';
-import { colors, font, shadow } from '../../src/theme.ts';
+import { colors, font, radius, shadow } from '../../src/theme.ts';
 
 function Bell() {
   const { status } = useSession();
@@ -62,6 +63,85 @@ function SendButton() {
   );
 }
 
+/**
+ * A floating pill instead of the stock bar.
+ *
+ * The bar sits 24 dp above the safe area and is 64 dp tall, so the page shows through beneath it
+ * rather than ending on a hard edge. It is opaque-ish (`0.97`) rather than blurred: `expo-blur` is
+ * not part of this app's dependency set, and a translucent surface with a floating shadow reads the
+ * same at phone sizes without another native module to ship.
+ *
+ * Expo Router's tab bar contract (its bundled bottom-tabs navigator, not the standalone package):
+ * the bar receives a state, descriptors and a `navigateToTab` helper. Modelled structurally here so
+ * this file does not depend on an internal type path.
+ */
+interface PillTabBarProps {
+  state: { index: number; routes: Array<{ key: string; name: string }> };
+  descriptors: Record<
+    string,
+    {
+      options: {
+        title?: string;
+        tabBarBadge?: string | number;
+        tabBarIcon?: (props: { focused: boolean; color: string; size: number }) => ReactNode;
+      };
+    }
+  >;
+  navigateToTab: (routeKey: string) => void;
+  insets: { bottom: number };
+}
+
+function PillTabBar({ state, descriptors, navigateToTab, insets }: PillTabBarProps) {
+  return (
+    <View pointerEvents="box-none" style={[styles.layer, { bottom: insets.bottom + 24 }]}>
+      <View style={styles.bar}>
+        {state.routes.map((route, index) => {
+          const options = descriptors[route.key];
+          if (!options) return null;
+          const focused = state.index === index;
+          const label = options.options.title ?? route.name;
+          const badge = options.options.tabBarBadge;
+          const tint = focused ? colors.brand : colors.ink500;
+
+          const icon = options.options.tabBarIcon;
+
+          return (
+            <Pressable
+              key={route.key}
+              accessibilityRole="tab"
+              accessibilityState={focused ? { selected: true } : {}}
+              accessibilityLabel={label}
+              onPress={() => {
+                if (!focused) navigateToTab(route.key);
+              }}
+              style={({ pressed }) => [
+                styles.item,
+                focused && styles.itemActive,
+                pressed && { opacity: 0.7 },
+              ]}
+            >
+              <View style={styles.iconWrap}>
+                {icon ? icon({ focused, color: tint, size: 21 }) : null}
+                {badge !== undefined && badge !== null && badge !== '' ? (
+                  <View style={styles.badge}>
+                    <Text style={styles.badgeText}>{badge}</Text>
+                  </View>
+                ) : null}
+              </View>
+              <Text
+                numberOfLines={1}
+                style={[styles.label, { color: tint }, focused && styles.labelActive]}
+              >
+                {label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 export default function TabsLayout() {
   const { status } = useSession();
   const inbox = useQuery({
@@ -81,19 +161,11 @@ export default function TabsLayout() {
 
   return (
     <Tabs
+      tabBar={(props) => <PillTabBar {...props} />}
       screenOptions={{
         ...header,
         tabBarActiveTintColor: colors.brand,
         tabBarInactiveTintColor: colors.ink300,
-        tabBarStyle: {
-          backgroundColor: colors.surface,
-          borderTopColor: colors.line,
-          borderTopWidth: 1,
-          paddingTop: 6,
-          ...shadow.soft,
-        },
-        tabBarLabelStyle: { fontFamily: font.semibold, fontSize: 10.5, marginTop: 1 },
-        tabBarItemStyle: { paddingBottom: 4 },
         tabBarHideOnKeyboard: true,
         sceneStyle: { backgroundColor: colors.canvas },
       }}
@@ -144,15 +216,6 @@ export default function TabsLayout() {
           title: 'Inbox',
           headerRight: () => <Bell />,
           tabBarBadge: unreadMessages > 0 ? (unreadMessages > 9 ? '9+' : unreadMessages) : undefined,
-          tabBarBadgeStyle: {
-            backgroundColor: colors.brand,
-            color: colors.white,
-            fontFamily: font.bold,
-            fontSize: 9,
-            minWidth: 16,
-            height: 16,
-            lineHeight: 16,
-          },
           tabBarIcon: ({ color, focused }) => (
             <Ionicons name={focused ? 'chatbubbles' : 'chatbubbles-outline'} size={22} color={color as string} />
           ),
@@ -171,3 +234,55 @@ export default function TabsLayout() {
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  layer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    paddingHorizontal: 16,
+  },
+  bar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    maxWidth: 560,
+    height: 64,
+    borderRadius: radius.pill,
+    paddingHorizontal: 6,
+    backgroundColor: 'rgba(255,255,255,0.97)',
+    borderWidth: 1,
+    borderColor: 'rgba(6,26,122,0.07)',
+    ...shadow.floating,
+  },
+  item: {
+    flex: 1,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  itemActive: { backgroundColor: colors.brandSoft },
+  iconWrap: { alignItems: 'center', justifyContent: 'center' },
+  label: {
+    fontFamily: font.regular,
+    fontSize: 10,
+    lineHeight: 13,
+    marginTop: 2,
+  },
+  labelActive: { fontFamily: font.semibold },
+  badge: {
+    position: 'absolute',
+    top: -5,
+    right: -12,
+    minWidth: 15,
+    height: 15,
+    paddingHorizontal: 3,
+    borderRadius: 8,
+    backgroundColor: colors.brand,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  badgeText: { color: colors.white, fontFamily: font.bold, fontSize: 9, lineHeight: 11 },
+});

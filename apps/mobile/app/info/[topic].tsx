@@ -217,6 +217,63 @@ const TOPICS: Record<string, TopicContent> = {
     ],
   },
 
+  // ------------------------------------------------------------------ business
+  business: {
+    headerTitle: 'Business shipping',
+    eyebrow: 'For shops and offices',
+    title: 'Same-day corridors, without a courier contract',
+    intro:
+      'If you send documents, samples or printed material between two cities a few times a week, a verified traveller already driving that route can carry them. No minimum volume and no monthly contract.',
+    icon: 'business',
+    accent: colors.brandDark,
+    accentSoft: colors.brandSoft,
+    blocks: [
+      {
+        kind: 'banner',
+        tone: 'info',
+        title: 'This is the same consumer flow, priced per parcel',
+        body: 'There is no separate business account or negotiated rate card in this build. You book each parcel at the price the app shows, and every booking is tracked the same way.',
+      },
+      {
+        kind: 'card',
+        title: 'What moves well',
+        bullets: [
+          'Property papers, invoices and signed contracts, sealed and photographed.',
+          'Printed material: brochures, visiting cards, letterheads.',
+          'Business samples within the 5 kg and 45 cm limits.',
+          'Dry spare parts with no oil, fuel or battery.',
+          'Educational certificates and other documents that fit in a sealed envelope.',
+        ],
+        note: 'Cash, jewellery, medicines, food, batteries and anything on the prohibited list are never carried, whatever the volume.',
+      },
+      {
+        kind: 'card',
+        title: 'Why it can be faster than a courier',
+        body: 'A traveller is already making the journey. A parcel handed over before they leave can arrive the same day on a corridor like Bareilly to Delhi, instead of waiting for a hub to consolidate it.',
+      },
+      {
+        kind: 'card',
+        title: 'What you get on every parcel',
+        ordered: true,
+        bullets: [
+          'A price fixed before you pay, with GST shown as its own line.',
+          'A named traveller with a verified photo ID and completed trips.',
+          'A handover code at pickup and another at delivery.',
+          'A photo of the sealed parcel, kept with the booking.',
+          'Chat attached to the booking, with masked phone numbers.',
+        ],
+        note: 'Parcels are not insured in this build. Declare a value you could absorb, and keep the packaging until delivery is confirmed.',
+      },
+      {
+        kind: 'card',
+        title: 'Invoicing and records',
+        body: 'Every booking keeps its own receipt in the app, with the price breakdown and the GST line. For a monthly statement across several bookings, ask support with the booking references and we will pull the records together.',
+      },
+      { kind: 'cta', label: 'Send a business parcel', route: '/send' },
+      { kind: 'cta', label: 'Talk to support', route: '/help', variant: 'secondary' },
+    ],
+  },
+
   // ------------------------------------------------------------------ terms
   terms: {
     headerTitle: 'Terms of service',
@@ -386,7 +443,7 @@ export default function InfoScreen() {
         <Card>
           <EmptyState
             title="That page does not exist"
-            body="Pricing, safety, prohibited items, terms, privacy and the grievance route are the pages we publish."
+            body="Pricing, safety, prohibited items, business shipping, terms, privacy and the grievance route are the pages we publish."
             actionLabel="Go to help"
             onAction={() => router.replace('/help')}
           />

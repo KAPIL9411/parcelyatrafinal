@@ -7,6 +7,8 @@
  *  - a 401 triggers exactly one refresh attempt, then the session is cleared.
  */
 
+import type { HomepageConfig, HomepageDocument } from '@py/domain';
+
 export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/v1';
 
 /**
@@ -176,6 +178,9 @@ export const api = {
   delete: <T>(path: string, options?: Omit<RequestOptions, 'body'>) => request<T>('DELETE', path, options),
   put: <T>(path: string, raw: BodyInit, contentType: string, options?: Omit<RequestOptions, 'raw'>) =>
     request<T>('PUT', path, { ...options, raw, contentType }),
+  /** A PUT that carries JSON rather than bytes. Kept separate from `put` so a File is never stringified. */
+  putJson: <T>(path: string, body?: unknown, options?: Omit<RequestOptions, 'body'>) =>
+    request<T>('PUT', path, { ...options, body }),
 };
 
 // ---------------------------------------------------------------------------- wire types
@@ -678,3 +683,137 @@ export interface DevOtp {
   kind?: string;
   sandbox: true;
 }
+
+// ---------------------------------------------------------------------------- homepage console
+
+export type HomepageReleaseStatus = 'draft' | 'published' | 'archived';
+export type HomepageReleaseKind = 'homepage' | 'campaign';
+export type HomepagePlatform = 'android' | 'ios' | 'web';
+
+/** A release without its configuration: what the history list and campaign list need. */
+export interface HomepageReleaseSummary {
+  id: string;
+  version: number;
+  kind: HomepageReleaseKind;
+  status: HomepageReleaseStatus;
+  name: string;
+  priority: number;
+  platforms: HomepagePlatform[];
+  starts_at: string | null;
+  ends_at: string | null;
+  note: string | null;
+  published_at: string | null;
+  rolled_back_from: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HomepageRelease extends HomepageReleaseSummary {
+  config: HomepageConfig;
+}
+
+/** Everything the console needs to draw its status bar and both lists. */
+export interface HomepageConsoleState {
+  published: HomepageRelease | null;
+  draft: HomepageRelease | null;
+  history: HomepageReleaseSummary[];
+  campaigns: HomepageRelease[];
+  live_campaign_id: string | null;
+  schema_version: number;
+}
+
+/** The exact document a phone would receive, for the preview panel. */
+export interface HomepagePreview {
+  document: HomepageDocument;
+  base_version: number | null;
+  draft: boolean;
+}
+
+export interface HomepageMediaItem {
+  id: string;
+  url: string;
+  object_key: string;
+  content_type: string;
+  byte_size: number;
+}
+
+export interface CampaignInput {
+  name: string;
+  config: HomepageConfig;
+  starts_at: string;
+  ends_at: string;
+  priority: number;
+  platforms: HomepagePlatform[];
+  note?: string;
+}
+
+function previewQuery(params: {
+  draft?: boolean;
+  platform?: HomepagePlatform;
+  campaignId?: string | null;
+  at?: string | null;
+}): string {
+  const query = new URLSearchParams();
+  query.set('platform', params.platform ?? 'android');
+  query.set('draft', params.draft ? '1' : '0');
+  if (params.campaignId) query.set('campaign_id', params.campaignId);
+  if (params.at) query.set('at', params.at);
+  return query.toString();
+}
+
+/**
+ * The staff endpoints for the remote homepage.
+ *
+ * Nothing here is optimistic: a publish changes what every phone in the country sees, so the console
+ * re-reads the console state after each mutation instead of assuming the server agreed.
+ */
+export const homepageAdmin = {
+  state: () => api.get<HomepageConsoleState>('/admin/homepage'),
+
+  saveDraft: (config: HomepageConfig, note?: string) =>
+    api.putJson<{ draft: HomepageRelease | null }>('/admin/homepage/draft', {
+      config,
+      ...(note ? { note } : {}),
+    }),
+
+  discardDraft: () => api.delete<{ discarded: boolean }>('/admin/homepage/draft'),
+
+  publish: (note?: string) =>
+    api.post<{ published: HomepageReleaseSummary }>('/admin/homepage/publish', note ? { note } : {}),
+
+  rollback: (version: number, note?: string) =>
+    api.post<{ published: HomepageReleaseSummary }>('/admin/homepage/rollback', {
+      version,
+      ...(note ? { note } : {}),
+    }),
+
+  preview: (params: {
+    draft?: boolean;
+    platform?: HomepagePlatform;
+    campaignId?: string | null;
+    at?: string | null;
+  }) => api.get<HomepagePreview>(`/admin/homepage/preview?${previewQuery(params)}`),
+
+  createCampaign: (body: CampaignInput) =>
+    api.post<{ campaign: HomepageRelease }>('/admin/homepage/campaigns', body),
+
+  updateCampaign: (id: string, body: CampaignInput) =>
+    api.putJson<{ campaign: HomepageRelease }>(`/admin/homepage/campaigns/${id}`, body),
+
+  duplicateCampaign: (id: string) =>
+    api.post<{ campaign: HomepageRelease }>(`/admin/homepage/campaigns/${id}/duplicate`, {}),
+
+  deleteCampaign: (id: string) =>
+    api.delete<{ deleted: boolean }>(`/admin/homepage/campaigns/${id}`),
+
+  publishCampaign: (id: string) =>
+    api.post<{ campaign: HomepageRelease }>(`/admin/homepage/campaigns/${id}/publish`, {}),
+
+  unpublishCampaign: (id: string) =>
+    api.post<{ campaign: HomepageRelease }>(`/admin/homepage/campaigns/${id}/unpublish`, {}),
+
+  media: () => api.get<{ items: HomepageMediaItem[] }>('/admin/homepage/media'),
+
+  registerMedia: (objectKey: string) =>
+    api.post<HomepageMediaItem>('/admin/homepage/media', { object_key: objectKey }),
+};

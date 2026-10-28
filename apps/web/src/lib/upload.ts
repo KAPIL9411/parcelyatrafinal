@@ -1,6 +1,12 @@
 import { api, type UploadTicket } from './api';
 
-export type UploadPurpose = 'kyc_id' | 'kyc_selfie' | 'parcel_sealed' | 'parcel_delivery' | 'dispute_evidence';
+export type UploadPurpose =
+  | 'kyc_id'
+  | 'kyc_selfie'
+  | 'parcel_sealed'
+  | 'parcel_delivery'
+  | 'dispute_evidence'
+  | 'campaign_art';
 
 /**
  * Two-step upload: ask the API to authorise an object key, then write the bytes to the URL it
