@@ -7,7 +7,7 @@
  * which one is pre-selected in the send flow.
  */
 import { Image, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import type { HomeItem } from '@py/domain';
 import { AppText } from '../../components/ui.tsx';

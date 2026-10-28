@@ -6,7 +6,7 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { AppText, Row } from './ui.tsx';
 import { colors, font, radius, shadow, spacing, type } from '../theme.ts';

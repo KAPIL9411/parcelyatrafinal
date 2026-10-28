@@ -8,14 +8,13 @@
  *  - the header floats over it, which is why a soft top scrim is always drawn — white controls must
  *    stay legible on a pale campaign image as well as on deep blue;
  *  - the copy is bottom-anchored and reserves room for the search card that overlaps the seam, so a
- *    long subtitle can never push the CTA under it;
+ *    long subtitle can never push the copy under it;
  *  - the height derives from the screen width, clamping at 320–460 dp, so 360 px and 430 px phones
  *    both get a composed hero rather than a crop.
  */
 import { useEffect, useRef, useState, type ComponentRef } from 'react';
 import {
   Image,
-  Pressable,
   ScrollView,
   StyleSheet,
   View,
@@ -23,11 +22,11 @@ import {
   type NativeSyntheticEvent,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
-import type { HomeAction, HomeHero } from '@py/domain';
+import type { HomeHero } from '@py/domain';
 import { AppText } from '../../components/ui.tsx';
-import { font, radius, shadow, spacing } from '../../theme.ts';
+import { font, radius, spacing } from '../../theme.ts';
 import { Decoration, Scrim } from './Decorations.tsx';
 import { withAlpha, type HomePalette } from '../theme.ts';
 
@@ -35,6 +34,12 @@ const ROTATE_MS = 6_500;
 
 /** Room left at the bottom of every slide for the search card that overlaps the hero. */
 export const HERO_SEAM = 40;
+
+/**
+ * How far the copy sits above the hero's bottom edge. Scrolling the copy up past the overlap keeps
+ * a clear band of blue between the trust badges and the card instead of letting them touch.
+ */
+export const HERO_COPY_CLEARANCE = HERO_SEAM + spacing.lg;
 
 /** The hero height agrees with the list offset used to switch the sticky header, so share it. */
 export function heroHeight(width: number, topInset: number): number {
@@ -72,13 +77,13 @@ export function HeroCarousel({
   palette,
   width,
   topInset,
-  onAction,
+  greeting,
 }: {
   heroes: HomeHero[];
   palette: HomePalette;
   width: number;
   topInset: number;
-  onAction: (action: HomeAction | undefined) => void;
+  greeting: string;
 }) {
   const [index, setIndex] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -130,7 +135,7 @@ export function HeroCarousel({
             width={width}
             height={height}
             topInset={topInset}
-            onAction={onAction}
+            greeting={greeting}
           />
         ))}
       </ScrollView>
@@ -160,14 +165,14 @@ function HeroSlide({
   width,
   height,
   topInset,
-  onAction,
+  greeting,
 }: {
   hero: HomeHero;
   palette: HomePalette;
   width: number;
   height: number;
   topInset: number;
-  onAction: (action: HomeAction | undefined) => void;
+  greeting: string;
 }) {
   const countdown = useCountdown(hero.countdown_to);
   const hasImage = Boolean(hero.image_url);
@@ -203,15 +208,11 @@ function HeroSlide({
         pointerEvents="none"
       />
 
-      <View style={[styles.copy, { paddingBottom: HERO_SEAM }]}>
+      <View style={[styles.copy, { paddingBottom: HERO_COPY_CLEARANCE }]}>
         <View style={styles.eyebrowRow}>
-          {hero.eyebrow ? (
-            <View style={styles.eyebrow}>
-              <AppText style={[styles.eyebrowText, { color: text }]} numberOfLines={1}>
-                {hero.eyebrow}
-              </AppText>
-            </View>
-          ) : null}
+          <AppText style={[styles.greeting, { color: text }]} numberOfLines={1}>
+            {greeting}
+          </AppText>
           {countdown ? (
             <View style={styles.countdown}>
               <Ionicons name="time-outline" size={12} color={text} />
@@ -241,23 +242,6 @@ function HeroSlide({
             ))}
           </View>
         ) : null}
-
-        {hero.cta ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={hero.cta.label}
-            onPress={() => onAction(hero.cta?.action)}
-            style={({ pressed }) => [
-              styles.cta,
-              { backgroundColor: palette.badgeBackground },
-              shadow.floating,
-              pressed && styles.pressed,
-            ]}
-          >
-            <AppText style={[styles.ctaText, { color: palette.badgeText }]}>{hero.cta.label}</AppText>
-            <Ionicons name="arrow-forward" size={15} color={palette.badgeText} />
-          </Pressable>
-        ) : null}
       </View>
     </View>
   );
@@ -272,14 +256,13 @@ const styles = StyleSheet.create({
     bottom: 0,
   },
   eyebrowRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm },
-  eyebrow: {
-    borderRadius: radius.pill,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    maxWidth: '68%',
-    backgroundColor: 'rgba(255,255,255,0.16)',
+  greeting: {
+    flexShrink: 1,
+    fontFamily: font.semibold,
+    fontSize: 15,
+    lineHeight: 20,
+    letterSpacing: 0.1,
   },
-  eyebrowText: { fontFamily: font.bold, fontSize: 10, letterSpacing: 1.4 },
   countdown: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -313,21 +296,9 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   badgeText: { fontFamily: font.semibold, fontSize: 10.5 },
-  cta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: 6,
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.lg,
-    height: 44,
-    marginTop: spacing.md,
-  },
-  ctaText: { fontFamily: font.semibold, fontSize: 15 },
-  pressed: { opacity: 0.9, transform: [{ scale: 0.97 }] },
   pagination: {
     position: 'absolute',
-    bottom: HERO_SEAM + 10,
+    bottom: HERO_COPY_CLEARANCE + 10,
     right: spacing.xl,
     flexDirection: 'row',
     alignItems: 'center',

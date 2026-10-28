@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { router } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { bookingsApi, senderApi } from '../../src/api/client.ts';
 import { useSession } from '../../src/session.tsx';

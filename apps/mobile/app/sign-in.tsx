@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
   Animated,
   KeyboardAvoidingView,
   Platform,
@@ -11,29 +10,17 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
-import * as Google from 'expo-auth-session/providers/google';
-import { Ionicons } from '@expo/vector-icons';
-import Constants from 'expo-constants';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ApiError } from '../src/api/http.ts';
 import { peekDevOtp } from '../src/api/client.ts';
 import { useSession } from '../src/session.tsx';
 import { AppText, Button, Card, ErrorNotice, Field, Row } from '../src/components/ui.tsx';
 import { AnimatedProductGallery } from '../src/components/AnimatedProductGallery.tsx';
+import { GoogleSignInButton } from '../src/components/GoogleSignInButton';
 import { colors, font, radius, spacing } from '../src/theme.ts';
 import { maskPhone, normalisePhone } from '../src/lib/format.ts';
-
-const extra = Constants.expoConfig?.extra as
-  | { googleWebClientId?: string; googleAndroidClientId?: string; googleIosClientId?: string }
-  | undefined;
-
-const WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ?? extra?.googleWebClientId;
-const IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? extra?.googleIosClientId;
-const ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? extra?.googleAndroidClientId;
-
-const PLATFORM_CLIENT_ID =
-  Platform.OS === 'android' ? ANDROID_CLIENT_ID : Platform.OS === 'ios' ? IOS_CLIENT_ID : WEB_CLIENT_ID;
+import { GOOGLE_PLATFORM_CLIENT_ID } from '../src/lib/google.ts';
 
 export default function SignInScreen() {
   const { next } = useLocalSearchParams<{ next?: string }>();
@@ -131,20 +118,6 @@ export default function SignInScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Top-left Circular Back Button (Exact Blinkit Style) */}
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Go back"
-        onPress={() => (router.canGoBack() ? router.back() : router.replace('/(tabs)'))}
-        hitSlop={12}
-        style={[
-          styles.circularBackButton,
-          { top: Math.max(insets.top + 8, 20), left: 16 },
-        ]}
-      >
-        <Ionicons name="chevron-back" size={20} color="#111827" />
-      </Pressable>
-
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.keyboardContainer}
@@ -321,8 +294,8 @@ export default function SignInScreen() {
 
                 {/* Primary Google Auth Button */}
                 <View style={styles.authActionWrapper}>
-                  {PLATFORM_CLIENT_ID ? (
-                    <GoogleButton
+                  {GOOGLE_PLATFORM_CLIENT_ID ? (
+                    <GoogleSignInButton
                       busy={busy === 'google'}
                       onToken={google}
                       onError={setError}
@@ -396,80 +369,6 @@ export default function SignInScreen() {
   );
 }
 
-function GoogleButton({
-  busy,
-  onToken,
-  onError,
-}: {
-  busy: boolean;
-  onToken: (idToken: string) => void;
-  onError: (error: unknown) => void;
-}) {
-  const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
-    clientId: WEB_CLIENT_ID,
-    iosClientId: IOS_CLIENT_ID,
-    androidClientId: ANDROID_CLIENT_ID,
-  });
-
-  useEffect(() => {
-    if (response?.type === 'success') {
-      const idToken = response.params.id_token ?? response.authentication?.idToken;
-      if (idToken) onToken(idToken);
-      else onError(new ApiError('GOOGLE_AUTH_FAILED', 'Google did not return an identity token.', 400));
-    } else if (response?.type === 'error') {
-      onError(
-        new ApiError('GOOGLE_AUTH_FAILED', response.error?.message ?? 'Google sign-in did not complete.', 400),
-      );
-    }
-  }, [response, onToken, onError]);
-
-  const disabled = busy || !request;
-
-  async function prompt() {
-    try {
-      await promptAsync();
-    } catch (err) {
-      onError(
-        new ApiError(
-          'GOOGLE_AUTH_FAILED',
-          err instanceof Error ? err.message : 'Google sign-in could not start.',
-          400,
-        ),
-      );
-    }
-  }
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel="Continue with Google"
-      accessibilityState={{ disabled, busy }}
-      disabled={disabled}
-      onPress={() => void prompt()}
-      style={({ pressed }) => [
-        styles.googleButton,
-        {
-          opacity: disabled ? 0.6 : pressed ? 0.88 : 1,
-          transform: [{ scale: pressed ? 0.99 : 1 }],
-        },
-      ]}
-    >
-      {busy ? (
-        <ActivityIndicator color={colors.brand} size="small" />
-      ) : (
-        <Animated.Image
-          source={require('../assets/google-g-logo.png')}
-          style={styles.googleIcon}
-          resizeMode="contain"
-        />
-      )}
-      <AppText style={styles.googleButtonLabel}>
-        {busy ? 'Connecting…' : 'Continue with Google'}
-      </AppText>
-    </Pressable>
-  );
-}
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -481,21 +380,6 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     backgroundColor: '#FFFFFF',
-  },
-  circularBackButton: {
-    position: 'absolute',
-    zIndex: 30,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000000',
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 4,
   },
   logoWrapper: {
     alignSelf: 'center',
@@ -543,33 +427,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 18,
     marginBottom: 12,
-  },
-  googleButton: {
-    width: '100%',
-    height: 52,
-    borderRadius: 14,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    shadowColor: '#0a57ff',
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 3,
-    paddingHorizontal: spacing.lg,
-  },
-  googleIcon: {
-    width: 22,
-    height: 22,
-  },
-  googleButtonLabel: {
-    fontSize: 16,
-    fontFamily: font.semibold,
-    color: '#111827',
   },
   missingConfigBadge: {
     backgroundColor: colors.warnBg,

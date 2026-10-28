@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { router } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import {
   AppText,

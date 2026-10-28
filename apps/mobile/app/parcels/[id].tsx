@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Alert, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { ApiError } from '../../src/api/http.ts';
 import { senderApi } from '../../src/api/client.ts';

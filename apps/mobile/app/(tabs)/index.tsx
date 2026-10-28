@@ -14,10 +14,11 @@
  * it sends them. A campaign can hide, retitle or recolour a section; it cannot move the search card or
  * introduce a new kind of UI.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { router } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
 import {
   Animated,
+  AppState,
   Platform,
   Pressable,
   ScrollView,
@@ -29,7 +30,7 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery } from '@tanstack/react-query';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { visibleHeroes, visibleSections } from '@py/domain';
 
 import { bookingsApi, conversationsApi, notificationsApi } from '../../src/api/client.ts';
@@ -59,7 +60,8 @@ import {
   timeAgo,
 } from '../../src/lib/format.ts';
 import { colors, font, radius, shadow, spacing } from '../../src/theme.ts';
-import { openRouteToSend, runHomeAction } from '../../src/homepage/actions.ts';
+import { openRouteToSend } from '../../src/homepage/actions.ts';
+import { greetingFor } from '../../src/lib/greeting.ts';
 import { useHomepage } from '../../src/homepage/use-homepage.ts';
 import { withAlpha } from '../../src/homepage/theme.ts';
 import { HERO_SEAM, HeroCarousel, heroHeight } from '../../src/homepage/components/HeroCarousel.tsx';
@@ -99,8 +101,24 @@ export default function HomeScreen() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerMode, setPickerMode] = useState<'origin' | 'dest'>('origin');
   const [pastHero, setPastHero] = useState(false);
+  const [clock, setClock] = useState(() => Date.now());
 
   const scrollY = useRef(new Animated.Value(0)).current;
+
+  // The hero greets by local time, so the clock is re-read whenever the screen is shown again — a tab
+  // switch or the app returning from the background — instead of staying at the time of first mount.
+  useFocusEffect(
+    useCallback(() => {
+      setClock(Date.now());
+    }, []),
+  );
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') setClock(Date.now());
+    });
+    return () => subscription.remove();
+  }, []);
 
   const bookings = useQuery({
     queryKey: ['bookings', 'recent'],
@@ -124,6 +142,7 @@ export default function HomeScreen() {
   const document = homepage.document;
   const heroes = useMemo(() => visibleHeroes(document), [document]);
   const sections = useMemo(() => visibleSections(document), [document]);
+  const greeting = greetingFor(new Date(clock), user?.name);
 
   const all = bookings.data?.items ?? [];
   const active = all.find((booking) => !CLOSED_STATUSES.has(booking.status));
@@ -257,7 +276,7 @@ export default function HomeScreen() {
           palette={palette}
           width={width}
           topInset={insets.top}
-          onAction={(action) => runHomeAction(action, { ...(origin ? { originCity: origin.name } : {}) })}
+          greeting={greeting}
         />
 
         {/* The search card is the primary action, so it sits on the seam between hero and page. */}

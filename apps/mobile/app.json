@@ -15,7 +15,7 @@
       "package": "in.parcelyatra.app",
       "versionCode": 1,
       "adaptiveIcon": {
-        "backgroundColor": "#0a1730",
+        "backgroundColor": "#005DFD",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -35,10 +35,10 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/splash-icon.png",
-          "imageWidth": 200,
-          "resizeMode": "contain",
-          "backgroundColor": "#0a1730"
+          "backgroundColor": "#005DFD",
+          "image": "./assets/brand-wordmark-white.png",
+          "imageWidth": 180,
+          "resizeMode": "contain"
         }
       ],
       "expo-router",

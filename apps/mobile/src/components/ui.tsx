@@ -803,8 +803,37 @@ export function EmptyState({
   );
 }
 
-export function Refresh({ refreshing, onRefresh }: { refreshing: boolean; onRefresh: () => void }) {
-  return <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.brand} colors={[colors.brand]} />;
+/**
+ * Pull-to-refresh control for a `ScrollView`.
+ *
+ * On Android, `ScrollView` does not mount `refreshControl` inside itself — it clones the element and
+ * passes the entire scroll view (and the layout style) *as its children*. A wrapper that drops those
+ * props un-mounts the screen's content, so both are forwarded to the native control, which is the
+ * `SwipeRefreshLayout` wrapping the scroll view.
+ */
+export function Refresh({
+  refreshing,
+  onRefresh,
+  style,
+  children,
+}: {
+  refreshing: boolean;
+  onRefresh: () => void;
+  style?: StyleProp<ViewStyle>;
+  children?: ReactNode;
+}) {
+  return (
+    <RefreshControl
+      refreshing={refreshing}
+      onRefresh={onRefresh}
+      tintColor={colors.brand}
+      colors={[colors.brand]}
+      progressBackgroundColor={colors.surface}
+      style={style}
+    >
+      {children}
+    </RefreshControl>
+  );
 }
 
 // ---------------------------------------------------------------------------- sheets & pickers

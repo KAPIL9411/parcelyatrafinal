@@ -9,7 +9,7 @@
  * affordance that tells you it scrolls.
  */
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import type { HomeItem } from '@py/domain';
 import { AppText } from '../../components/ui.tsx';

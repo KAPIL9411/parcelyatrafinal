@@ -1,5 +1,5 @@
 import { Pressable, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import type { Match } from '../api/types.ts';
 import { AppText, Badge, Row } from './ui.tsx';

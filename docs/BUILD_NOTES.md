@@ -891,6 +891,58 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
   driven through the console end to end (upload and media registration are covered at the API). See
   [docs/HOMEPAGE_CMS.md](HOMEPAGE_CMS.md).
 
+### DEFECT-031 — Android Google sign-in stopped at 400 `redirect_uri_mismatch`
+
+- **SYMPTOM:** Google sign-in worked on the website but the installed Android app opened a browser
+  page reading *Error 400: redirect_uri_mismatch* and never returned to the app.
+- **CAUSE:** Android used `expo-auth-session`'s browser authorization-code flow. That flow builds
+  `redirect_uri` from the application id → `in.parcelyatra.app:/oauthredirect`, while sending the
+  request as the **Android** OAuth client. Google matches an Android client by package name and
+  signing certificate and expects no redirect URI from it, so no console entry could have made that
+  request valid. The mismatch was in the flow, not in a missing console value.
+- **FIX:** the button is platform-split and the UI is unchanged. `GoogleSignInButton.native.tsx`
+  uses `@react-native-google-signin/google-signin` — Play Services, no browser redirect, no client
+  secret in the app. `GoogleSignInButton.tsx` keeps the browser flow for the web build byte-for-byte
+  in behaviour. Both render `GoogleButtonShell`, and `src/lib/google.ts` is now the only place the
+  client ids are read. The ID token still goes to `POST /v1/auth/google/token`; on Android its
+  audience is the **web** client (`webClientId`), which the API already verifies as
+  `GOOGLE_CLIENT_ID`. No OAuth check was relaxed and no redirect URI was added to the console.
+- **REQUIRED IN THE CONSOLE:** in the Google Cloud project, open the **Android** OAuth client for
+  package `in.parcelyatra.app` and make sure the SHA-1 of the certificate that signs the installed
+  APK is listed. EAS-managed keystore: `npx eas-cli credentials -p android` lists the fingerprint;
+  for an existing APK: `keytool -printcert -jarfile app.apk`. If the build is distributed through
+  Play, add the **App signing key certificate** SHA-1 from Play Console → App integrity too. No
+  client id goes into `GoogleSignin.configure` for Android: Google resolves the client from those two
+  values.
+- **CONSEQUENCE:** Google sign-in now needs a development or standalone build
+  (`eas build -p android --profile preview` or `npx expo run:android`); Expo Go ships no such native
+  module. Phone OTP still works in Expo Go. iOS is unchanged and has no iOS OAuth client, so the iOS
+  build still reports Google as not configured.
+- **VERIFICATION:** `npm run typecheck` passes in all four workspaces and `npm test` passes
+  (90 domain, 70 API, 8 mobile). `npm run export:android` produced a bundle containing
+  `RNGoogleSignin`/`hasPlayServices` and **no** `useIdTokenAuthRequest`/`oauthredirect`; a web export
+  still contains the browser flow and no native module. The sign-in screen rendered in the Expo Web
+  preview with the shared button and no console errors. **OBSERVED by the owner on 2026-10-28:** the
+  EAS-built APK signed in with Google on a physical Android phone, which also proves the Android
+  OAuth client and the signing certificate's SHA-1 are registered correctly in the console.
+
+### DEFECT-032 — every scrolled screen rendered blank on Android
+
+- **SYMPTOM:** on the first EAS-built APK (2026-10-28) Google sign-in completed and Profile rendered,
+  while Home, Bookings, Trips and Inbox showed only their header, tab bar and background. Every
+  detail screen built on `Screen` had the same problem.
+- **CAUSE:** screens pass `refreshControl={<Refresh …/>}`. On Android, `ScrollView` does not mount
+  that element next to its content: it clones the element and passes the whole scroll view — plus the
+  layout style — **as its children** (`ScrollView.js`, the `Platform.OS === 'android'` branch).
+  `Refresh` rendered a bare `<RefreshControl>` and ignored those props, so the screen content was
+  never mounted. Profile is the only tab without a refresh control, which is why it was the only tab
+  that rendered.
+- **FIX:** `Refresh` now forwards `children` and `style` to `RefreshControl`, whose native control is
+  the `SwipeRefreshLayout` that wraps the scroll view on Android. One component; no screen changed.
+- **VERIFICATION:** typecheck, 168 tests and the Android Metro export pass. The device render must be
+  re-checked on a rebuilt APK — this machine cannot run Android, so the native confirmation is the
+  owner's, not this build's.
+
 
 
 ### PGlite as the development database
@@ -1146,14 +1198,20 @@ One additive field, no behaviour change for the web client:
 ### Environment
 
 `app.json` carries the production `extra.apiBase`; at runtime `EXPO_PUBLIC_API_BASE` overrides it.
-Google sign-in needs platform client ids; without them the button is hidden rather than shown broken.
+Google sign-in needs client ids; without the one for the current platform the screen shows a
+"not configured" notice instead of a button that cannot work.
 
 | Variable | Required | Meaning |
 | --- | --- | --- |
 | `EXPO_PUBLIC_API_BASE` | no (default in `app.json`) | Full API root, including `/v1` |
-| `EXPO_PUBLIC_GOOGLE_CLIENT_ID` | for Google | Web/client id used by `expo-auth-session` |
-| `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID` | iOS Google | Defaults to the value above |
-| `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` | Android Google | Defaults to the value above |
+| `EXPO_PUBLIC_GOOGLE_CLIENT_ID` | for Google | **Web** OAuth client id — the web flow's client and the native ID token's audience |
+| `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID` | iOS Google | iOS OAuth client id; there is no fallback to the web id |
+| `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` | Android Google | Android OAuth client id; mirrors the console client, not passed at runtime |
+
+The Android client exists only as a console registration: Google matches it by package name
+(`in.parcelyatra.app`) and the signing certificate's SHA-1, and the app never sends its id. If the
+client id is present but the SHA-1 of the installed APK is not listed on that client, Play Services
+answers `DEVELOPER_ERROR` (code 10) instead of an ID token. See DEFECT-031.
 
 `EXPO_PUBLIC_*` values are embedded in the bundle and are public by design. No secret belongs here;
 the API's Google client secret stays on the server.
@@ -1168,13 +1226,27 @@ npm run test -w @py/mobile           # 8 transport tests in Node
 npm run export:android -w @py/mobile
 ```
 
-`export:android` writes `apps/mobile/dist-android` (git-ignored). There is **no** `eas.json` and no
-signing material in this repository, so no store-ready build is produced here. The app runs in Expo
-Go for SDK 58 (the community date picker is one of the modules it bundles), so a device can load it
-from the dev server without a native build; this machine has no phone, emulator, JDK or Android SDK,
-so it was not launched on either platform. On a **physical iPhone**, Expo Go (SDK 57 and later) also
-requires the CLI and the app to be signed in to the same free Expo account before it will open a
-project; Android does not have that rule.
+`export:android` writes `apps/mobile/dist-android` (git-ignored); it proves the JS and native
+resolution, not a runnable app. `eas.json` defines `preview` (internal distribution, APK) and
+`production` profiles, both pinned to the deployed API. Building needs the owner's Expo account and
+lets EAS generate and hold the Android keystore; no signing material is committed here, and this
+machine has no phone, emulator, JDK or Android SDK, so no build was produced or launched from it.
+
+Expo Go still runs the app for SDK 58 (the community date picker is one of the modules it bundles)
+for everything except Google sign-in, which needs the native module of DEFECT-031 and therefore a
+development or standalone build. On a **physical iPhone**, Expo Go (SDK 57 and later) also requires
+the CLI and the app to be signed in to the same free Expo account before it will open a project;
+Android does not have that rule.
+
+Android Google sign-in checklist, in the order it bites:
+
+1. The APK is signed by a certificate whose SHA-1 is listed on the Android OAuth client for
+   `in.parcelyatra.app` (EAS keystore, plus the Play App Signing certificate if the build ships
+   through Play).
+2. The build is not Expo Go.
+3. `EXPO_PUBLIC_GOOGLE_CLIENT_ID` / `extra.googleWebClientId` holds the **web** client id; that is
+   the audience the API verifies.
+4. The API's `GOOGLE_CLIENT_ID` is that same web client id.
 
 ### Web preview (development only)
 
@@ -1219,6 +1291,116 @@ appeared in the running app as its own eyebrow and headline with no rebuild and 
 bundle. The app was not run on a device: native caching and native foreground events are unverified.
 See [docs/HOMEPAGE_CMS.md](HOMEPAGE_CMS.md) §8.
 
+### Branding and launch screen
+
+The app now ships the supplied identity: a flat blue field (`#005DFD`, sampled from the supplied
+artwork) with a white "Parcel Yatra" wordmark and the white P/arrow mark. The assets were generated
+from the supplied PNGs rather than redrawn:
+
+- `assets/brand-wordmark-white.png` — white wordmark on transparency, used by the native launch
+  screen and the in-app splash.
+- `assets/icon.png` — opaque 1024 blue tile with the white mark (iOS icon and fallback).
+- `assets/android-icon-{foreground,monochrome,background}.png` — adaptive layers, mark inside the
+  66% safe circle and solid blue background.
+- `assets/parcel-yatra-logo.png` — the same tile for the sign-in header.
+- `assets/favicon.png` and `apps/web/public/{logo,favicon}.png` — website header, tab icon and
+  `apple-touch-icon` (the HTML now points both icon links at `/favicon.png`).
+
+The native splash draws that wordmark on `#005DFD` (`expo-splash-screen` `image` +
+`imageWidth: 180`, `resizeMode: contain`). 180 dp is the largest width that survives Android 12+'s
+mask: the plugin composes the image into a 288 dp canvas and the system clips it to a 192 dp circle,
+and a 6:1 wordmark 180 dp wide is only 30 dp tall, so it sits entirely inside the circle. A larger
+wordmark would lose its ends. The React `BrandSplash` in `app/_layout.tsx` uses the same blue and
+the **same 180 dp width**, so when the OS splash fades out the wordmark does not resize; the spinner
+fades in with the JS half and stays through font loading and session bootstrap. The old navy
+"Parcel Yatra" boot view is gone.
+
+The UI accent token is unchanged (`colors.brand` / `--color-brand-600`, `#0a57ff`); it is a near
+match to the artwork blue, and replacing it would restyle every screen rather than just the brand
+marks.
+
+**OBSERVED on 2026-10-28** in the Expo Web preview (fonts delayed in the page harness so the splash
+could be sampled): the splash filled the 294x570 viewport in `rgb(0,93,253)`; the wordmark rendered
+at 180x29.9 CSS px, loaded from `assets/brand-wordmark-white.png` at its natural 1024x170, centred
+at y=285 (half the viewport); there were no console errors. A prebuild-parameter simulation of the
+Android geometry (288 dp canvas, 180 dp image, 192 dp circle mask) shows the whole wordmark inside
+the visible circle. The sign-in screen then loaded the 1024x1024 tile at 62 px with the 16 px
+rounded clip. Typecheck, the full test suite (90 domain, 70 API, 8 mobile), the Android Metro export
+and the prebuild config resolution pass.
+
+**Not verified:** the native launch itself. The splash image, icon and colour are baked into the
+native shell, so they only change after a new EAS build; Android's launcher masking of the adaptive
+icon and the iOS launch screen have not been seen on a device.
+
+### Phone screenshot corrections (2026-10-28)
+
+Four items from the owner's Android screenshots of the EAS build:
+
+- **Splash was blue only.** The native splash had no drawable, so the OS phase showed flat blue. It
+  now carries the wordmark at the safe 180 dp width, and the JS splash matches that width.
+- **Sign-in back arrow.** The circular top-left back button was removed from `app/sign-in.tsx`
+  together with its styles. The screen is reached by redirect, and the header has its own back
+  affordance where a screen is pushed.
+- **Home hero CTA.** The yellow "Send a parcel" pill is no longer rendered by
+  `HeroCarousel`. The search card already overlaps the hero seam and is the primary route action,
+  so the hero now ends at its trust badges. The homepage document may still carry `hero.cta`; the
+  app no longer draws it, and the admin preview is unaffected.
+- **Sealed photo.** The card now says **Click photo** and calls `capturePhoto()`
+  (`ImagePicker.requestCameraPermissionsAsync` + `launchCameraAsync`), so the camera opens directly
+  instead of the photo library. The upload pipeline is unchanged. Library picking (`pickPhoto`) is
+  still used for identity documents and handover/dispute evidence, where an existing photo is valid.
+
+**OBSERVED on 2026-10-28** in the Expo Web preview, signed in with the loopback dev OTP route:
+`/sign-in` had no back control (no top-left pressable, no "Go back" label); the home hero rendered
+"PARCEL YATRA" → headline → subtitle → badges and then the search card, with no "Send a parcel"
+control above the fold (the only remaining one is the empty-state action under Recent bookings); the
+send wizard's step 2 showed a **Click photo** button under "Sealed photo".
+
+**Not verified:** the camera itself. Expo Web maps `launchCameraAsync` to a file input with
+`capture="camera"`; the native camera sheet needs the rebuilt APK on the phone. The Android manifest
+merges `android.permission.CAMERA` from `expo-image-picker` (the plugin blocks it only when
+`cameraPermission: false`), and `cameraPermission` text is already set in `app.json`.
+
+### Home hero greeting and seam spacing (2026-10-28)
+
+The campaign eyebrow ("PARCEL YATRA") is no longer drawn. In its place the hero shows a greeting
+built from the signed-in profile and the device clock:
+
+- `src/lib/greeting.ts` holds `greetingFor(date, name)`. Morning is 05:00–11:59, afternoon
+  12:00–16:59 and evening 17:00–04:59; only the first word of the profile name is used, and a
+  missing name yields `Good morning!` / `Good afternoon!` / `Good evening!` rather than a guessed
+  one. The function is unit-tested at every boundary (`test/greeting.test.ts`).
+- `app/(tabs)/index.tsx` keeps a `clock` timestamp and re-reads it on screen focus
+  (`useFocusEffect`) and whenever `AppState` returns to `active`, so a screen left open overnight
+  or in the background does not keep an old greeting. The name comes from `useSession()`.
+- `HeroCarousel` takes `greeting` as a prop; the old pill styling (`eyebrow`, `eyebrowText`) is
+  gone and the greeting is plain semibold text over the gradient, truncating to one line before
+  the campaign countdown (when one exists).
+
+The card still overlaps the hero by `HERO_SEAM` (40 dp), but the slide copy now reserves
+`HERO_COPY_CLEARANCE` (seam + 16 dp), so a 16 dp band of blue separates the trust badges from the
+white card instead of the two touching. Hero height, the card's negative margin and everything below
+it are unchanged, so the category grid did not move; pagination dots follow the copy clearance.
+
+The yellow ring around the header logo in the owner's annotated screenshot was a markup highlight,
+not a defect: the logo is still the drawn white squircle with the navy "P" and the accent dot
+(`rgb(242,179,61)`, white 1.6 px ring), with no border, outline or shadow.
+
+**OBSERVED on 2026-10-28** in the Expo Web preview (302x570, signed in with the loopback dev OTP
+after setting the profile name): the hero showed `Good afternoon, Kapil 👋` in TitilliumWeb
+semibold 15 px white, 20 px tall at x=20; headline and subtitle were unchanged below it; the trust
+badge bottom sat 20 px above the card top (the copy reserves 56 dp above the hero bottom, the card
+overlaps 40 dp) with the card still overlapping the hero by 40 px; there was no `PARCEL YATRA` text, no horizontal overflow
+(`scrollWidth` 302 = `clientWidth` 302) and no console errors. With `Date.prototype.getHours`
+temporarily returning 21 and the page resumed from `hidden`, the greeting recomputed to
+`Good evening, Kapil 👋`, then returned to `Good afternoon` after a tab round-trip — the focus and
+`AppState` refresh paths both fired.
+
+**Not verified:** the native rendering of the greeting (including the emoji fallback font on
+Android) and the spacing on other phone sizes; the web pane is 302 px wide and the APK needs a
+rebuild to contain the JS bundle.
+
+
 ### Deliberate limitations
 
 - **No push notifications.** The bell polls `GET /notifications` every 60 s while the app is open;
@@ -1234,6 +1416,7 @@ See [docs/HOMEPAGE_CMS.md](HOMEPAGE_CMS.md) §8.
   only; a cold start without a network shows named errors, not stale bookings. The homepage is the
   exception: it has its own validated cache (a file on native, a module variable on web) so the
   first frame is never blank. That cache holds public page content and no account data.
-- **No emulator or device run.** Type checking, unit tests and the Metro export pass, and a React
-  Native Web preview was rendered in a desktop browser against a local sandbox, but no screen in
-  this app has been rendered on Android or iOS. Treat the native visual layer as unverified.
+- **No emulator or device run from this machine.** Type checking, unit tests, the Metro export and a
+  React Native Web preview pass here, but Android has only run as the owner's EAS-built APK on a
+  physical phone (2026-10-28): Google sign-in worked, and the blank screens of DEFECT-032 were found
+  that way. iOS has never run at all.

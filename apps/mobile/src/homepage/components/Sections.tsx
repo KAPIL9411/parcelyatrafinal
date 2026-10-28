@@ -19,7 +19,7 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import type { HomeAction, HomeItem, HomeSection } from '@py/domain';
 import { AppText } from '../../components/ui.tsx';

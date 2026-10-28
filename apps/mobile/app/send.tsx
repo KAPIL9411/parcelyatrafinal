@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { ApiError } from '../src/api/http.ts';
 import { filesApi, senderApi } from '../src/api/client.ts';
@@ -36,7 +36,7 @@ import {
   StickyBar,
 } from '../src/components/kit.tsx';
 import { useCities } from '../src/lib/cities.ts';
-import { pickPhoto } from '../src/lib/photo.ts';
+import { capturePhoto } from '../src/lib/photo.ts';
 import { categoryLabel, formatDateTime, inr, kg, normalisePhone } from '../src/lib/format.ts';
 import { colors, font, radius, spacing } from '../src/theme.ts';
 
@@ -211,7 +211,7 @@ function SendWizard() {
     setPhotoBusy(true);
     setPhotoError(null);
     try {
-      const picked = await pickPhoto();
+      const picked = await capturePhoto();
       if (!picked) return;
       const uploaded = await filesApi.upload('parcel_sealed', picked.uri, picked.contentType);
       setPhotoKey(uploaded.object_key);
@@ -784,7 +784,7 @@ function SendWizard() {
             ) : null}
             <Row gap={spacing.sm} style={{ marginTop: spacing.sm }}>
               <Button
-                label={photoKey ? 'Replace photo' : 'Choose photo'}
+                label={photoKey ? 'Replace photo' : 'Click photo'}
                 variant="secondary"
                 size="sm"
                 loading={photoBusy}

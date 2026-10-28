@@ -6,8 +6,8 @@ export interface PickedPhoto {
 }
 
 /**
- * One photo from the library. The app never asks for camera or location access for this; a photo of
- * a sealed parcel can be taken with the system camera first and picked here.
+ * One photo from the library. Used where either source is legitimate — an identity document that
+ * was photographed earlier, or evidence attached after the fact.
  */
 export async function pickPhoto(): Promise<PickedPhoto | null> {
   const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -22,6 +22,30 @@ export async function pickPhoto(): Promise<PickedPhoto | null> {
     exif: false,
   });
 
+  return toPhoto(result);
+}
+
+/**
+ * One photo taken with the camera. The camera opens directly, because a sealed-parcel photo is
+ * evidence of the parcel as it is being handed over and must be taken now, not picked from the
+ * library.
+ */
+export async function capturePhoto(): Promise<PickedPhoto | null> {
+  const permission = await ImagePicker.requestCameraPermissionsAsync();
+  if (!permission.granted) {
+    throw new Error('Camera access is off. Turn it on in Settings, then take the photo again.');
+  }
+
+  const result = await ImagePicker.launchCameraAsync({
+    mediaTypes: ['images'],
+    quality: 0.7,
+    exif: false,
+  });
+
+  return toPhoto(result);
+}
+
+function toPhoto(result: ImagePicker.ImagePickerResult): PickedPhoto | null {
   if (result.canceled || !result.assets[0]) return null;
   const asset = result.assets[0];
   const contentType =

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Tabs, router } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';

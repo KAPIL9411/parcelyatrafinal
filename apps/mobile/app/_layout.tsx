@@ -1,14 +1,12 @@
 import { useEffect } from 'react';
-import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Stack, useRouter, useSegments, type ErrorBoundaryProps } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import {
-  TitilliumWeb_400Regular,
-  TitilliumWeb_600SemiBold,
-  TitilliumWeb_700Bold,
-  useFonts,
-} from '@expo-google-fonts/titillium-web';
+import { useFonts } from 'expo-font';
+import { TitilliumWeb_400Regular } from '@expo-google-fonts/titillium-web/400Regular';
+import { TitilliumWeb_600SemiBold } from '@expo-google-fonts/titillium-web/600SemiBold';
+import { TitilliumWeb_700Bold } from '@expo-google-fonts/titillium-web/700Bold';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { ApiError } from '../src/api/http.ts';
@@ -17,6 +15,49 @@ import { colors, font, radius } from '../src/theme.ts';
 
 void SplashScreen.preventAutoHideAsync();
 SplashScreen.setOptions({ duration: 250, fade: true });
+
+/** The brand blue sampled from the supplied artwork; also set as the native splash colour. */
+const SPLASH_BLUE = '#005DFD';
+const WORDMARK_RATIO = 170 / 1024;
+/**
+ * The native splash draws the wordmark in a 288 dp canvas that Android masks to a 192 dp circle, so
+ * the safe width is 180 dp. This splash uses the same width, which makes the hand-off from the OS
+ * splash to JS look like one continuous screen instead of a resize.
+ */
+const WORDMARK_WIDTH = 180;
+
+/**
+ * The branded launch screen, used while fonts and the session are loading.
+ *
+ * The native splash already shows the wordmark on the same blue; this is the JS half of that one
+ * screen, so the fade-out of the OS splash reveals an identical frame rather than a second splash.
+ */
+function BrandSplash() {
+  return (
+    <View style={styles.splash}>
+      <StatusBar style="light" />
+      <Image
+        source={require('../assets/brand-wordmark-white.png')}
+        style={{ width: WORDMARK_WIDTH, height: WORDMARK_WIDTH * WORDMARK_RATIO }}
+        resizeMode="contain"
+      />
+      <ActivityIndicator color="rgba(255,255,255,0.85)" style={styles.splashSpinner} />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  splash: {
+    flex: 1,
+    backgroundColor: SPLASH_BLUE,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  splashSpinner: {
+    position: 'absolute',
+    bottom: '16%',
+  },
+});
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -37,11 +78,13 @@ export default function RootLayout() {
     TitilliumWeb_700Bold,
   });
 
+  // The JS splash below is the branded one, so the OS splash is dropped as soon as it is mounted.
+  // Keeping it any longer would show a second, empty blue screen behind the wordmark.
   useEffect(() => {
-    if (fontsLoaded || fontError) void SplashScreen.hideAsync();
-  }, [fontsLoaded, fontError]);
+    void SplashScreen.hideAsync();
+  }, []);
 
-  if (!fontsLoaded && !fontError) return null;
+  if (!fontsLoaded && !fontError) return <BrandSplash />;
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -67,17 +110,10 @@ function Shell() {
     if (status === 'signed_out' && !openWithoutSession) router.replace('/sign-in');
   }, [status, openWithoutSession, router]);
 
-  // While the redirect above is in flight, keep the boot screen up. Rendering the tab navigator
-  // first would flash a home screen the visitor cannot use and then replace it.
+  // While the redirect above is in flight, keep the splash up. Rendering the tab navigator first
+  // would flash a home screen the visitor cannot use and then replace it.
   if (status === 'booting' || (status === 'signed_out' && !openWithoutSession)) {
-    return (
-      <View style={{ flex: 1, backgroundColor: colors.navy, alignItems: 'center', justifyContent: 'center', gap: 18 }}>
-        <StatusBar style="light" />
-        <Text style={{ fontFamily: font.bold, fontSize: 30, color: colors.white, letterSpacing: 0.4 }}>Parcel Yatra</Text>
-        <Text style={{ fontFamily: font.regular, fontSize: 14, color: '#9fb0cc' }}>Send it with someone already going.</Text>
-        <ActivityIndicator color={colors.accent} style={{ marginTop: 8 }} />
-      </View>
-    );
+    return <BrandSplash />;
   }
 
   return (

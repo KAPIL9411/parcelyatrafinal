@@ -3,7 +3,7 @@ import { Pressable, View } from 'react-native';
 import { router } from 'expo-router';
 import Constants from 'expo-constants';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import {
   API_BASE,
