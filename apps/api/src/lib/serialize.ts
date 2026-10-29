@@ -169,6 +169,8 @@ export interface BookingRow {
   accept_by: Date | string | null;
   dispute_deadline: Date | string | null;
   payout_state: PayoutState;
+  /** Latest payment attempt, so the UI can say "paid" without guessing from the booking status. */
+  payment?: { state: string; amount_paise: number; sandbox: boolean } | null;
   created_at: Date | string;
   updated_at: Date | string;
   origin_area?: string | null;
@@ -221,6 +223,13 @@ export function bookingView(row: BookingRow, allowedCommands: string[], viewerRo
     pickup_window_end: toIsoOrNull(row.window_end ?? null),
     dispute_deadline: toIsoOrNull(row.dispute_deadline),
     payout_state: row.payout_state,
+    payment: row.payment
+      ? {
+          state: row.payment.state,
+          amount_paise: Number(row.payment.amount_paise),
+          sandbox: row.payment.sandbox,
+        }
+      : null,
     allowed_commands: allowedCommands,
     timeline: (row.timeline ?? []).map((e) => ({
       from_state: e.from_state,

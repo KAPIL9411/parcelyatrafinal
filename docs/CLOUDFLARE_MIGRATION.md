@@ -160,7 +160,7 @@ evaluates a string. The facade above it reproduces the Fastify behaviour the rou
 | Google OAuth | **PASS (entry), NOT VERIFIED (callback)** | `/authorize` matches Render; the code exchange needs a browser round-trip |
 | Rate limiting | **PARTIAL** | Counted per isolate, not global. Stops double-submits and one abusive client; not a distributed defence. Global enforcement needs a Durable Object |
 | Socket.IO | **BLOCKER** | Workers have no HTTP `upgrade` event. Mitigated: clients use `/v1/sync/state` + polling |
-| Background jobs (`setInterval`) | **HIGH** | Timers do not outlive a request; `JOBS_ENABLED=false`. OTP-counter pruning and trip-route backfill need a Cron Trigger |
+| Background jobs (`setInterval`) | **PARTIAL** | Timers do not outlive a request; `JOBS_ENABLED=false`. Time-based booking transitions now run from a Cron Trigger (`triggers.crons`, every 5 min → `services/lifecycle.ts`). OTP-counter pruning is inside the same sweep; trip-route backfill still needs a trigger or scheduled action |
 | Live tracking store | **HIGH** | The default store is per-isolate memory. Cross-isolate tracking needs `REDIS_URL` or a Durable Object |
 | Migrations at boot | **LOW** | Still a separate step (`npm run db:migrate`); `/v1/readiness` reads the compiled manifest |
 | Free-tier budget | **MEDIUM** | 100k requests/day, 10 ms CPU, 50 subrequests, 128 MB; Hyperdrive free adds 100k queries/day. A 25 s foreground poll is ~3,456 requests/user/day; ~25 concurrently active users fit |
@@ -189,8 +189,9 @@ disallowed origin and malformed JSON: all identical apart from request ids, late
 - **Rate limiting is per isolate.** `RATE_LIMIT_ENABLED` stays on, and per-route limits work, but a
   distributed attacker sees a higher effective limit. This is a best-effort guard, not a security
   boundary. A Durable Object or shared Redis is the follow-up.
-- **No timers.** OTP-counter pruning and the trip-route backfill do not run. A Cron Trigger (or a
-  scheduled GitHub Action against an authenticated endpoint) is required.
+- **No timers inside a request.** The lifecycle sweep runs from a Cron Trigger (`triggers.crons`), not
+  from `setInterval`. Trip-route backfill still needs a trigger or a scheduled GitHub Action against an
+  authenticated endpoint.
 - **Live tracking is per isolate** unless `REDIS_URL` is configured. The change feed
   (`/v1/sync/state`) and tracking polling still work; only the in-memory geofence/telemetry store is
   local.
@@ -256,7 +257,9 @@ effect on the live API. The Hyperdrive config and the Neon database are independ
 - **Payment webhooks** were not replayed: a valid signature creates real payment records.
 - **Live tracking writes** (`POST /v1/tracking/…`) were not exercised: they need a live trip.
 - **Socket.IO** is not available on Workers at all (see §4); clients already fall back to polling.
-- **Cron jobs** (OTP-counter prune, trip-route backfill) do not run on Workers.
+- **Cron jobs**: the lifecycle sweep is wired to a Cron Trigger and was verified through its dev
+  endpoint; the deployed trigger has not been observed firing yet. Trip-route backfill still does not
+  run on Workers.
 - **Load and concurrency** were not tested. The free plan allows 6 simultaneous outbound connections
   per invocation and 100k requests/day; the pilot's ~25 concurrent users is an estimate, not a
   measurement.

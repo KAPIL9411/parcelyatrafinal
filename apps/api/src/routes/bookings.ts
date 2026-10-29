@@ -164,11 +164,23 @@ async function loadForViewer(app: FastifyInstance, bookingId: string, userId: st
     [bookingId],
   );
 
+  const payment = await app.db.query<{ state: string; amount_paise: number; sandbox: boolean }>(
+    `SELECT state, amount_paise, sandbox FROM payments
+     WHERE booking_id = $1 AND state <> 'failed'
+     ORDER BY created_at DESC LIMIT 1`,
+    [bookingId],
+  );
+
   return {
     row,
     role,
     view: bookingView(
-      { ...detail.rows[0]!, timeline: events.rows, open_dispute: dispute.rows[0] ?? null },
+      {
+        ...detail.rows[0]!,
+        timeline: events.rows,
+        open_dispute: dispute.rows[0] ?? null,
+        payment: payment.rows[0] ?? null,
+      },
       cmds as string[],
       role,
     ),
@@ -314,7 +326,7 @@ export async function applyBookingTransition(
     // to them. Nothing tells the sender that the code exists unless this is queued here.
     await queueNotification(db, { userId: booking.sender_id, bookingId: booking.id, templateId: 'delivery_code_ready' });
   }
-  if (result.to === 'delivered') {
+  if (result.to === 'delivered' && booking.status !== 'delivered') {
     const deadline = new Date(Date.now() + config.DISPUTE_WINDOW_HOURS * 3_600_000);
     await db.query(`UPDATE bookings SET dispute_deadline = $2, delivered_at = now() WHERE id = $1`, [booking.id, deadline]);
     await db.query(`UPDATE payouts SET state = 'not_eligible' WHERE booking_id = $1`, [booking.id]);
@@ -331,7 +343,7 @@ export async function applyBookingTransition(
     delivered: 'delivered',
   };
   const trackedStage = stageMap[result.to];
-  if (trackedStage) {
+  if (trackedStage && booking.status !== result.to) {
     await db.query(
       `INSERT INTO parcel_status_log (parcel_id, booking_id, stage, actor_id, note)
        VALUES ($1, $2, $3, $4, $5)`,

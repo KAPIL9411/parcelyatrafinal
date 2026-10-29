@@ -12,6 +12,7 @@ import { renderError } from './http/error-response.ts';
 import { writeLimitApplies } from './http/write-limit.ts';
 import { AppError, errorEnvelope } from './lib/errors.ts';
 import { registerRoutes } from './routes/register.ts';
+import { runLifecycleSweep } from './services/lifecycle.ts';
 import { startRouteBackfill } from './services/trip-route.ts';
 
 declare module 'fastify' {
@@ -212,6 +213,25 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     app.addHook('onReady', async () => {
       void pruneOtpCounters();
       const interval = setInterval(() => void pruneOtpCounters(), 24 * 60 * 60 * 1000);
+      interval.unref();
+    });
+
+    // Time-based booking transitions: expire unanswered requests, open pickup when the window
+    // starts, and settle delivered bookings once the problem window has closed and the sender has
+    // paid. Before this, no process ran these edges outside the dev route.
+    const sweepLifecycle = async (): Promise<void> => {
+      try {
+        const summary = await runLifecycleSweep(app);
+        if (summary.expired || summary.pickupOpened || summary.settled || summary.failed) {
+          app.log.info(summary, 'lifecycle sweep');
+        }
+      } catch (err) {
+        app.log.warn({ err }, 'lifecycle sweep failed (non-fatal)');
+      }
+    };
+    app.addHook('onReady', async () => {
+      void sweepLifecycle();
+      const interval = setInterval(() => void sweepLifecycle(), 5 * 60 * 1000);
       interval.unref();
     });
 

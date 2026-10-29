@@ -59,6 +59,9 @@ interface BookingList {
 /** Before pickup, the sender still needs the seal checklist. After it, the card is stale advice. */
 const HANDOVER_CHECK_STATUSES = ['payment_pending', 'confirmed', 'pickup_ready'];
 
+/** Payment is collected after delivery. `payment_pending` is the pre-change flow. */
+const PAYMENT_DUE_STATUSES = ['payment_pending', 'delivered', 'disputed', 'payout_eligible'];
+
 const REVIEW_TAGS = [
   { value: 'on_time', label: 'On time' },
   { value: 'careful_handling', label: 'Careful handling' },
@@ -334,13 +337,18 @@ function ActionPanel({
         </Card>
       ) : null}
 
-      {booking.status === 'payment_pending' && role === 'sender' ? (
+      {role === 'sender' && PAYMENT_DUE_STATUSES.includes(booking.status) && booking.payment?.state !== 'captured' ? (
         <PaymentPanel booking={booking} onPaid={onChanged} />
       ) : null}
 
-      {booking.status === 'payment_pending' && role === 'traveller' ? (
-        <Banner tone="info" title="Accepted. Waiting for the sender to pay">
-          The booking is confirmed as soon as the test payment completes. You do not need to do anything.
+      {role === 'traveller' && PAYMENT_DUE_STATUSES.includes(booking.status) && booking.payment?.state !== 'captured' ? (
+        <Banner
+          tone="info"
+          title={booking.status === 'payment_pending' ? 'Waiting for the sender to pay' : 'Delivered. Waiting for the sender to pay'}
+        >
+          {booking.status === 'payment_pending'
+            ? 'The booking is confirmed as soon as the test payment completes. You do not need to do anything.'
+            : 'The delivery code was accepted. The sender pays from their app; your share is released after the problem window closes.'}
         </Banner>
       ) : null}
 
@@ -536,9 +544,15 @@ function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Pro
     <Card>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-ink-900">Confirm and pay</h2>
+          <h2 className="text-lg font-semibold text-ink-900">
+            {booking.status === 'payment_pending' ? 'Confirm and pay' : 'Pay for this delivery'}
+          </h2>
           <p className="mt-1 text-sm text-ink-500">
-            The traveller accepted. Your price is fixed at {inr(booking.agreed_total_paise)}.
+            {booking.status === 'payment_pending'
+              ? `The traveller accepted. Your price is fixed at ${inr(booking.agreed_total_paise)}.`
+              : `The parcel was delivered and the delivery code was accepted. Your price is fixed at ${inr(
+                  booking.agreed_total_paise,
+                )}. The traveller is paid after the problem window closes.`}
           </p>
         </div>
       </div>
@@ -567,7 +581,7 @@ function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Pro
         </Banner>
       ) : null}
 
-      {state === 'done' ? <SuccessPanel title="Payment confirmed">Your booking is confirmed.</SuccessPanel> : null}
+      {state === 'done' ? <SuccessPanel title="Payment confirmed">The capture is recorded on the booking.</SuccessPanel> : null}
 
       {error ? <ErrorPanel error={error} /> : null}
 
@@ -878,8 +892,12 @@ function DeliveredPanel({
           <p className="mt-1 text-sm text-ink-500">
             {booking.status === 'delivered'
               ? role === 'sender'
-                ? 'The problem window is open. After it closes, the traveller is paid.'
-                : 'The sender can raise a problem for 72 hours. Your payout follows after that.'
+                ? booking.payment?.state === 'captured'
+                  ? 'Payment captured. The problem window is open; after it closes, the traveller is paid.'
+                  : 'Delivered. Pay the traveller’s share above. The problem window is open.'
+                : booking.payment?.state === 'captured'
+                  ? 'The sender has paid. Your payout follows after the 72-hour problem window.'
+                  : 'The sender pays from their app. Your payout follows after the 72-hour problem window.'
               : booking.status === 'payout_eligible'
                 ? role === 'sender'
                   ? 'No problem was raised in time. The traveller’s share is now due.'

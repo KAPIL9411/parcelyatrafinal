@@ -120,7 +120,7 @@ const SENDER_HINTS: Record<string, string> = {
   picked_up: 'The traveller has your parcel.',
   in_transit: 'Your parcel is on the way.',
   arrived: 'The traveller has reached the destination city.',
-  delivered: 'Delivered. The problem window is now open.',
+  delivered: 'Delivered. Pay the traveller’s share; the problem window is open.',
   payout_eligible: 'No problem was raised. The traveller will be paid.',
   paid_out: 'The traveller has been paid.',
   cancelled_by_sender: 'Cancelled by the sender.',
@@ -143,7 +143,7 @@ const TRAVELLER_HINTS: Record<string, string> = {
   picked_up: 'You have the parcel. Keep it sealed until delivery.',
   in_transit: 'You are carrying the parcel to the destination city.',
   arrived: 'You have reached the destination city. Hand the parcel to the named receiver.',
-  delivered: 'Delivered. Keep the handover record.',
+  delivered: 'Delivered. The sender pays next; your share follows after the problem window.',
   payout_eligible: 'No problem was raised. Your share is now due.',
   paid_out: 'Your share has been paid.',
   cancelled_by_sender: 'The sender cancelled this booking.',
@@ -402,6 +402,9 @@ export function errorCopy(error: unknown): { title: string; body: string } {
     }
     if (error.code === 'VALIDATION_FAILED' && error.details.field === 'object_key') {
       return { title: 'Attach the photos again', body: 'Those uploads do not belong to this account.' };
+    }
+    if (error.code === 'FORBIDDEN' && error.details.field === 'email') {
+      return { title: 'Email is set by Google', body: 'Change it in your Google account, then sign in again.' };
     }
     return (
       ERROR_COPY[error.code] ?? {

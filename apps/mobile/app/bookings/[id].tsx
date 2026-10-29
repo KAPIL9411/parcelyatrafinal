@@ -4,7 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
-import { bookingsApi, disputesApi, filesApi } from '../../src/api/client.ts';
+import { bookingsApi, devApi, disputesApi, filesApi } from '../../src/api/client.ts';
 import { ApiError } from '../../src/api/http.ts';
 import type { Booking, ChatThread, Dispute, PaymentIntent } from '../../src/api/types.ts';
 import { AuthGate } from '../../src/components/auth-gate.tsx';
@@ -46,6 +46,11 @@ import {
 import { colors, font, radius, spacing } from '../../src/theme.ts';
 
 const HANDOVER_CHECK_STATUSES = ['payment_pending', 'confirmed', 'pickup_ready'];
+/**
+ * Payment is collected after delivery. `payment_pending` is the pre-change flow, kept so an old
+ * booking can still be paid. The panel hides itself once a capture is recorded on the booking.
+ */
+const PAYMENT_DUE_STATUSES = ['payment_pending', 'delivered', 'disputed', 'payout_eligible'];
 const DELIVERED_STATUSES = ['delivered', 'payout_eligible', 'paid_out'];
 const INCIDENT_STATUSES = ['picked_up', 'in_transit', 'arrived', 'delivery_attempt_failed'];
 
@@ -397,15 +402,21 @@ function ActionPanel({
         </Card>
       ) : null}
 
-      {booking.status === 'payment_pending' && role === 'sender' ? (
+      {role === 'sender' && PAYMENT_DUE_STATUSES.includes(booking.status) && booking.payment?.state !== 'captured' ? (
         <PaymentPanel booking={booking} onPaid={onChanged} />
       ) : null}
 
-      {booking.status === 'payment_pending' && role === 'traveller' ? (
+      {role === 'traveller' &&
+      PAYMENT_DUE_STATUSES.includes(booking.status) &&
+      booking.payment?.state !== 'captured' ? (
         <Banner
           tone="info"
-          title="Accepted. Waiting for the sender to pay"
-          body="The booking confirms as soon as the payment completes. You do not need to do anything."
+          title={booking.status === 'payment_pending' ? 'Waiting for the sender to pay' : 'Delivered. Waiting for the sender to pay'}
+          body={
+            booking.status === 'payment_pending'
+              ? 'The booking confirms as soon as the payment completes. You do not need to do anything.'
+              : 'The delivery code was accepted. The sender pays from their app; your share is released after the problem window closes.'
+          }
         />
       ) : null}
 
@@ -620,9 +631,10 @@ function ActionPanel({
 // ---------------------------------------------------------------------------- payment
 
 function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Promise<void> }) {
-  const [state, setState] = useState<'idle' | 'creating' | 'awaiting'>('idle');
+  const [state, setState] = useState<'idle' | 'creating' | 'awaiting' | 'paid'>('idle');
   const [intent, setIntent] = useState<PaymentIntent | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const afterDelivery = booking.status !== 'payment_pending';
 
   async function createIntent() {
     setState('creating');
@@ -630,23 +642,41 @@ function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Pro
     try {
       const created = await bookingsApi.paymentIntent(booking.id);
       setIntent(created);
-      // No provider checkout exists in this build: the intent is real, the money is not. The panel
-      // says so instead of pretending the booking is paid.
-      setState('awaiting');
+
+      if (!__DEV__) {
+        // No provider checkout is connected in this build. The intent is real, the money is not:
+        // only a signed capture webhook can mark it paid, so say that instead of pretending.
+        setState('awaiting');
+        return;
+      }
+
+      // Local sandbox: drive the same signed webhook a provider would call.
+      await devApi.simulateWebhook('payment.captured', created.provider_ref);
+      setState('paid');
       await onPaid();
     } catch (err) {
+      if (err instanceof ApiError && err.code === 'PAYMENT_ALREADY_EXISTS') {
+        // An earlier attempt exists. Refresh; if it was captured the panel disappears on its own.
+        await onPaid();
+        setState('idle');
+        return;
+      }
       setError(err);
       setState('idle');
-      if (err instanceof ApiError && err.code === 'PAYMENT_ALREADY_EXISTS') await onPaid();
     }
   }
 
   return (
     <Card>
-      <AppText variant="heading">Confirm and pay</AppText>
+      <AppText variant="heading">{afterDelivery ? 'Pay for this delivery' : 'Confirm and pay'}</AppText>
       <AppText variant="small" tone="muted" style={{ marginTop: 4 }}>
-        The traveller accepted. Your price is fixed at {inr(booking.agreed_total_paise)} and comes from the stored
-        quote.
+        {afterDelivery
+          ? `The parcel was delivered and the delivery code was accepted. Your price is fixed at ${inr(
+              booking.agreed_total_paise,
+            )} and comes from the stored quote. The traveller is paid after the problem window closes.`
+          : `The traveller accepted. Your price is fixed at ${inr(
+              booking.agreed_total_paise,
+            )} and comes from the stored quote.`}
       </AppText>
 
       {state === 'awaiting' ? (
@@ -664,9 +694,13 @@ function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Pro
             </AppText>
           ) : null}
         </View>
+      ) : state === 'paid' ? (
+        <View style={{ marginTop: spacing.md }}>
+          <Banner tone="success" title="Payment confirmed" body="The capture is recorded. Your receipt is in the timeline." />
+        </View>
       ) : (
         <Button
-          label={`Create payment request · ${inr(booking.agreed_total_paise)}`}
+          label={`Pay ${inr(booking.agreed_total_paise)}`}
           onPress={() => void createIntent()}
           loading={state === 'creating'}
           style={{ marginTop: spacing.md }}
@@ -933,8 +967,12 @@ function DeliveredPanel({
   const copy =
     booking.status === 'delivered'
       ? role === 'sender'
-        ? 'The problem window is open. After it closes, the traveller is paid.'
-        : 'The sender can raise a problem for 72 hours. Your payout follows after that.'
+        ? booking.payment?.state === 'captured'
+          ? 'Payment captured. The problem window is open; after it closes, the traveller is paid.'
+          : 'Delivered. Pay the traveller’s share below. The problem window is open.'
+        : booking.payment?.state === 'captured'
+          ? 'The sender has paid. Your payout follows after the 72-hour problem window.'
+          : 'The sender pays from their app. Your payout follows after the 72-hour problem window.'
       : booking.status === 'payout_eligible'
         ? role === 'sender'
           ? 'No problem was raised in time. The traveller’s share is now due.'

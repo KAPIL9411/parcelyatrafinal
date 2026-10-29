@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { config } from '../config.ts';
 import { AppError } from '../lib/errors.ts';
 import { safeEqual, webhookSignature } from '../lib/crypto.ts';
-import { audit } from '../services/audit.ts';
+import { audit, queueNotification } from '../services/audit.ts';
 import { applyBookingTransition, type BookingRowFull } from './bookings.ts';
 import { isPayoutEligible } from './admin.ts';
 
@@ -99,23 +99,47 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
 
     if (event.type === 'payment.captured') {
       await db.query(`UPDATE payments SET state = 'captured', updated_at = now() WHERE id = $1`, [p.id]);
+
+      // The journal is the money truth, and a capture is recorded exactly once per provider
+      // reference even if the provider sends two different event ids for the same capture.
+      await db.query(
+        `INSERT INTO payment_ledger (booking_id, entry_type, amount_paise, provider_ref, memo)
+         SELECT $1,'capture',$2,$3,'sandbox capture'
+          WHERE NOT EXISTS (
+            SELECT 1 FROM payment_ledger
+             WHERE booking_id = $1 AND entry_type = 'capture' AND provider_ref = $3
+          )`,
+        [p.booking_id, p.amount_paise, String(event.data.provider_ref ?? '')],
+      );
+
       if (booking && booking.status === 'payment_pending') {
+        // Legacy bookings created before payment moved to the delivery step.
         await applyBookingTransition(app, booking, 'payment_authorised', 'system', {
           reasonCode: event.type,
           metadata: { provider_ref: String(event.data.provider_ref ?? '') },
         });
-        await db.query(
-          `INSERT INTO payment_ledger (booking_id, entry_type, amount_paise, provider_ref, memo)
-           VALUES ($1,'capture',$2,$3,'sandbox capture')`,
-          [p.booking_id, p.amount_paise, String(event.data.provider_ref ?? '')],
-        );
+      } else if (booking && booking.status === 'delivered') {
+        // The normal path now: the parcel is already delivered, so the capture is a self-edge. It
+        // keeps the timeline honest and tells both sides that the money arrived.
+        await applyBookingTransition(app, booking, 'payment_authorised', 'system', {
+          reasonCode: event.type,
+          metadata: { provider_ref: String(event.data.provider_ref ?? '') },
+        });
       }
     }
 
     if (event.type === 'payment.failed') {
       await db.query(`UPDATE payments SET state = 'failed', updated_at = now() WHERE id = $1`, [p.id]);
       if (booking && booking.status === 'payment_pending') {
+        // Only a booking that was waiting on payment can be cancelled by a failure. A delivered
+        // parcel must never be cancelled because the sender's card was declined.
         await applyBookingTransition(app, booking, 'payment_failed', 'system', { reasonCode: 'provider_failed' });
+      } else if (booking) {
+        await queueNotification(db, {
+          userId: booking.sender_id,
+          bookingId: booking.id,
+          templateId: 'payment_failed',
+        });
       }
     }
 

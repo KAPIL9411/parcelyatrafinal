@@ -387,6 +387,12 @@ export interface Booking {
   } | null;
   dispute_deadline: string | null;
   payout_state: string;
+  /** Latest non-failed payment attempt. Additive: payment is collected after delivery. */
+  payment?: {
+    state: string;
+    amount_paise: number;
+    sandbox: boolean;
+  } | null;
   allowed_commands: string[];
   timeline: Array<{
     from_state: string | null;

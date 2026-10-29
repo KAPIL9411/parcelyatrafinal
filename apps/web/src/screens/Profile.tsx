@@ -127,9 +127,10 @@ export function Profile() {
     setSaveError(null);
     setSaved(false);
     try {
+      const nextEmail = email.trim();
       const updated = await api.patch<ProfileRecord>('/me', {
         ...(name.trim() ? { name: name.trim() } : {}),
-        ...(email.trim() ? { email: email.trim() } : {}),
+        ...(nextEmail && nextEmail !== (user?.email ?? '') ? { email: nextEmail } : {}),
         locale,
       });
       setUser(updated);

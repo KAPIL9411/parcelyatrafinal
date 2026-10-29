@@ -276,7 +276,7 @@ async function main() {
 
   const accept = await writeInRoom('POST', `/bookings/${bookingId}/transitions`, { command: 'accept' }, traveller.token,
     `journeys-accept-${bookingId}`);
-  check('the traveller accepted and the booking awaits payment', accept.status === 200 && accept.body.status === 'payment_pending',
+  check('the traveller accepted and the booking is confirmed without a payment step', accept.status === 200 && accept.body.status === 'confirmed',
     JSON.stringify(accept.body).slice(0, 200));
 
   // ---------------------------------------------------------------- E: authorization
@@ -313,32 +313,12 @@ async function main() {
   }, sender.token);
   check('a non-staff account cannot resolve an incident', staffResolveAsUser.status === 403, String(staffResolveAsUser.status));
 
-  // ---------------------------------------------------------------- F: payment integrity
-  const intent = await writeInRoom('POST', `/bookings/${bookingId}/payment-intent`, {}, sender.token,
-    `journeys-pay-${bookingId}`);
-  check('the sandbox intent charges exactly the quoted total', intent.status === 201 && intent.body.amount_paise === q.total_paise,
-    JSON.stringify(intent.body).slice(0, 200));
-
-  const capture = await writeInRoom('POST', '/dev/webhooks/simulate', {
-    type: 'payment.captured', provider_ref: intent.body.provider_ref,
-  }, sender.token);
-  check('the capture is accepted', capture.status === 200 && capture.body.webhook_status === 200, JSON.stringify(capture.body).slice(0, 160));
-
-  const replay = await writeInRoom('POST', '/dev/webhooks/simulate', {
-    type: 'payment.captured', provider_ref: intent.body.provider_ref,
-  }, sender.token);
-  check('a replayed capture does not answer as a new one', replay.status === 200 && replay.body?.webhook_status !== 500,
-    JSON.stringify(replay.body).slice(0, 160));
-
-  const forged = await call('POST', '/webhooks/payments/mock', {
-    body: { id: `evt_forged_${stamp}`, type: 'payment.captured', data: { provider_ref: intent.body.provider_ref } },
-    headers: { 'x-provider-signature': 'deadbeef', 'x-provider-timestamp': String(Math.floor(Date.now() / 1000)) },
-  });
-  check('a forged webhook signature is refused', forged.status === 401 && forged.body?.error?.code === 'WEBHOOK_SIGNATURE_INVALID',
-    `${forged.status} ${JSON.stringify(forged.body).slice(0, 120)}`);
-
-  const confirmed = await call('GET', `/bookings/${bookingId}`, { token: sender.token });
-  check('the booking is confirmed only after the provider capture', confirmed.body?.status === 'confirmed', String(confirmed.body?.status));
+  // ---------------------------------------------------------------- F: payment timing
+  const earlyPay = await writeInRoom('POST', `/bookings/${bookingId}/payment-intent`, {}, sender.token,
+    `journeys-early-pay-${bookingId}`);
+  check('payment cannot be taken before the parcel is delivered',
+    earlyPay.status === 409 && earlyPay.body?.error?.code === 'PAYMENT_NOT_PAYABLE',
+    `${earlyPay.status} ${JSON.stringify(earlyPay.body).slice(0, 200)}`);
 
   // ---------------------------------------------------------------- to the handover, then an incident
   const openPickup = await writeInRoom('POST', `/dev/bookings/${bookingId}/advance`, {}, sender.token);
@@ -367,8 +347,8 @@ async function main() {
   const queue = await call('GET', '/admin/incidents?state=incident_open&limit=100', { token: ops.token });
   const row = (queue.body?.items ?? []).find((i) => i.booking_id === bookingId);
   check('the incident queue shows this booking to staff', queue.status === 200 && Boolean(row), JSON.stringify(queue.body).slice(0, 200));
-  check('the queue reports the capture, not the quote', row?.captured_paise === q.total_paise,
-    `captured ${row?.captured_paise} vs quoted ${q.total_paise} — a replayed webhook must not double it`);
+  check('the queue reports no capture, because payment is only collected after delivery', row?.captured_paise === 0,
+    `captured ${row?.captured_paise} — a delivered-only payment must never be journalled before delivery`);
   check('the queue says who opened it and why', row?.opened_by === 'user' && row?.reason_code === 'parcel_damaged',
     JSON.stringify({ opened_by: row?.opened_by, reason: row?.reason_code }));
 
@@ -430,8 +410,8 @@ async function main() {
 
   const releaseAfterClear = await writeInRoom('POST', `/admin/payouts/${bookingId}/release`, { reason_code: 'incident_cleared' }, ops.token,
     `journeys-release-after-clear-${bookingId}`);
-  check('an eligible payout is still refused while the rail does not exist',
-    releaseAfterClear.status === 501 && releaseAfterClear.body?.error?.code === 'PAYOUTS_NOT_ENABLED',
+  check('an unpaid delivery is not releasable even after the incident clears',
+    releaseAfterClear.status === 409 && releaseAfterClear.body?.error?.code === 'PAYOUT_NOT_ELIGIBLE',
     `${releaseAfterClear.status} ${JSON.stringify(releaseAfterClear.body).slice(0, 140)}`);
 
   const goneFromQueue = await call('GET', '/admin/incidents?state=incident_open&limit=100', { token: ops.token });

@@ -19,8 +19,10 @@
  *  - It does not run migrations or seed data. A Worker is not a boot-time process, and production
  *    has always migrated as a separate step. Run `npm run db:migrate` before deploying.
  *  - It does not start background jobs. `JOBS_ENABLED` is false in the Worker configuration;
- *    `setInterval` does not outlive a request on Workers. The OTP-counter prune and the trip-route
- *    backfill need a Cron Trigger (or a scheduled GitHub Action hitting an authenticated endpoint).
+ *    `setInterval` does not outlive a request on Workers. Time-based booking transitions are run by
+ *    the Cron Trigger below (`scheduled`), which calls the same `runLifecycleSweep` the Node
+ *    scheduler calls. The OTP-counter prune and the trip-route backfill still need that trigger or a
+ *    scheduled GitHub Action hitting an authenticated endpoint.
  *  - It does not mount Socket.IO. Workers have no HTTP `upgrade` event. Live position updates stay
  *    on the polling endpoints (`/v1/tracking/...`); the app's change feed is `/v1/sync/state`.
  *  - It does not run live tracking across isolates. The default tracking store is per-isolate
@@ -41,6 +43,7 @@ import { deferredDb, withRequestDb } from './db/client.ts';
 import { createCompatApp, type CompatScope } from './http/fastify-compat.ts';
 import { makeConsoleLogger } from './http/logger.ts';
 import { registerRoutes } from './routes/register.ts';
+import { runLifecycleSweep } from './services/lifecycle.ts';
 
 interface Booted {
   app: CompatScope;
@@ -94,5 +97,19 @@ export default {
     // Every request gets its own connection: a Worker may not reuse a TCP socket across requests.
     // Hyperdrive supplies the pooling behind that connection.
     return withRequestDb(env.HYPERDRIVE?.connectionString, () => app.fetch(request));
+  },
+
+  /**
+   * Cron Trigger (`wrangler.jsonc` → `triggers.crons`). Runs the time-based booking transitions:
+   * expire unanswered requests, open pickup when the window starts, settle delivered bookings whose
+   * problem window closed after payment. The sweep is idempotent and bounded, so an overlapping or
+   * retried invocation cannot double-apply a transition.
+   */
+  async scheduled(_event: unknown, env: Env = {}): Promise<void> {
+    const { app } = await boot();
+    await withRequestDb(env.HYPERDRIVE?.connectionString, async () => {
+      const summary = await runLifecycleSweep(app as unknown as FastifyInstance);
+      console.log('[cron] lifecycle sweep', JSON.stringify(summary));
+    });
   },
 };

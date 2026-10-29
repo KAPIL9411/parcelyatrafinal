@@ -215,8 +215,10 @@ its call sites were exercised in a browser; no unit test drives it.
   the local file sink stand in for the transport only, and each endpoint says so in its response.
 * A real Google sign-in end to end. `google-handshake.test.ts` stops at the call to Google, and the
   `POST /auth/google/token` path (ID token obtained by the client) has no test at all in this repo.
-* Time-based transitions (`expire`, `auto_expire`, `open_pickup`, `settle_window`) have no scheduler
-  to fire them; see "Known gaps" in [docs/BOOKING_STATE_MACHINE.md](BOOKING_STATE_MACHINE.md).
+* Time-based transitions (`expire`, `auto_expire`, `open_pickup`, `settle_window`) are fired by the
+  lifecycle sweep (`services/lifecycle.ts`) from a Cron Trigger or the Node scheduler. The sweep is
+  covered by `payment-after-delivery.test.ts` through `POST /v1/dev/lifecycle/run`; the trigger itself
+  has not been observed firing in production.
 * Mobile browsers and assistive technology: the UI was verified on a desktop Chromium viewport.
 * The outbox has no consumer, so "an event was emitted" is not "a job ran".
 

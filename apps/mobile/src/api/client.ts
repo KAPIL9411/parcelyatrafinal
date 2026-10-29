@@ -315,6 +315,16 @@ export const bookingsApi = {
   paymentIntent: (id: string) => http.post<PaymentIntent>(`/bookings/${id}/payment-intent`, {}),
 };
 
+/**
+ * Development-only helpers. The API refuses to register these routes in production, and callers
+ * guard them with `__DEV__`; they exist so a local demo can drive the sandbox payment webhook.
+ */
+export const devApi = {
+  simulateWebhook: (type: string, providerRef: string) =>
+    http.post<unknown>('/dev/webhooks/simulate', { type, provider_ref: providerRef }),
+  runLifecycle: () => http.post<unknown>('/dev/lifecycle/run', {}),
+};
+
 export const disputesApi = {
   get: (id: string) => http.get<Dispute>(`/disputes/${id}`),
   open: (bookingId: string, category: string, description: string) =>

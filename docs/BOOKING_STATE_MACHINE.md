@@ -53,14 +53,14 @@ Terminal in this build: `paid_out`, `refunded`, the four `cancelled_*`, `expired
 |---|---|---|---|---|---|
 | `draft` | `submit` | `pending_traveller_acceptance` | sender | `QUOTE_EXPIRED` if the quote lapsed; `CAPACITY_UNAVAILABLE` if the trip lost the room | `:119` |
 | `draft` | `expire` | `expired` | system | needs a scheduler — none runs today | `:130` |
-| `pending_traveller_acceptance` | `accept` | `payment_pending` | traveller | 30-minute window (`ACCEPT_WINDOW_CLOSED`), capacity still held, traveller ID verified (`VERIFICATION_REQUIRED`) | `:131` |
+| `pending_traveller_acceptance` | `accept` | `confirmed` | traveller | 30-minute window (`ACCEPT_WINDOW_CLOSED`), capacity still held, traveller ID verified (`VERIFICATION_REQUIRED`). No payment is asked for at this point. | `:131` |
 | `pending_traveller_acceptance` | `decline` | `cancelled_by_traveller` | traveller | — | `:145` |
 | `pending_traveller_acceptance` | `cancel` | `cancelled_by_sender` | sender | — | `:146` |
 | `pending_traveller_acceptance` | `auto_expire` | `expired` | system | needs a scheduler — none runs today | `:147` |
-| `payment_pending` | `payment_authorised` | `confirmed` | system | posted only by the provider webhook after a verified signature; the client has no route to it | `:148` |
+| `payment_pending` | `payment_authorised` | `confirmed` | system | legacy only: bookings created before payment moved to delivery. Posted by the provider webhook after a verified signature. | `:148` |
 | `payment_pending` | `payment_failed` | `cancelled_by_sender` | system | same | `:149` |
 | `payment_pending` | `cancel` | `cancelled_by_sender` | sender | — | `:150` |
-| `confirmed` | `open_pickup` | `pickup_ready` | system | needs a scheduler; `/dev/bookings/:id/advance` is what exercises it today | `:151` |
+| `confirmed` | `open_pickup` | `pickup_ready` | system | run by the lifecycle sweep when the parcel's pickup window starts (`services/lifecycle.ts`, Cron Trigger every 5 min) | `:151` |
 | `confirmed` | `cancel` | `cancelled_by_sender` | sender | refused inside 2 h of the pickup window (a fee would apply) | `:152` |
 | `confirmed` | `cancel` | `cancelled_by_traveller` | traveller | refused once the pickup code has been consumed | `:160` |
 | `confirmed` | `eligibility_failed` | `cancelled_ineligible` | system | — | `:167` |
@@ -77,7 +77,8 @@ Terminal in this build: `paid_out`, `refunded`, the four `cancelled_*`, `expired
 | `delivery_attempt_failed` | `confirm_delivery` | `delivered` | traveller | the second handover needs the same OTP + photo — a failed attempt is not a free pass | `:219` |
 | `delivery_attempt_failed` | `escalate` | `incident_open` | system, support | — | `:231` |
 | `delivered` | `raise_dispute` | `disputed` | sender, traveller | `DISPUTE_WINDOW_CLOSED` after `DISPUTE_WINDOW_HOURS` | `:243` |
-| `delivered` | `settle_window` | `payout_eligible` | system | needs a scheduler — none runs today | `:255` |
+| `delivered` | `payment_authorised` | `delivered` | system | a self-edge: the provider capture is recorded after delivery without moving the parcel. Posted only by the signed webhook. | `:154` |
+| `delivered` | `settle_window` | `payout_eligible` | system | the lifecycle sweep requires the problem window to have elapsed **and** a capture in the ledger at least equal to the traveller's share | `:262` |
 | `disputed` | `resolve_sender` | `refunded` | support | — | `:256` |
 | `disputed` | `resolve_traveller` | `payout_eligible` | support | — | `:257` |
 | `disputed` | `escalate` | `incident_open` | support | — | `:258` |
@@ -134,10 +135,11 @@ Then, outside the transaction, the effects that must not be able to fail a trans
 
 ## Known gaps, stated plainly
 
-- `expire`, `auto_expire`, `open_pickup` and `settle_window` are `system` edges with **no scheduler in
-  this repository**. Until a worker calls `applyBookingTransition` on a timer, drafts and unaccepted
-  bookings hold capacity forever and `delivered` never advances to `payout_eligible` on its own. Tests
-  reach these edges through `POST /v1/dev/bookings/:id/advance`, which is dev-only and loopback-gated.
+- `expire`, `auto_expire`, `open_pickup` and `settle_window` are `system` edges. They are run by
+  `services/lifecycle.ts`: the Worker's Cron Trigger (`wrangler.jsonc` → `triggers.crons`, every five
+  minutes) and the Node scheduler when `JOBS_ENABLED=true`. The sweep is idempotent and bounded.
+  `POST /v1/dev/lifecycle/run` exercises it locally. Settlement still refuses a delivered booking
+  whose sender has not paid: money must be in the journal before the traveller is called payable.
 - There is no `paused` trip state; a traveller pauses by editing or cancelling a trip, and accepted
   bookings are protected from both (`routes/trips.ts`, proven by `npm run test:trips`).
 - The outbox has producers but no consumer, so `booking.*` rows accumulate until something reads them.

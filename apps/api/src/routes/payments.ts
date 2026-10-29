@@ -14,7 +14,14 @@ import { audit } from '../services/audit.ts';
  * The amount always comes from the stored quote. A client-supplied amount is never read, and the
  * request body is empty by design. `sandbox` is true for every pilot payment and the UI must label
  * it as test mode.
+ *
+ * Payment is collected after delivery. `payment_pending` stays in the list only for bookings that
+ * were created before the flow changed; `delivered` is the normal entry point now. `disputed` and
+ * `payout_eligible` are allowed so a sender can still settle a delivery that was already handed over
+ * while a case was open.
  */
+const PAYABLE_STATUSES = ['payment_pending', 'delivered', 'disputed', 'payout_eligible'] as const;
+
 export async function paymentRoutes(app: FastifyInstance): Promise<void> {
   const db = app.db;
 
@@ -34,7 +41,9 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
 
     if (!config.FEATURE_PAYMENTS_ENABLED) throw new AppError('PAYMENTS_NOT_ENABLED');
     if (config.PAYMENTS_LIVE) throw new AppError('PAYMENTS_NOT_ENABLED', { reason: 'live_payments_not_permitted_at_pilot' });
-    if (b.status !== 'payment_pending') throw new AppError('PAYMENT_NOT_PAYABLE', { status: b.status });
+    if (!(PAYABLE_STATUSES as readonly string[]).includes(b.status)) {
+      throw new AppError('PAYMENT_NOT_PAYABLE', { status: b.status });
+    }
 
     const result = await withIdempotency(app.db, auth.userId, `payment_intent:${b.id}`, req, {}, async () => {
       const existing = await db.query<{ id: string }>(`SELECT id FROM payments WHERE booking_id = $1 AND state <> 'failed'`, [b.id]);

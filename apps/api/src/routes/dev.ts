@@ -8,6 +8,7 @@ import { makeAuthenticate, requireAuth, requireRole } from '../lib/auth.ts';
 import { recallCode } from '../lib/dev-store.ts';
 import { randomToken, webhookSignature } from '../lib/crypto.ts';
 import { seedDatabase } from '../db/seed.ts';
+import { runLifecycleSweep } from '../services/lifecycle.ts';
 import { applyBookingTransition, ensureHandoverOtp, type BookingRowFull } from './bookings.ts';
 
 /**
@@ -133,6 +134,14 @@ export async function devRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
+  // ---- Time-based transitions: the same sweep the production Cron Trigger runs.
+
+  app.post('/dev/lifecycle/run', { preHandler: authenticate }, async (req) => {
+    requireAuth(req);
+    const summary = await runLifecycleSweep(app);
+    return { ...summary, sandbox: true };
+  });
+
   // ---- Advance a booking through the next step, supplying what a human would supply.
 
   app.post<{ Params: { bookingId: string } }>('/dev/bookings/:bookingId/advance', { preHandler: authenticate }, async (req, reply) => {
@@ -239,11 +248,35 @@ export async function devRoutes(app: FastifyInstance): Promise<void> {
         break;
       }
       case 'delivered': {
-        // Move the dispute deadline into the past so settlement can be demonstrated.
-        await db.query(`UPDATE bookings SET dispute_deadline = now() - interval '1 minute' WHERE id = $1`, [
-          booking.id,
-        ]);
-        await applyBookingTransition(app, booking, 'settle_window', 'system', {});
+        // Payment now happens after delivery. First call captures the sandbox payment; the next one
+        // moves the problem deadline into the past and settles.
+        const paid = await db.query<{ id: string }>(
+          `SELECT id FROM payments WHERE booking_id = $1 AND state IN ('authorised','captured') LIMIT 1`,
+          [booking.id],
+        );
+        if (!paid.rows[0]) {
+          const providerRef = `mock_pi_${randomToken(12)}`;
+          await db.query(
+            `INSERT INTO payments (booking_id, provider, provider_ref, state, amount_paise, currency, sandbox)
+             VALUES ($1,'mock',$2,'captured',$3,'INR',true)`,
+            [booking.id, providerRef, booking.agreed_total_paise],
+          );
+          await db.query(
+            `INSERT INTO payment_ledger (booking_id, entry_type, amount_paise, provider_ref, memo)
+             VALUES ($1,'capture',$2,$3,'dev capture')`,
+            [booking.id, booking.agreed_total_paise, providerRef],
+          );
+          await applyBookingTransition(app, booking, 'payment_authorised', 'system', {
+            reasonCode: 'dev_simulated',
+            metadata: { provider_ref: providerRef },
+          });
+        } else {
+          // Move the dispute deadline into the past so settlement can be demonstrated.
+          await db.query(`UPDATE bookings SET dispute_deadline = now() - interval '1 minute' WHERE id = $1`, [
+            booking.id,
+          ]);
+          await applyBookingTransition(app, booking, 'settle_window', 'system', {});
+        }
         break;
       }
       default:

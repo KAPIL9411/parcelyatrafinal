@@ -279,7 +279,7 @@ async function main() {
     idempotencyKey: `trips-accept-${stamp}`,
     body: { command: 'accept' },
   });
-  check('the traveller accepted, so the reservation is real', accept.status === 200 && accept.body.status === 'payment_pending', JSON.stringify(accept.body).slice(0, 240));
+  check('the traveller accepted, so the reservation is real', accept.status === 200 && accept.body.status === 'confirmed', JSON.stringify(accept.body).slice(0, 240));
 
   const afterBooking = await call('GET', `/trips/${tripId}`, { token: imran.token });
   const baseline = afterBooking.body;
@@ -413,7 +413,7 @@ async function main() {
   const bookingAfterMove = await call('GET', `/bookings/${bookingId}`, { token: sender.token });
   check(
     'editing the trip does not re-price, re-time or cancel the booking',
-    bookingAfterMove.body.status === 'payment_pending' && bookingAfterMove.body.agreed_total_paise === agreedPaise,
+    bookingAfterMove.body.status === 'confirmed' && bookingAfterMove.body.agreed_total_paise === agreedPaise,
     `${bookingAfterMove.body.status} ${bookingAfterMove.body.agreed_total_paise} vs ${agreedPaise}`,
   );
 

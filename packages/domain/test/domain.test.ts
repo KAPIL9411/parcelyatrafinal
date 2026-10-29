@@ -153,8 +153,9 @@ test('booking machine: legal path through to delivery', () => {
   assert.deepEqual(applyTransition('draft', 'submit', ctx()), { ok: true, to: 'pending_traveller_acceptance' });
   assert.deepEqual(
     applyTransition('pending_traveller_acceptance', 'accept', { ...ctx(), actor: 'traveller', travellerVerified: true, acceptBy: new Date(now.getTime() + 60_000) }),
-    { ok: true, to: 'payment_pending' },
+    { ok: true, to: 'confirmed' },
   );
+  // Legacy bookings that were parked on `payment_pending` still walk forward after a capture.
   assert.deepEqual(applyTransition('payment_pending', 'payment_authorised', { ...ctx(), actor: 'system' }), { ok: true, to: 'confirmed' });
   assert.deepEqual(applyTransition('confirmed', 'open_pickup', { ...ctx(), actor: 'system' }), { ok: true, to: 'pickup_ready' });
   assert.deepEqual(
@@ -167,8 +168,36 @@ test('booking machine: legal path through to delivery', () => {
     applyTransition('arrived', 'confirm_delivery', { ...ctx(), actor: 'traveller', otpValid: true, photoPresent: true }),
     { ok: true, to: 'delivered' },
   );
-  assert.deepEqual(applyTransition('delivered', 'settle_window', { ...ctx(), actor: 'system' }), { ok: true, to: 'payout_eligible' });
+  // Payment is collected after delivery. The capture is a self-edge that leaves the parcel where it is.
+  assert.deepEqual(applyTransition('delivered', 'payment_authorised', { ...ctx(), actor: 'system' }), { ok: true, to: 'delivered' });
+  assert.deepEqual(
+    applyTransition('delivered', 'settle_window', {
+      ...ctx(),
+      actor: 'system',
+      payoutAmountPaise: 7_000,
+      ledgerBalancePaise: 8_900,
+      disputeWindowElapsed: true,
+    }),
+    { ok: true, to: 'payout_eligible' },
+  );
   assert.deepEqual(applyTransition('payout_eligible', 'release', { ...ctx(), actor: 'system', openDispute: false }), { ok: true, to: 'paid_out' });
+});
+
+test('booking machine: settlement waits for the sender payment and the problem window', () => {
+  const now = new Date('2026-10-24T10:00:00Z');
+  const ctx = { now, actor: 'system' as const, payoutAmountPaise: 7_000, disputeWindowElapsed: true };
+
+  const unpaid = applyTransition('delivered', 'settle_window', { ...ctx, ledgerBalancePaise: 0 });
+  assert.equal(unpaid.ok, false);
+  assert.equal(!unpaid.ok && unpaid.code, 'PAYOUT_NOT_ELIGIBLE');
+
+  const windowOpen = applyTransition('delivered', 'settle_window', {
+    ...ctx,
+    ledgerBalancePaise: 8_900,
+    disputeWindowElapsed: false,
+  });
+  assert.equal(windowOpen.ok, false);
+  assert.equal(!windowOpen.ok && windowOpen.code, 'DISPUTE_WINDOW_CLOSED');
 });
 
 test('booking machine: wrong actor and unknown transitions are rejected', () => {

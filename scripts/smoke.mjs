@@ -304,33 +304,20 @@ async function main() {
     idempotencyKey: `smoke-accept-${bookingId}`,
     body: { command: 'accept' },
   });
-  check('traveller accepts', accept.status === 200 && accept.body.status === 'payment_pending', JSON.stringify(accept.body).slice(0, 300));
+  check('traveller accepts and the booking is confirmed', accept.status === 200 && accept.body.status === 'confirmed', JSON.stringify(accept.body).slice(0, 300));
   check('the sender is told the traveller accepted', (await notices(sender.token, bookingId)).includes('booking_accepted'));
   check('the traveller is not told about their own acceptance', !(await notices(traveller.token, bookingId)).includes('booking_accepted'));
 
-  // ---- sandbox payment
-  const intent = await call('POST', `/bookings/${bookingId}/payment-intent`, {
+  // ---- payment is collected after delivery, never at acceptance
+  const earlyPay = await call('POST', `/bookings/${bookingId}/payment-intent`, {
     token: sender.token,
-    idempotencyKey: `smoke-pay-${bookingId}`,
+    idempotencyKey: `smoke-early-pay-${bookingId}`,
   });
-  check('payment intent is created in sandbox', intent.status === 201 && intent.body.sandbox === true && intent.body.amount_paise === q.total_paise, JSON.stringify(intent.body).slice(0, 300));
-
-  const webhook = await call('POST', '/dev/webhooks/simulate', {
-    token: sender.token,
-    body: { type: 'payment.captured', provider_ref: intent.body.provider_ref },
-  });
-  check('signed webhook is accepted', webhook.status === 200 && webhook.body.webhook_status === 200, JSON.stringify(webhook.body).slice(0, 300));
-
-  const afterPay = await call('GET', `/bookings/${bookingId}`, { token: sender.token });
-  check('payment moves the booking to confirmed', afterPay.body.status === 'confirmed', afterPay.body.status);
-  check('the provider capture notifies the sender', (await notices(sender.token, bookingId)).includes('payment_captured'));
-  check('the provider capture notifies the traveller', (await notices(traveller.token, bookingId)).includes('payment_captured'));
-
-  const badSignature = await call('POST', '/webhooks/payments/mock', {
-    body: { id: 'evt_forged', type: 'payment.captured', data: { provider_ref: intent.body.provider_ref } },
-    headers: { 'x-provider-signature': 'deadbeef', 'x-provider-timestamp': String(Math.floor(Date.now() / 1000)) },
-  });
-  check('forged webhook is rejected', badSignature.status === 401 && badSignature.body?.error?.code === 'WEBHOOK_SIGNATURE_INVALID');
+  check(
+    'payment cannot be taken before the parcel is delivered',
+    earlyPay.status === 409 && earlyPay.body?.error?.code === 'PAYMENT_NOT_PAYABLE',
+    `${earlyPay.status} ${JSON.stringify(earlyPay.body).slice(0, 300)}`,
+  );
 
   // ---- pickup
   const openPickup = await call('POST', `/dev/bookings/${bookingId}/advance`, { token: sender.token });
@@ -430,6 +417,32 @@ async function main() {
   });
   check('delivery succeeds', delivery.status === 200 && delivery.body.status === 'delivered', JSON.stringify(delivery.body).slice(0, 300));
   check('delivery opens the dispute window', Boolean(delivery.body.dispute_deadline));
+  check('the delivered booking is unpaid until the sender pays', delivery.body.payment === null);
+
+  // ---- sandbox payment, now that the parcel has been handed over
+  const intent = await call('POST', `/bookings/${bookingId}/payment-intent`, {
+    token: sender.token,
+    idempotencyKey: `smoke-pay-${bookingId}`,
+  });
+  check('payment intent is created in sandbox after delivery', intent.status === 201 && intent.body.sandbox === true && intent.body.amount_paise === q.total_paise, JSON.stringify(intent.body).slice(0, 300));
+
+  const webhook = await call('POST', '/dev/webhooks/simulate', {
+    token: sender.token,
+    body: { type: 'payment.captured', provider_ref: intent.body.provider_ref },
+  });
+  check('signed webhook is accepted', webhook.status === 200 && webhook.body.webhook_status === 200, JSON.stringify(webhook.body).slice(0, 300));
+
+  const afterPay = await call('GET', `/bookings/${bookingId}`, { token: sender.token });
+  check('payment leaves the delivered booking delivered', afterPay.body.status === 'delivered', afterPay.body.status);
+  check('the capture is visible on the booking', afterPay.body.payment?.state === 'captured', JSON.stringify(afterPay.body.payment));
+  check('the provider capture notifies the sender', (await notices(sender.token, bookingId)).includes('payment_captured'));
+  check('the provider capture notifies the traveller', (await notices(traveller.token, bookingId)).includes('payment_captured'));
+
+  const badSignature = await call('POST', '/webhooks/payments/mock', {
+    body: { id: 'evt_forged', type: 'payment.captured', data: { provider_ref: intent.body.provider_ref } },
+    headers: { 'x-provider-signature': 'deadbeef', 'x-provider-timestamp': String(Math.floor(Date.now() / 1000)) },
+  });
+  check('forged webhook is rejected', badSignature.status === 401 && badSignature.body?.error?.code === 'WEBHOOK_SIGNATURE_INVALID');
 
   // ---- settlement and payout
   const settle = await call('POST', `/dev/bookings/${bookingId}/advance`, { token: sender.token });

@@ -122,9 +122,10 @@ function ProfileBody({
     setError(null);
     setSaved(false);
     try {
+      const nextEmail = email.trim();
       await updateMe({
         ...(name.trim() ? { name: name.trim() } : {}),
-        ...(email.trim() ? { email: email.trim() } : {}),
+        ...(nextEmail && nextEmail !== (user.email ?? '') ? { email: nextEmail } : {}),
         locale,
       });
       await refreshProfile();
@@ -315,7 +316,11 @@ function ProfileBody({
           icon="person-outline"
           label="Personal details"
           meta="Name, email and language"
-          onPress={() => setDetailsOpen(true)}
+          onPress={() => {
+            setSaved(false);
+            setError(null);
+            setDetailsOpen(true);
+          }}
         />
         <MenuRow
           icon="shield-checkmark-outline"

@@ -66,14 +66,17 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     const auth = requireAuth(req);
     const body = patchSchema.parse(req.body);
 
-    const before = await db.query<{ name: string | null; locale: string; google_sub: string | null }>(
-      `SELECT name, locale, google_sub FROM users WHERE id = $1`,
-      [auth.userId],
-    );
+    const before = await db.query<{
+      name: string | null;
+      email: string | null;
+      locale: string;
+      google_sub: string | null;
+    }>(`SELECT name, email, locale, google_sub FROM users WHERE id = $1`, [auth.userId]);
     const account = before.rows[0];
     if (!account) throw new AppError('NOT_FOUND');
 
-    const emailChanged = body.email !== undefined && body.email !== null;
+    // Clients echo the values they were given back to us, so only a real change counts.
+    const emailChanged = body.email !== undefined && body.email !== null && body.email !== account.email;
     // The address is the Google identity for an OAuth account, and it is what the staff policy and
     // rule E2 trust. It is set by the provider at sign-in, never here.
     if (emailChanged && account.google_sub) {

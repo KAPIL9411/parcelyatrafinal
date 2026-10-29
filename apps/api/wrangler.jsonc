@@ -11,6 +11,11 @@
   "observability": {
     "enabled": true
   },
+  // Time-based booking transitions (expire, open_pickup, settle_window). Without this a confirmed
+  // booking never opens pickup and a delivered parcel is never settled. The handler is idempotent.
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
   // Migrations are also compiled into `src/db/migrations.generated.ts` by
   // `scripts/gen-migrations.mjs` (run automatically by `deploy:worker`), because a Worker has no
   // filesystem and `/v1/readiness` needs the checked-in SQL to compare against `schema_migrations`.

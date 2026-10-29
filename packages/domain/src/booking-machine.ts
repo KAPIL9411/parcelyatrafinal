@@ -131,7 +131,10 @@ const RULES: readonly Rule[] = [
   {
     from: 'pending_traveller_acceptance',
     command: 'accept',
-    to: 'payment_pending',
+    // Accepting confirms the booking. The sender pays after the parcel is delivered, so no payment
+    // gate stands between a traveller saying yes and the journey starting. `payment_pending` is kept
+    // only so bookings created before this change can still be walked to `confirmed`.
+    to: 'confirmed',
     actors: ['traveller'],
     guard: (ctx) => {
       if (ctx.acceptBy && ctx.now.getTime() > ctx.acceptBy.getTime()) {
@@ -148,6 +151,10 @@ const RULES: readonly Rule[] = [
   { from: 'payment_pending', command: 'payment_authorised', to: 'confirmed', actors: ['system'] },
   { from: 'payment_pending', command: 'payment_failed', to: 'cancelled_by_sender', actors: ['system'] },
   { from: 'payment_pending', command: 'cancel', to: 'cancelled_by_sender', actors: ['sender'] },
+  // Payment now happens after the parcel is handed over. A capture is recorded as a self-edge on
+  // `delivered`: it does not change where the parcel is, but it must appear in the timeline and tell
+  // both sides, and `settle_window` refuses to run until this capture exists.
+  { from: 'delivered', command: 'payment_authorised', to: 'delivered', actors: ['system'] },
   { from: 'confirmed', command: 'open_pickup', to: 'pickup_ready', actors: ['system'] },
   {
     from: 'confirmed',
@@ -252,7 +259,28 @@ const RULES: readonly Rule[] = [
       return null;
     },
   },
-  { from: 'delivered', command: 'settle_window', to: 'payout_eligible', actors: ['system'] },
+  {
+    from: 'delivered',
+    command: 'settle_window',
+    to: 'payout_eligible',
+    actors: ['system'],
+    guard: (ctx) => {
+      // Money must be in the journal before the traveller can be called payable. Since the sender now
+      // pays after delivery, a delivered booking with no capture is the normal "not paid yet" state,
+      // not a settlement.
+      if (
+        typeof ctx.payoutAmountPaise === 'number' &&
+        typeof ctx.ledgerBalancePaise === 'number' &&
+        ctx.ledgerBalancePaise < ctx.payoutAmountPaise
+      ) {
+        return { ok: false, code: 'PAYOUT_NOT_ELIGIBLE', message: 'The sender has not paid for this delivery yet.' };
+      }
+      if (ctx.disputeWindowElapsed === false) {
+        return { ok: false, code: 'DISPUTE_WINDOW_CLOSED', message: 'The problem window is still open.' };
+      }
+      return null;
+    },
+  },
   { from: 'disputed', command: 'resolve_sender', to: 'refunded', actors: ['support'] },
   { from: 'disputed', command: 'resolve_traveller', to: 'payout_eligible', actors: ['support'] },
   { from: 'disputed', command: 'escalate', to: 'incident_open', actors: ['support'] },
