@@ -6,7 +6,7 @@ import { config } from '../config.ts';
 import { AppError } from '../lib/errors.ts';
 import { requireAuth } from '../lib/auth.ts';
 import { toIso } from '../lib/serialize.ts';
-import { ensureStorage, getObject, isValidKey, keyBelongsTo, putObject, verifySignedToken } from '../lib/storage.ts';
+import { getObject, isValidKey, keyBelongsTo, putObject, verifySignedToken } from '../lib/storage.ts';
 import { audit } from '../services/audit.ts';
 
 /**
@@ -52,8 +52,8 @@ const requestSchema = z
   .strict();
 
 export async function fileRoutes(app: FastifyInstance): Promise<void> {
-  await ensureStorage();
-
+  // No filesystem work at registration. `putObject` creates its directory on the first write, and a
+  // Worker has no writable volume at all: an `mkdir` here made the whole Worker fail to boot.
   // Binary image bodies. Fastify ships a JSON parser only, so without this the local sink answers
   // 415 before the handler ever runs. Scoped to this plugin, so JSON routes are unaffected.
   app.addContentTypeParser(

@@ -1,41 +1,17 @@
 import Fastify, {
-  type FastifyBaseLogger,
   type FastifyInstance,
   type FastifyServerOptions,
 } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
-import { ZodError } from 'zod';
 
 import { assertSafetyRails, config, corsOrigins } from './config.ts';
 import { getDb, type Db } from './db/client.ts';
+import { renderError } from './http/error-response.ts';
+import { writeLimitApplies } from './http/write-limit.ts';
 import { AppError, errorEnvelope } from './lib/errors.ts';
-import { makeAuthenticate } from './lib/auth.ts';
-
-import { healthRoutes } from './routes/health.ts';
-import { authRoutes } from './routes/auth.ts';
-import { meRoutes } from './routes/me.ts';
-import { catalogueRoutes } from './routes/catalogue.ts';
-import { verificationRoutes } from './routes/verification.ts';
-import { parcelRoutes } from './routes/parcels.ts';
-import { tripRoutes } from './routes/trips.ts';
-import { bookingRoutes } from './routes/bookings.ts';
-import { paymentRoutes } from './routes/payments.ts';
-import { disputeRoutes } from './routes/disputes.ts';
-import { messageRoutes } from './routes/messages.ts';
-import { notificationRoutes } from './routes/notifications.ts';
-import { syncRoutes } from './routes/sync.ts';
-import { fileRoutes, filePublicRoutes } from './routes/files.ts';
-import { adminRoutes } from './routes/admin.ts';
-import { adminGeoRoutes } from './routes/admin-geo.ts';
-import { adminHomepageRoutes } from './routes/admin-homepage.ts';
-import { homepageRoutes } from './routes/homepage.ts';
-import { geoRoutes } from './routes/geo.ts';
-import { googleAuthRoutes } from './routes/google-auth.ts';
-import { webhookRoutes } from './routes/webhooks.ts';
-import { devRoutes } from './routes/dev.ts';
-import { trackingRoutes } from './routes/tracking.ts';
+import { registerRoutes } from './routes/register.ts';
 import { startRouteBackfill } from './services/trip-route.ts';
 
 declare module 'fastify' {
@@ -49,13 +25,6 @@ export interface BuildAppOptions {
   db?: Db;
   /** Pino options, when the caller wants Fastify to build its own logger. */
   logger?: FastifyServerOptions['logger'];
-  /**
-   * A ready-made logger instance. The Worker entry uses this: pino's default destination writes to
-   * a file descriptor, which the Workers virtual file system does not expose, so the Worker passes a
-   * console-backed logger instead. Fastify only accepts a logger *instance* through this option —
-   * handing an object with log methods to `logger` is treated as pino options and throws.
-   */
-  loggerInstance?: FastifyBaseLogger;
 }
 
 /**
@@ -115,9 +84,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     // the submission schema allows. It lives under `routerOptions` because Fastify 5 deprecates the
     // top-level key, which printed FSTDEP022 into the production log on every boot.
     routerOptions: { maxParamLength: 512 },
-    ...(options.loggerInstance
-      ? { loggerInstance: options.loggerInstance }
-      : { logger: options.logger ?? pinoOptions() }),
+    logger: options.logger ?? pinoOptions(),
     trustProxy: config.TRUST_PROXY,
     genReqId: () => crypto.randomUUID(),
     bodyLimit: 1_048_576,
@@ -174,14 +141,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       timeWindow: '1 minute',
     });
     app.addHook('preHandler', async (req, reply) => {
-      if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return;
-      const url = req.url.split('?')[0] ?? req.url;
-      if (url.startsWith('/v1/health') || url.startsWith('/v1/readiness')) return;
-      if (url.startsWith('/v1/webhooks/')) return;
-      // A route that declares `rateLimit: false` opts out of both limiters, not just the global one.
-      // `POST /dev/seed/reset` is the case that matters: it is throttled by nothing else, and when the
-      // write budget refused it there was no way to restore the demo data until the window rolled.
-      if ((req.routeOptions.config as { rateLimit?: unknown } | undefined)?.rateLimit === false) return;
+      // Shared with the Workers HTTP layer so the exclusions cannot drift apart.
+      if (!writeLimitApplies(req)) return;
       // The manual limiter does not behave like the route limiter. It answers `{ isAllowed: true }`
       // only for allow-listed keys; every ordinary request comes back `{ isAllowed: false, …}` with
       // the real verdict in `isExceeded` (`current > max`). Reading `isAllowed` here meant that with
@@ -204,102 +165,27 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   }
 
   // ---- error envelope (api/ERROR_CATALOG.md) ----
+  // One mapping for both hosts: `renderError` is also what the Workers layer calls.
   app.setErrorHandler((err, req, reply) => {
     const requestId = String(req.id);
+    const rendered = renderError(err, requestId);
 
-    if (err instanceof AppError) {
-      if (err.status >= 500) req.log.error({ err, code: err.code }, 'application error');
-      return reply.code(err.status).send(errorEnvelope(err.code, err.message, requestId, err.details));
-    }
-
-    if (err instanceof ZodError) {
-      const fields = err.issues.map((i) => ({ path: i.path.join('.'), message: i.message }));
-      return reply
-        .code(400)
-        .send(errorEnvelope('VALIDATION_FAILED', 'Please check the highlighted fields.', requestId, { fields }));
+    if (rendered.log === 'application') {
+      req.log.error({ err, code: (err as AppError).code }, 'application error');
+    } else if (rendered.log === 'unhandled') {
+      req.log.error({ err }, 'unhandled error');
     }
 
-    if ((err as { validation?: unknown }).validation) {
-      return reply.code(400).send(errorEnvelope('VALIDATION_FAILED', 'Please check the highlighted fields.', requestId));
-    }
-
-    const statusCode = (err as { statusCode?: number }).statusCode;
-    if (statusCode === 429) {
-      return reply.code(429).send(errorEnvelope('RATE_LIMITED', 'Too many requests. Please slow down.', requestId));
-    }
-    if (statusCode === 413) {
-      return reply.code(413).send(errorEnvelope('PAYLOAD_TOO_LARGE', 'That request is too large.', requestId));
-    }
-    if (statusCode === 415) {
-      return reply.code(415).send(errorEnvelope('VALIDATION_FAILED', 'Send JSON.', requestId));
-    }
-    if (statusCode && statusCode < 500) {
-      return reply
-        .code(statusCode)
-        .send(errorEnvelope('VALIDATION_FAILED', 'That request could not be processed.', requestId));
-    }
-
-    req.log.error({ err }, 'unhandled error');
-    return reply.code(500).send(errorEnvelope('INTERNAL_ERROR', 'Something went wrong on our side.', requestId));
+    return reply.code(rendered.status).send(rendered.body);
   });
 
   app.setNotFoundHandler((req, reply) => {
     reply.code(404).send(errorEnvelope('NOT_FOUND', 'We could not find that.', String(req.id)));
   });
 
-  app.get('/', async () => ({
-    name: 'Parcel Yatra API',
-    status: 'ok',
-    version: '0.1.0',
-    health: '/v1/health',
-  }));
-
-  const authenticate = makeAuthenticate(db);
-
-  await app.register(healthRoutes, { prefix: '/v1' });
-  await app.register(authRoutes, { prefix: '/v1' });
-  await app.register(catalogueRoutes, { prefix: '/v1' });
-  await app.register(geoRoutes, { prefix: '/v1' });
-  await app.register(webhookRoutes, { prefix: '/v1' });
-  // The homepage and its artwork are public and cacheable: an app opening on a cold start must not
-  // need a session to draw its first screen.
-  await app.register(homepageRoutes, { prefix: '/v1' });
-  // Signed file reads carry their own credential in the path, so they sit outside the auth hook.
-  await app.register(filePublicRoutes, { prefix: '/v1' });
-
-  await app.register(
-    async (scope) => {
-      scope.addHook('preHandler', authenticate);
-      await scope.register(meRoutes);
-      await scope.register(verificationRoutes);
-      await scope.register(parcelRoutes);
-      await scope.register(tripRoutes);
-      await scope.register(bookingRoutes);
-      await scope.register(paymentRoutes);
-      await scope.register(disputeRoutes);
-      await scope.register(messageRoutes);
-      await scope.register(notificationRoutes);
-      // Reconciliation feed for the web and mobile clients. Authenticated: it only ever reports
-      // what the caller is already allowed to read.
-      await scope.register(syncRoutes);
-      await scope.register(fileRoutes);
-    },
-    { prefix: '/v1' },
-  );
-
-  // Google OAuth endpoints are public: /auth/google/authorize is the sign-in entry point and
-  // /auth/google/callback is called from the browser after Google redirects, before any session
-  // exists — they must sit outside the authenticated scope.
-  await app.register(googleAuthRoutes, { prefix: '/v1' });
-  await app.register(trackingRoutes, { prefix: '/v1' });
-
-  await app.register(adminRoutes, { prefix: '/v1' });
-  await app.register(adminGeoRoutes, { prefix: '/v1' });
-  await app.register(adminHomepageRoutes, { prefix: '/v1' });
-
-  if (config.ENABLE_DEV_ENDPOINTS) {
-    await app.register(devRoutes, { prefix: '/v1' });
-  }
+  // The route table lives in `routes/register.ts`, shared with the Workers HTTP layer so the two
+  // hosts cannot mount different sets of endpoints.
+  await registerRoutes(app, { db });
 
   // ---- Background maintenance: prune expired OTP rate-limit counters ----------
   // Stale rows in otp_sms_counters are harmless (they reset on next access) but accumulate

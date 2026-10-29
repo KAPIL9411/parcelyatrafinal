@@ -55,12 +55,6 @@ function resolveKey(key: string): string {
   return path;
 }
 
-export async function ensureStorage(): Promise<void> {
-  if (config.STORAGE_PROVIDER === 'local') {
-    await mkdir(storageRoot(), { recursive: true });
-  }
-}
-
 export interface StoredObject {
   bytes: Buffer;
   contentType: string;

@@ -32,6 +32,9 @@
     "DATABASE_SSL": "require",
     "DATABASE_POOL_MAX": "3",
     "STORAGE_PROVIDER": "cloudinary",
+    // The compatibility layer reads the client address from `cf-connecting-ip`; this flag also
+    // gates the per-IP OTP budget in `routes/auth.ts`, which expects a trusted proxy in production.
+    "TRUST_PROXY": "true",
     "PUBLIC_API_URL": "https://parcel-yatra-api.example.workers.dev/v1"
   },
   // `wrangler deploy` refuses to upload until every one of these exists as a secret.

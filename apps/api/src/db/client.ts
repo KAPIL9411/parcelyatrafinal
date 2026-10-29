@@ -119,6 +119,15 @@ async function connectPg(): Promise<Db> {
 }
 
 async function connectPglite(): Promise<Db> {
+  // PGlite is a development engine. On Workers it would pull WebAssembly into the isolate and then
+  // fail (or, in `wrangler dev`, crash the runtime). Fail with a sentence the operator can act on
+  // instead; production already requires DATABASE_URL in `assertSafetyRails`.
+  const userAgent = (globalThis as { navigator?: { userAgent?: string } }).navigator?.userAgent;
+  if (userAgent === 'Cloudflare-Workers') {
+    throw new Error(
+      'DATABASE_URL is required on Cloudflare Workers: the embedded PGlite engine is development-only.',
+    );
+  }
   // Loaded on demand: production always sets DATABASE_URL and uses `pg`, and a Worker bundle must
   // not pull the embedded engine's WebAssembly (and its worker/fs assumptions) in for nothing.
   const { PGlite } = await import('@electric-sql/pglite');
