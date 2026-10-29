@@ -14,7 +14,10 @@
     "db:seed": "tsx src/db/seed.ts",
     "db:reset": "tsx src/db/reset.ts",
     "geo:matrix": "tsx scripts/geo-matrix.ts",
-    "test:load": "tsx scripts/load-test-tracking.ts"
+    "test:load": "tsx scripts/load-test-tracking.ts",
+    "dev:worker": "wrangler dev",
+    "build:worker": "wrangler deploy --dry-run --outdir dist-worker",
+    "deploy:worker": "wrangler deploy"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.11",
@@ -36,6 +39,7 @@
     "esbuild": "^0.25.0",
     "pino-pretty": "^13.2.0",
     "tsx": "^4.23.15",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "wrangler": "^4.155.0"
   }
 }

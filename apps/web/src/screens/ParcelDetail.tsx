@@ -69,7 +69,6 @@ export function ParcelDetail() {
     queryKey: ['parcel', parcelId],
     queryFn: () => api.get<ParcelWithBooking>(`/parcels/${parcelId}`),
     enabled: Boolean(user && parcelId),
-    refetchInterval: 30_000,
   });
 
   const offers = useQuery({

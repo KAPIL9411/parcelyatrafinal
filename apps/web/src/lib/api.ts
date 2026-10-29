@@ -174,8 +174,7 @@ async function request<T>(method: string, path: string, options: RequestOptions 
 }
 
 export const api = {
-  get: <T>(path: string, options?: Omit<RequestOptions, 'body'>) => request<T>('GET', path, options),
-  post: <T>(path: string, body?: unknown, options?: Omit<RequestOptions, 'body'>) =>
+  get: <T>(path: string, options?: Omit<RequestOptions, 'body'>) => request<T>('GET', path, options),  post: <T>(path: string, body?: unknown, options?: Omit<RequestOptions, 'body'>) =>
     request<T>('POST', path, { ...options, body }),
   patch: <T>(path: string, body?: unknown, options?: Omit<RequestOptions, 'body'>) =>
     request<T>('PATCH', path, { ...options, body }),
@@ -185,6 +184,26 @@ export const api = {
   /** A PUT that carries JSON rather than bytes. Kept separate from `put` so a File is never stringified. */
   putJson: <T>(path: string, body?: unknown, options?: Omit<RequestOptions, 'body'>) =>
     request<T>('PUT', path, { ...options, body }),
+};
+
+/**
+ * The change feed the clients poll instead of guessing when to refetch.
+ *
+ * `scopes` maps a domain to an opaque revision. A revision only changes when a row the caller is
+ * allowed to see changed, so comparing two polls is enough to decide which query families to
+ * invalidate. `counts` exists so a badge does not have to fetch a whole list to show a number.
+ */
+export interface SyncState {
+  generated_at: string;
+  revision: string;
+  scopes: Record<string, string>;
+  counts: { notifications_unread: number; messages_unread: number };
+  /** Present only for staff accounts. */
+  admin?: { pending_verifications: number; open_disputes: number; pending_payouts: number };
+}
+
+export const syncApi = {
+  state: (signal?: AbortSignal) => api.get<SyncState>('/sync/state', { signal }),
 };
 
 // ---------------------------------------------------------------------------- wire types

@@ -11,6 +11,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { ApiError } from '../src/api/http.ts';
 import { SessionProvider, useSession } from '../src/session.tsx';
+import { SyncBridge } from '../src/sync.tsx';
 import { colors, font, radius } from '../src/theme.ts';
 
 void SplashScreen.preventAutoHideAsync();
@@ -89,6 +90,7 @@ export default function RootLayout() {
   return (
     <QueryClientProvider client={queryClient}>
       <SessionProvider>
+        <SyncBridge />
         <Shell />
       </SessionProvider>
     </QueryClientProvider>

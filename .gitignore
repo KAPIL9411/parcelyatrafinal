@@ -5,6 +5,10 @@ node_modules/
 dist/
 apps/web/dist/
 
+# Cloudflare Workers: local dev state and dry-run bundle
+.wrangler/
+apps/api/dist-worker/
+
 # Local database (PGlite data directory) and uploads
 data/
 apps/api/data/

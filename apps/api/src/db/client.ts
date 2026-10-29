@@ -1,4 +1,4 @@
-import { PGlite } from '@electric-sql/pglite';
+import type { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
 import { mkdir } from 'node:fs/promises';
 
@@ -119,6 +119,9 @@ async function connectPg(): Promise<Db> {
 }
 
 async function connectPglite(): Promise<Db> {
+  // Loaded on demand: production always sets DATABASE_URL and uses `pg`, and a Worker bundle must
+  // not pull the embedded engine's WebAssembly (and its worker/fs assumptions) in for nothing.
+  const { PGlite } = await import('@electric-sql/pglite');
   // PGlite creates the leaf directory but not its parents.
   await mkdir(config.PGLITE_PATH, { recursive: true });
   const pglite = new PGlite(config.PGLITE_PATH);
@@ -129,12 +132,46 @@ async function connectPglite(): Promise<Db> {
 
 export async function getDb(): Promise<Db> {
   if (!instance) {
-    ready = (async () => {
+    ready ??= (async () => {
       instance = config.DATABASE_URL ? await connectPg() : await connectPglite();
     })();
+    try {
+      await ready;
+    } catch (err) {
+      // A failed connect must not poison the process. Without this reset the rejected promise stays
+      // cached and every later call fails with the first error, which on a long-lived Worker isolate
+      // means the isolate never recovers from a database blip.
+      ready = null;
+      throw err;
+    }
   }
-  await ready;
   return instance!;
+}
+
+/**
+ * A `Db` that opens the real connection on first use.
+ *
+ * The Worker entry uses this so that booting the HTTP app does not depend on the database being
+ * reachable. That matters for two reasons: a Worker starts per request, so a failed connect at boot
+ * would return a 500 before `/v1/health` could report *why*; and Fastify's own registration does not
+ * need a connection, only the routes do. Every call still goes through `getDb()`, so the pooling,
+ * driver selection and error handling are identical to the eager path.
+ */
+export function deferredDb(): Db {
+  return {
+    get driver() {
+      return config.DATABASE_URL ? 'pg' : 'pglite';
+    },
+    async query<T = Record<string, unknown>>(sql: string, params?: readonly unknown[]) {
+      return (await getDb()).query<T>(sql, params);
+    },
+    async exec(sql: string) {
+      return (await getDb()).exec(sql);
+    },
+    async transaction<T>(fn: (tx: Db) => Promise<T>) {
+      return (await getDb()).transaction(fn);
+    },
+  };
 }
 
 export async function closeDb(): Promise<void> {

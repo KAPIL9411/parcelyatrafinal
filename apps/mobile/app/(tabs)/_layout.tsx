@@ -14,7 +14,6 @@ function Bell() {
     queryKey: ['notifications'],
     queryFn: notificationsApi.list,
     enabled: status === 'signed_in',
-    refetchInterval: 60_000,
   });
   if (status !== 'signed_in') return null;
   const unread = notifications.data?.unread_count ?? 0;
@@ -148,7 +147,6 @@ export default function TabsLayout() {
     queryKey: ['conversations'],
     queryFn: conversationsApi.list,
     enabled: status === 'signed_in',
-    refetchInterval: 60_000,
   });
   const unreadMessages = inbox.data?.total_unread ?? 0;
 

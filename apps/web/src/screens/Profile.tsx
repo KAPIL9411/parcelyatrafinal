@@ -105,7 +105,6 @@ export function Profile() {
     queryKey: ['conversations'],
     queryFn: () => api.get<Inbox>('/conversations?limit=10'),
     enabled: Boolean(user),
-    refetchInterval: 60_000,
   });
 
   if (!user) return null;

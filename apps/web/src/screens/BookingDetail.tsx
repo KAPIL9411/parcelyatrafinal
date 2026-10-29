@@ -78,7 +78,6 @@ export function BookingDetail() {
     queryKey: ['booking', bookingId],
     queryFn: () => api.get<Booking>(`/bookings/${bookingId}`),
     enabled: Boolean(bookingId),
-    refetchInterval: 30_000,
   });
 
   const listQ = useQuery({

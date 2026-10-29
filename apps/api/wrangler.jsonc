@@ -1,0 +1,50 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "parcel-yatra-api",
+  "main": "src/worker.ts",
+  // 2026-08-04 enables nodejs_compat, node:fs, node:http (client and server) and process.env
+  // population by default. Do not lower this date without re-adding the flags by hand.
+  "compatibility_date": "2026-08-04",
+  "workers_dev": true,
+  "preview_urls": true,
+  "upload_source_maps": true,
+  "observability": {
+    "enabled": true
+  },
+  // Migrations are read from the virtual file system at /bundle/migrations. They are included as
+  // text modules so /v1/readiness can compare the schema with the checked-in files.
+  "find_additional_modules": true,
+  "preserve_file_names": true,
+  "base_dir": ".",
+  "rules": [{ "type": "Text", "globs": ["migrations/*.sql"], "fallthrough": true }],
+  // pino's package.json `browser` field points at a build that has no `symbols` export, and
+  // Wrangler's bundler prefers the browser condition. Fastify reads `pino.symbols` whenever it is
+  // given a logger at all, so the browser build throws `Cannot destructure property
+  // 'serializersSym' of 'pino.symbols'` before the first request. Pin the Node build: the Worker
+  // supplies its own logger instance, so pino is only ever inspected, never written through.
+  "alias": { "pino": "../../node_modules/pino/pino.js" },
+  // Worker-specific overrides. Everything else (secrets, provider keys, origins) is copied from
+  // the Render environment unchanged — see docs/CLOUDFLARE_MIGRATION.md.
+  "vars": {
+    "NODE_ENV": "production",
+    "JOBS_ENABLED": "false",
+    "MIGRATE_ON_BOOT": "false",
+    "DATABASE_SSL": "require",
+    "DATABASE_POOL_MAX": "3",
+    "STORAGE_PROVIDER": "cloudinary",
+    "PUBLIC_API_URL": "https://parcel-yatra-api.example.workers.dev/v1"
+  },
+  // `wrangler deploy` refuses to upload until every one of these exists as a secret.
+  "secrets": {
+    "required": [
+      "DATABASE_URL",
+      "JWT_ACCESS_SECRET",
+      "JWT_REFRESH_SECRET",
+      "OTP_HMAC_SECRET",
+      "PHONE_HASH_SECRET",
+      "OTP_SEAL_SECRET",
+      "FILE_SIGNING_SECRET",
+      "PAYMENT_WEBHOOK_SECRET"
+    ]
+  }
+}

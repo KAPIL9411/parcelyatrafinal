@@ -34,7 +34,6 @@ export default function InboxScreen() {
     queryKey: ['conversations'],
     queryFn: conversationsApi.list,
     enabled: status === 'signed_in',
-    refetchInterval: 30_000,
   });
   const bookings = useQuery({
     queryKey: ['bookings', 'all'],

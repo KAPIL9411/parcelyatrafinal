@@ -131,13 +131,11 @@ export default function HomeScreen() {
     queryKey: ['conversations'],
     queryFn: conversationsApi.list,
     enabled: status === 'signed_in',
-    refetchInterval: 60_000,
   });
   const notifications = useQuery({
     queryKey: ['notifications'],
     queryFn: notificationsApi.list,
     enabled: status === 'signed_in',
-    refetchInterval: 60_000,
   });
 
   const palette = homepage.palette;

@@ -1,4 +1,8 @@
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, {
+  type FastifyBaseLogger,
+  type FastifyInstance,
+  type FastifyServerOptions,
+} from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
@@ -21,6 +25,7 @@ import { paymentRoutes } from './routes/payments.ts';
 import { disputeRoutes } from './routes/disputes.ts';
 import { messageRoutes } from './routes/messages.ts';
 import { notificationRoutes } from './routes/notifications.ts';
+import { syncRoutes } from './routes/sync.ts';
 import { fileRoutes, filePublicRoutes } from './routes/files.ts';
 import { adminRoutes } from './routes/admin.ts';
 import { adminGeoRoutes } from './routes/admin-geo.ts';
@@ -39,11 +44,68 @@ declare module 'fastify' {
   }
 }
 
-export async function buildApp(): Promise<FastifyInstance> {
+export interface BuildAppOptions {
+  /** Use an already-connected database instead of the process-wide singleton. */
+  db?: Db;
+  /** Pino options, when the caller wants Fastify to build its own logger. */
+  logger?: FastifyServerOptions['logger'];
+  /**
+   * A ready-made logger instance. The Worker entry uses this: pino's default destination writes to
+   * a file descriptor, which the Workers virtual file system does not expose, so the Worker passes a
+   * console-backed logger instead. Fastify only accepts a logger *instance* through this option —
+   * handing an object with log methods to `logger` is treated as pino options and throws.
+   */
+  loggerInstance?: FastifyBaseLogger;
+}
+
+/**
+ * The production logger configuration.
+ *
+ * Structured logs only. Never log request bodies: they contain names, phones and addresses. The
+ * redaction list is the reason the Worker's console logger repeats the same key names — a Worker log
+ * stream is as sensitive as a container log stream.
+ */
+function pinoOptions(): FastifyServerOptions['logger'] {
+  return {
+    level: config.LOG_LEVEL,
+    redact: {
+      paths: [
+        'req.headers.authorization',
+        'req.headers.cookie',
+        'req.headers["idempotency-key"]',
+        'res.headers["set-cookie"]',
+        // The operator-log SMS sink writes the code as a top-level field, and `*.otp` only reaches
+        // one nesting level, so the bare key below is what keeps it out of the log. A bare `code`
+        // is deliberately not listed: the error handler logs the error code there.
+        'otp',
+        '*.otp',
+        '*.code',
+        '*.code_hash',
+        '*.code_sealed',
+        '*.phone',
+        '*.receiver_phone',
+        '*.refresh_token',
+        '*.access_token',
+        '*.email',
+        '*.user_email',
+        '*.recovery_email',
+        'req.body.email',
+        'req.body.receiver_email',
+      ],
+      censor: '[redacted]',
+    },
+    transport:
+      config.NODE_ENV === 'development'
+        ? { target: 'pino-pretty', options: { translateTime: 'HH:MM:ss', ignore: 'pid,hostname' } }
+        : undefined,
+  };
+}
+
+export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   // Checked here as well as at the process entry point: any other caller of buildApp() — a test, a
   // worker, a future second entry — must hit the same rails.
   assertSafetyRails(config);
-  const db = await getDb();
+  const db = options.db ?? (await getDb());
 
   const app = Fastify({
     // Fastify's default is 100, and a signed file token is longer than that: the object key, the
@@ -53,40 +115,9 @@ export async function buildApp(): Promise<FastifyInstance> {
     // the submission schema allows. It lives under `routerOptions` because Fastify 5 deprecates the
     // top-level key, which printed FSTDEP022 into the production log on every boot.
     routerOptions: { maxParamLength: 512 },
-    logger: {
-      level: config.LOG_LEVEL,
-      // Structured logs only. Never log request bodies: they contain names, phones and addresses.
-      redact: {
-        paths: [
-          'req.headers.authorization',
-          'req.headers.cookie',
-          'req.headers["idempotency-key"]',
-          'res.headers["set-cookie"]',
-          // The operator-log SMS sink writes the code as a top-level field, and `*.otp` only reaches
-          // one nesting level, so the bare key below is what keeps it out of the log. A bare `code`
-          // is deliberately not listed: the error handler logs the error code there.
-          'otp',
-          '*.otp',
-          '*.code',
-          '*.code_hash',
-          '*.code_sealed',
-          '*.phone',
-          '*.receiver_phone',
-          '*.refresh_token',
-          '*.access_token',
-          '*.email',
-          '*.user_email',
-          '*.recovery_email',
-          'req.body.email',
-          'req.body.receiver_email',
-        ],
-        censor: '[redacted]',
-      },
-      transport:
-        config.NODE_ENV === 'development'
-          ? { target: 'pino-pretty', options: { translateTime: 'HH:MM:ss', ignore: 'pid,hostname' } }
-          : undefined,
-    },
+    ...(options.loggerInstance
+      ? { loggerInstance: options.loggerInstance }
+      : { logger: options.logger ?? pinoOptions() }),
     trustProxy: config.TRUST_PROXY,
     genReqId: () => crypto.randomUUID(),
     bodyLimit: 1_048_576,
@@ -248,6 +279,9 @@ export async function buildApp(): Promise<FastifyInstance> {
       await scope.register(disputeRoutes);
       await scope.register(messageRoutes);
       await scope.register(notificationRoutes);
+      // Reconciliation feed for the web and mobile clients. Authenticated: it only ever reports
+      // what the caller is already allowed to read.
+      await scope.register(syncRoutes);
       await scope.register(fileRoutes);
     },
     { prefix: '/v1' },

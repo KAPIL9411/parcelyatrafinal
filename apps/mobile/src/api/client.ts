@@ -334,6 +334,26 @@ export const conversationsApi = {
   list: () => http.get<Inbox>('/conversations?limit=50'),
 };
 
+/**
+ * The change feed the app polls instead of guessing when to refetch.
+ *
+ * `scopes` maps a domain to an opaque revision that only moves when a row the caller may see
+ * changed, so comparing two polls tells the client which query families to invalidate. The feed
+ * carries no parcel, contact or message data of its own.
+ */
+export interface SyncState {
+  generated_at: string;
+  revision: string;
+  scopes: Record<string, string>;
+  counts: { notifications_unread: number; messages_unread: number };
+  /** Present only for staff accounts; the mobile build has no staff screens. */
+  admin?: { pending_verifications: number; open_disputes: number; pending_payouts: number };
+}
+
+export const syncApi = {
+  state: () => http.get<SyncState>('/sync/state'),
+};
+
 export const filesApi = {
   /**
    * The API's own upload sink. `PUT` takes the raw bytes, so the caller keeps the file on device

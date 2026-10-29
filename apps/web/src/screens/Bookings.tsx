@@ -52,7 +52,6 @@ export function Bookings() {
     queryFn: () =>
       api.get<BookingList>(`/bookings?limit=100${filter === 'all' ? '' : `&role=${filter}`}`),
     enabled: Boolean(user),
-    refetchInterval: 30_000,
   });
 
   /**
@@ -64,7 +63,6 @@ export function Bookings() {
     queryKey: ['parcels', 'mine'],
     queryFn: () => api.get<ParcelList>('/parcels?limit=50'),
     enabled: Boolean(user),
-    refetchInterval: 60_000,
   });
 
   const awaitingChoice = (parcels.data?.items ?? []).filter(

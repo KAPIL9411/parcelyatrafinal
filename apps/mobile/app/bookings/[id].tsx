@@ -64,7 +64,6 @@ function BookingDetail({ bookingId }: { bookingId: string }) {
   const bookingQ = useQuery({
     queryKey: ['booking', bookingId],
     queryFn: () => bookingsApi.get(bookingId),
-    refetchInterval: 30_000,
   });
   const booking = bookingQ.data;
 

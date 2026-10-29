@@ -27,28 +27,36 @@ export interface ITrackingStore {
   close(): Promise<void>;
 }
 
+/** How often `MemoryTrackingStore` is allowed to walk the map for expired entries. */
+const SWEEP_INTERVAL_MS = 30_000;
+
 /**
  * High-performance In-Memory Tracking Store with TTL and Pub/Sub.
  * Used automatically when REDIS_URL is not configured (e.g. local dev, testing, single-node).
+ *
+ * Eviction is lazy rather than timer-driven. A `setInterval` in the constructor is a timer created
+ * at module scope, and the Workers runtime rejects that outright — the isolate fails to start
+ * before it can answer a single request. Sweeping on write keeps the same 30-second granularity,
+ * keeps the map bounded in a long-lived Node process, and has no global-scope side effect.
  */
 class MemoryTrackingStore implements ITrackingStore {
   private locations = new Map<string, { data: LiveLocationPacket; expiresAt: number }>();
   private geofences = new Set<string>();
   private emitter = new EventEmitter();
-  private cleanupInterval: NodeJS.Timeout;
+  private nextSweepAt = 0;
 
   constructor() {
     this.emitter.setMaxListeners(50000);
-    // Periodically sweep expired entries (every 30s)
-    this.cleanupInterval = setInterval(() => {
-      const now = Date.now();
-      for (const [key, entry] of this.locations.entries()) {
-        if (entry.expiresAt <= now) {
-          this.locations.delete(key);
-        }
-      }
-    }, 30000);
-    this.cleanupInterval.unref();
+  }
+
+  /** Drops entries whose TTL has passed, at most once per `SWEEP_INTERVAL_MS`. */
+  private sweepExpired(): void {
+    const now = Date.now();
+    if (now < this.nextSweepAt) return;
+    this.nextSweepAt = now + SWEEP_INTERVAL_MS;
+    for (const [key, entry] of this.locations) {
+      if (entry.expiresAt <= now) this.locations.delete(key);
+    }
   }
 
   async setLatestLocation(
@@ -56,6 +64,7 @@ class MemoryTrackingStore implements ITrackingStore {
     data: LiveLocationPacket,
     ttlSeconds = TRACKING_CONFIG.REDIS_LOCATION_TTL_SECONDS,
   ): Promise<void> {
+    this.sweepExpired();
     const expiresAt = Date.now() + ttlSeconds * 1000;
     this.locations.set(`parcel:${parcelId}:loc`, { data, expiresAt });
   }
@@ -96,7 +105,6 @@ class MemoryTrackingStore implements ITrackingStore {
   }
 
   async close(): Promise<void> {
-    clearInterval(this.cleanupInterval);
     this.emitter.removeAllListeners();
     this.locations.clear();
     this.geofences.clear();
@@ -206,8 +214,41 @@ class RedisTrackingStore implements ITrackingStore {
   }
 }
 
-// Export singleton instance based on configuration
-export const trackingStore: ITrackingStore = config.REDIS_URL
-  ? new RedisTrackingStore(config.REDIS_URL)
-  : new MemoryTrackingStore();
+let store: ITrackingStore | null = null;
+
+/**
+ * Built on first use, never at import time.
+ *
+ * `new RedisTrackingStore()` opens two TCP connections in its constructor, and `ioredis` starts
+ * them immediately. At module scope that is asynchronous I/O in the global scope, which the
+ * Workers runtime forbids for exactly the same reason it forbids a global `setInterval`. The
+ * first request that needs the store builds it inside the request context, where both are legal.
+ */
+function resolveStore(): ITrackingStore {
+  if (store) return store;
+  store = config.REDIS_URL ? new RedisTrackingStore(config.REDIS_URL) : new MemoryTrackingStore();
+  return store;
+}
+
+/**
+ * The process-wide tracking store, resolved lazily.
+ *
+ * The exported value is a thin delegating object rather than the store itself so that importing
+ * this module never has a side effect. Call sites keep using `trackingStore.method(...)`.
+ */
+export const trackingStore: ITrackingStore = {
+  setLatestLocation: (parcelId, data, ttlSeconds) =>
+    resolveStore().setLatestLocation(parcelId, data, ttlSeconds),
+  getLatestLocation: (parcelId) => resolveStore().getLatestLocation(parcelId),
+  publishLocation: (parcelId, data) => resolveStore().publishLocation(parcelId, data),
+  subscribeToParcel: (parcelId, listener) => resolveStore().subscribeToParcel(parcelId, listener),
+  atomicTriggerGeofence: (bookingId, radius) =>
+    resolveStore().atomicTriggerGeofence(bookingId, radius),
+  close: async () => {
+    const current = store;
+    // Cleared first so a call after shutdown rebuilds instead of reusing a closed client.
+    store = null;
+    if (current) await current.close();
+  },
+};
 
