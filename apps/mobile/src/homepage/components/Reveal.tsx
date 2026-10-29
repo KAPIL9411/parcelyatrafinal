@@ -5,7 +5,7 @@
  * `Animated`, no layout work and no new dependency. It honours the OS reduced-motion setting, and on
  * web it runs on the JS driver because native-driven opacity is not available there.
  */
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   AccessibilityInfo,
   Animated,
@@ -24,7 +24,9 @@ export function Reveal({
   delay?: number;
   style?: StyleProp<ViewStyle>;
 }) {
-  const progress = useRef(new Animated.Value(0)).current;
+  // `Animated.Value` is state, not a ref: it is read during render (opacity, transform) and the React
+  // compiler's ref rules correctly refuse that. A lazy state initialiser gives one stable instance.
+  const [progress] = useState(() => new Animated.Value(0));
 
   useEffect(() => {
     let cancelled = false;

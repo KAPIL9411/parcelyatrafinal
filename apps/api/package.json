@@ -13,7 +13,8 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed": "tsx src/db/seed.ts",
     "db:reset": "tsx src/db/reset.ts",
-    "geo:matrix": "tsx scripts/geo-matrix.ts"
+    "geo:matrix": "tsx scripts/geo-matrix.ts",
+    "test:load": "tsx scripts/load-test-tracking.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.11",
@@ -23,8 +24,10 @@
     "@py/domain": "*",
     "dotenv": "^18.0.9",
     "fastify": "^5.12.7",
+    "ioredis": "^6.0.0",
     "jose": "^6.2.13",
     "pg": "^8.23.1",
+    "socket.io": "^4.8.4",
     "zod": "^4.6.7"
   },
   "devDependencies": {

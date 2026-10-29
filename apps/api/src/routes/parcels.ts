@@ -23,6 +23,7 @@ import { resolveCityDistance, type ResolvedRoute } from '../lib/routing.ts';
 import { num, parcelView, toIso } from '../lib/serialize.ts';
 import { keyBelongsTo } from '../lib/storage.ts';
 import { audit } from '../services/audit.ts';
+import { loadTripRoutes } from '../services/trip-route.ts';
 
 const createSchema = z
   .object({
@@ -565,22 +566,31 @@ export async function computeMatches(
   corridor: Corridor,
 ) {
   const policy = matchPolicy;
-  const [assigned, originIds] = await Promise.all([
+  const assigned = await app.db.query<{ assigned: boolean }>(
     // The status list is the predicate of the `bookings_one_active_per_parcel` partial index, written
     // out verbatim so this existence check can use that index. It is a compile-time constant.
-    app.db.query<{ assigned: boolean }>(
-      `SELECT EXISTS (
-         SELECT 1 FROM bookings
-         WHERE parcel_id = $1
-           AND status NOT IN ('cancelled_by_sender','cancelled_by_traveller','cancelled_ineligible',
-                              'cancelled_safety','expired','refunded','paid_out')
-       ) AS assigned`,
-      [parcel.id],
-    ),
-    nearbyCityIds(app, corridor.origin, policy.maxOriginDetourKm),
-  ]);
+    `SELECT EXISTS (
+       SELECT 1 FROM bookings
+       WHERE parcel_id = $1
+         AND status NOT IN ('cancelled_by_sender','cancelled_by_traveller','cancelled_ineligible',
+                            'cancelled_safety','expired','refunded','paid_out')
+     ) AS assigned`,
+    [parcel.id],
+  );
 
-  const windowEndMs = new Date(parcel.window_end).getTime() + policy.arrivalGraceHours * 3_600_000;
+  const requiredKg = num(parcel.weight_kg) * policy.packagingAllowance;
+  const originPoint = { lat: Number(corridor.origin.lat), lng: Number(corridor.origin.lng) };
+  const destPoint = { lat: Number(corridor.dest.lat), lng: Number(corridor.dest.lng) };
+  const pad = corridorPad(originPoint.lat, destPoint.lat, policy.maxCorridorKm);
+
+  // Stage A. Two ways to be a candidate, and only two:
+  //   1. the exact city pair — always valid, geometry or not; or
+  //   2. the trip's stored route bounding box covers both of the parcel's cities, widened by the
+  //      corridor limit. That is a plain btree comparison on four numeric columns; it deliberately
+  //      does not use PostGIS, because Neon may not have it and a bounding box is enough to reject
+  //      the obvious misses.
+  // Eligibility is *not* decided here. The engine below still checks every gate; this query only
+  // keeps the candidate set small enough to run without a routing call per trip.
   const res = await app.db.query<{
     id: string;
     traveller_id: string;
@@ -605,15 +615,42 @@ export async function computeMatches(
      FROM trips t
      JOIN cities oc ON oc.id = t.origin_city_id
      JOIN users u ON u.id = t.traveller_id
-     WHERE t.dest_city_id = $1
-       AND t.origin_city_id = ANY($2::uuid[])
-       AND t.status IN ('published','partially_booked')
+     WHERE t.status IN ('published','partially_booked')
        AND t.departure_at > now()
-       AND t.departure_at <= $3
-       AND t.arrival_estimate_at <= $4
+       AND t.departure_at <= $1
+       AND t.capacity_kg_remaining >= $2
+       AND (
+         (t.origin_city_id = $3 AND t.dest_city_id = $4)
+         OR (
+           t.route_min_lat IS NOT NULL
+           AND t.route_min_lat <= $5 AND t.route_max_lat >= $6
+           AND t.route_min_lng <= $7 AND t.route_max_lng >= $8
+           AND t.route_min_lat <= $9 AND t.route_max_lat >= $10
+           AND t.route_min_lng <= $11 AND t.route_max_lng >= $12
+         )
+       )
      ORDER BY t.departure_at
-     LIMIT $5`,
-    [parcel.dest_city_id, originIds, new Date(parcel.window_end), new Date(windowEndMs), config.MATCH_CANDIDATE_SCAN_LIMIT],
+     LIMIT $13`,
+    [
+      new Date(parcel.window_end),
+      requiredKg,
+      parcel.origin_city_id,
+      parcel.dest_city_id,
+      originPoint.lat + pad.lat,
+      originPoint.lat - pad.lat,
+      originPoint.lng + pad.lng,
+      originPoint.lng - pad.lng,
+      destPoint.lat + pad.lat,
+      destPoint.lat - pad.lat,
+      destPoint.lng + pad.lng,
+      destPoint.lng - pad.lng,
+      config.MATCH_CANDIDATE_SCAN_LIMIT,
+    ],
+  );
+
+  const routes = await loadTripRoutes(
+    app,
+    res.rows.map((r) => r.id),
   );
 
   const travellerIds = [...new Set(res.rows.map((r) => r.traveller_id))];
@@ -645,7 +682,6 @@ export async function computeMatches(
   );
   const historyByUser = new Map(history.rows.map((r) => [r.traveller_id, r]));
 
-  const originPoint = { lat: Number(corridor.origin.lat), lng: Number(corridor.origin.lng) };
   const candidates: TripCandidate[] = res.rows.map((r) => {
     const done = historyByUser.get(r.traveller_id);
     return {
@@ -660,6 +696,7 @@ export async function computeMatches(
         r.origin_city_id === parcel.origin_city_id
           ? 0
           : round1(haversineKm(originPoint, { lat: Number(r.origin_lat), lng: Number(r.origin_lng) })),
+      route: routes.get(r.id)?.geometry ?? null,
       departureAt: new Date(r.departure_at),
       arrivalEstimateAt: new Date(r.arrival_estimate_at),
       capacityKg: num(r.capacity_kg),
@@ -683,6 +720,8 @@ export async function computeMatches(
       destCityId: parcel.dest_city_id,
       parcelOriginArea: parcel.origin_area,
       parcelDestArea: parcel.dest_area,
+      parcelOrigin: originPoint,
+      parcelDest: destPoint,
       originServiceable: corridor.origin.is_serviceable,
       destServiceable: corridor.dest.is_serviceable,
       category: parcel.category as Category,
@@ -708,4 +747,16 @@ export async function computeMatches(
   }
 
   return result;
+}
+
+/**
+ * Degrees of latitude/longitude that cover `km` at the parcel's latitude. Longitude degrees shrink
+ * with latitude; the 0.2 floor keeps the padding finite near the poles, where a degree of longitude is
+ * almost nothing and a division would otherwise explode.
+ */
+export function corridorPad(originLat: number, destLat: number, km: number): { lat: number; lng: number } {
+  const midLat = (originLat + destLat) / 2;
+  const lat = km / 111;
+  const lng = km / (111 * Math.max(0.2, Math.cos((midLat * Math.PI) / 180)));
+  return { lat, lng };
 }

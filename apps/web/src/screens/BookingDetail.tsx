@@ -10,7 +10,7 @@ import {
   type DisputeCategory,
 } from '@py/domain';
 
-import { api, type Booking, type BookingSummary, type Dispute, type PaymentIntent } from '../lib/api';
+import { api, type Booking, type BookingSummary, type Dispute, type PaymentIntent, getAccessToken } from '../lib/api';
 import { errorCopy } from '../lib/copy';
 import { countdown, formatDateTime, formatWindow, inr } from '../lib/format';
 import { useCountdown, useDevCode, useDocumentTitle, useHandoverCode } from '../lib/hooks';
@@ -38,6 +38,7 @@ import { ChatPanel } from '../components/ChatPanel';
 import { OtpInput } from '../components/OtpInput';
 import { LastUpdated, Timeline } from '../components/Timeline';
 import { RouteLine } from '../components/RouteLine';
+import { LiveTrackingMap } from '../components/LiveTrackingMap';
 import {
   AlertTriangleIcon,
   CameraIcon,
@@ -190,6 +191,10 @@ export function BookingDetail() {
           </div>
         ) : null}
       </Card>
+
+      {['picked_up', 'in_transit', 'arrived'].includes(booking.status) ? (
+        <LiveTrackingMap parcelId={booking.parcel_id} bookingId={booking.id} token={getAccessToken()} />
+      ) : null}
 
       <ActionPanel booking={booking} role={role} onChanged={refresh} />
 

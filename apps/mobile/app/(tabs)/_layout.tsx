@@ -76,7 +76,7 @@ function SendButton() {
  * this file does not depend on an internal type path.
  */
 interface PillTabBarProps {
-  state: { index: number; routes: Array<{ key: string; name: string }> };
+  state: { index: number; routes: { key: string; name: string }[] };
   descriptors: Record<
     string,
     {

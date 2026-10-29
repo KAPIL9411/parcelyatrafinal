@@ -27,8 +27,8 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import type { HomeHero } from '@py/domain';
 import { AppText } from '../../components/ui.tsx';
 import { font, radius, spacing } from '../../theme.ts';
-import { Decoration, Scrim } from './Decorations.tsx';
-import { withAlpha, type HomePalette } from '../theme.ts';
+import { Decoration } from './Decorations.tsx';
+import type { HomePalette } from '../theme.ts';
 
 const ROTATE_MS = 6_500;
 

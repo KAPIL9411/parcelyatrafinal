@@ -30,6 +30,8 @@ import { geoRoutes } from './routes/geo.ts';
 import { googleAuthRoutes } from './routes/google-auth.ts';
 import { webhookRoutes } from './routes/webhooks.ts';
 import { devRoutes } from './routes/dev.ts';
+import { trackingRoutes } from './routes/tracking.ts';
+import { startRouteBackfill } from './services/trip-route.ts';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -255,6 +257,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   // /auth/google/callback is called from the browser after Google redirects, before any session
   // exists — they must sit outside the authenticated scope.
   await app.register(googleAuthRoutes, { prefix: '/v1' });
+  await app.register(trackingRoutes, { prefix: '/v1' });
 
   await app.register(adminRoutes, { prefix: '/v1' });
   await app.register(adminGeoRoutes, { prefix: '/v1' });
@@ -290,6 +293,19 @@ export async function buildApp(): Promise<FastifyInstance> {
       void pruneOtpCounters();
       const interval = setInterval(() => void pruneOtpCounters(), 24 * 60 * 60 * 1000);
       interval.unref();
+    });
+
+    // Trip route measurement: live trips that have no usable road geometry yet are measured a few at
+    // a time, in the background. This is the only place corridor matching touches the routing
+    // provider, and it never runs inside a request. Disabled with JOBS_ENABLED, which tests set to
+    // false so a suite never calls a public OSRM instance.
+    let stopRouteBackfill: (() => void) | null = null;
+    app.addHook('onReady', async () => {
+      stopRouteBackfill = startRouteBackfill(app);
+    });
+    app.addHook('onClose', async () => {
+      stopRouteBackfill?.();
+      stopRouteBackfill = null;
     });
   }
 

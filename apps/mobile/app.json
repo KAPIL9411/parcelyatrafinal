@@ -22,7 +22,11 @@
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
       ]
     },
     "web": {
@@ -48,6 +52,16 @@
         {
           "photosPermission": "Parcel Yatra needs access to your photos so you can attach a sealed-parcel photo or an identity document.",
           "cameraPermission": "Parcel Yatra uses the camera to photograph a sealed parcel or an identity document."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow Parcel Yatra to track your live location during active parcel transit.",
+          "locationAlwaysPermission": "Allow Parcel Yatra to track your delivery location in the background.",
+          "locationWhenInUsePermission": "Allow Parcel Yatra to track your delivery route.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
         }
       ]
     ],

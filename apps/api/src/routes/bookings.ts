@@ -27,6 +27,7 @@ import { keyBelongsTo } from '../lib/storage.ts';
 import { matchPolicy } from '../lib/matching-policy.ts';
 import { withIdempotency } from '../lib/idempotency.ts';
 import { audit, emitOutbox, queueNotification } from '../services/audit.ts';
+import { trackingService } from '../services/tracking-service.ts';
 
 const createSchema = z
   .object({
@@ -321,6 +322,25 @@ export async function applyBookingTransition(
   }
   if (result.to === 'payout_eligible') {
     await db.query(`UPDATE payouts SET state = 'eligible' WHERE booking_id = $1`, [booking.id]);
+  }
+
+  const stageMap: Partial<Record<BookingStatus, string>> = {
+    picked_up: 'picked_up',
+    in_transit: 'in_transit',
+    arrived: 'out_for_delivery',
+    delivered: 'delivered',
+  };
+  const trackedStage = stageMap[result.to];
+  if (trackedStage) {
+    await db.query(
+      `INSERT INTO parcel_status_log (parcel_id, booking_id, stage, actor_id, note)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [booking.parcel_id, booking.id, trackedStage, opts.actorId ?? null, `Transitioned via ${command}`],
+    ).catch(() => {});
+  }
+
+  if (result.to === 'delivered' || releasesCapacity) {
+    await trackingService.stopTracking(booking.id).catch(() => {});
   }
 
   const alert = TRANSITION_ALERTS[command];

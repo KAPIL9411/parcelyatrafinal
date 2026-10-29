@@ -127,6 +127,14 @@ export interface TripRow {
   accepts_documents_only: boolean;
   status: string;
   created_at: Date | string;
+  /**
+   * Additive: how the trip's road geometry was obtained. `pending`/`unavailable` means matching is
+   * limited to an exact city pair until the background measurement succeeds. Older clients ignore
+   * these keys, which is why they are additive rather than a contract change.
+   */
+  route_status?: string | null;
+  route_source?: string | null;
+  route_distance_m?: number | null;
 }
 
 export function tripView(row: TripRow) {
@@ -143,6 +151,9 @@ export function tripView(row: TripRow) {
     accepts_documents_only: row.accepts_documents_only,
     status: row.status,
     created_at: toIso(row.created_at),
+    route_status: row.route_status ?? 'pending',
+    route_source: row.route_source ?? null,
+    route_distance_km: row.route_distance_m == null ? null : Math.round(Number(row.route_distance_m) / 100) / 10,
   };
 }
 

@@ -4,6 +4,9 @@ import { closeDb, getDb, schemaExists } from './db/client.ts';
 import { pendingMigrations, runMigrations } from './db/migrations.ts';
 import { seedDatabase } from './db/seed.ts';
 import { ensureHomepageSeed } from './lib/homepage.ts';
+import { initSocketServer } from './socket/index.ts';
+import { trackingStore } from './services/redis.ts';
+import { historyWorker } from './services/history-worker.ts';
 
 /**
  * Boot sequence.
@@ -56,9 +59,13 @@ async function main(): Promise<void> {
   await ensureHomepageSeed(db);
 
   const app = await buildApp();
+  const io = initSocketServer(app.server, db);
 
   const shutdown = async (signal: string) => {
     console.log(`\n${signal} received, shutting down.`);
+    io.close();
+    await trackingStore.close();
+    await historyWorker.close();
     await app.close();
     await closeDb();
     process.exit(0);

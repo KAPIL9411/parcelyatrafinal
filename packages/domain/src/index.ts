@@ -4,6 +4,7 @@ export * from './eligibility.ts';
 export * from './pricing.ts';
 export * from './launch-pricing.ts';
 export * from './matching.ts';
+export * from './route-match.ts';
 export * from './booking-machine.ts';
 export * from './refunds.ts';
 export * from './homepage.ts';

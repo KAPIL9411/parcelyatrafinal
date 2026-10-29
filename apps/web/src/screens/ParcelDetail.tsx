@@ -524,7 +524,10 @@ function MatchRow({ match, busy, onBook }: { match: Match; busy: boolean; onBook
           Departs <span className="font-semibold text-ink-900">{formatDateTime(match.departure_at)}</span>
         </p>
         <p className="text-ink-700">
-          Arrives <span className="font-semibold text-ink-900">~{formatDateTime(match.arrival_estimate_at)}</span>
+          Drop by{' '}
+          <span className="font-semibold text-ink-900">
+            ~{formatDateTime(match.drop_eta_at ?? match.arrival_estimate_at)}
+          </span>
         </p>
       </div>
 
@@ -532,7 +535,9 @@ function MatchRow({ match, busy, onBook }: { match: Match; busy: boolean; onBook
         <span className="inline-flex items-center gap-1">
           <ParcelIcon size={14} /> {kg(match.capacity_kg_remaining)} space left
         </span>
-        {match.pickup_distance_band_km && match.pickup_distance_band_km !== '<1' ? (
+        {match.detour_km !== undefined ? (
+          <span>{match.detour_km === 0 ? 'On the route' : `+${match.detour_km} km detour`}</span>
+        ) : match.pickup_distance_band_km && match.pickup_distance_band_km !== '<1' ? (
           <span>Starts {match.pickup_distance_band_km} km away, as the crow flies</span>
         ) : null}
         <span>Price {inr(match.indicative_price_paise)}</span>

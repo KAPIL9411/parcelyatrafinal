@@ -160,6 +160,10 @@ const schema = z.object({
   DISPUTE_WINDOW_HOURS: int(72, 1),
   REVIEW_WINDOW_DAYS: int(7, 1),
 
+  // Real-time live tracking and caching
+  REDIS_URL: z.string().optional(),
+  OSRM_ROUTER_URL: z.string().default('https://router.project-osrm.org'),
+
   // Road-distance routing. `none` means no provider is configured: distances come from stored route
   // edges or the cache, and any fallback is labelled an estimate. The matrix is filled by
   // `npm run geo:matrix`, never on the request path.
@@ -188,10 +192,29 @@ const schema = z.object({
   MATCH_ARRIVAL_GRACE_HOURS: int(2, 0, 24),
   MATCH_MIN_SCORE: int(50, 0, 100),
   MATCH_MAX_RESULTS: int(10, 1, 50),
-  /** Optional override: `time=30,departure=20,detour=20,reliability=15,capacity=10,preference=5`. */
+  /**
+   * Route-corridor limits. A parcel's city may sit this far from the traveller's road and still be
+   * "on the way"; beyond it the parcel is a detour, not a corridor match.
+   */
+  MATCH_MAX_CORRIDOR_KM: int(8, 0, 50),
+  /** Extra road distance (out and back at both ends) a trip may absorb for one parcel. */
+  MATCH_MAX_DETOUR_KM: int(16, 0, 100),
+  /** Minimum distance along the route between pickup and delivery. */
+  MATCH_MIN_LEG_KM: int(1, 0, 100),
+  /**
+   * When true, a straight-line fallback is not evidence of a road: only provider-measured geometry
+   * (or an exact city pair) can produce a match. Off at launch so a routing outage degrades to fewer
+   * matches rather than none.
+   */
+  MATCH_REQUIRE_ROUTED_GEOMETRY: bool(false),
+  /** Optional override: `time=25,departure=15,detour=15,alignment=15,reliability=15,capacity=10,preference=5`. */
   MATCH_WEIGHTS: z.string().default(''),
   /** Hard cap on trips read per match request, so a busy corridor cannot exhaust the pool. */
   MATCH_CANDIDATE_SCAN_LIMIT: int(200, 10, 1000),
+  /** Route geometry refresh window for trips; a trip re-measures after this many days. */
+  MATCH_ROUTE_TTL_DAYS: int(14, 1, 90),
+  /** How many pending trip routes the background backfill measures per tick. */
+  MATCH_ROUTE_BACKFILL_BATCH: int(5, 1, 50),
 
   // Feature flags
   FEATURE_MATCHING_ENABLED: bool(true),  FEATURE_NEW_BOOKINGS_ENABLED: bool(true),

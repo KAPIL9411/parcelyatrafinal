@@ -27,6 +27,8 @@ import {
   Sheet,
 } from '../../src/components/ui.tsx';
 import { Avatar, RouteTimeline, StatusTrack } from '../../src/components/kit.tsx';
+import { LiveTrackingView } from '../../src/components/LiveTrackingView.tsx';
+import { startDriverLocationService, stopDriverLocationService } from '../../src/tracking/LocationService.ts';
 import { pickPhoto } from '../../src/lib/photo.ts';
 import {
   CANCEL_REASONS,
@@ -97,6 +99,15 @@ function BookingDetail({ bookingId }: { bookingId: string }) {
         // The poll retries; a failed read receipt is not worth an error on the booking.
       });
   }, [unread, bookingId, queryClient]);
+
+  useEffect(() => {
+    if (role === 'traveller' && booking?.status === 'in_transit') {
+      void startDriverLocationService(bookingId);
+      return () => {
+        void stopDriverLocationService();
+      };
+    }
+  }, [role, booking?.status, bookingId]);
 
   async function refreshBooking() {
     await bookingQ.refetch();
@@ -188,6 +199,11 @@ function BookingDetail({ bookingId }: { bookingId: string }) {
         <View style={{ marginTop: spacing.md }}>
           <StatusTrack status={booking.status} tone={role === 'traveller' ? 'partner' : 'brand'} />
         </View>
+        {['picked_up', 'in_transit', 'arrived'].includes(booking.status) ? (
+          <View style={{ marginTop: spacing.md }}>
+            <LiveTrackingView parcelId={booking.parcel_id} bookingId={booking.id} />
+          </View>
+        ) : null}
 
         <View
           style={{

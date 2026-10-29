@@ -112,7 +112,15 @@ export interface Match {
   departure_at: string;
   arrival_estimate_at: string;
   capacity_kg_remaining: number;
-  /** Straight-line band between city centroids — not a road distance. */
+  /** Where the route came from: `routed`, `estimated`, or an exact city-pair match. */
+  route_source?: 'routed' | 'estimated' | 'exact';
+  /** Extra road distance this parcel costs the traveller, km. */
+  detour_km?: number;
+  /** Distance along the traveller's route from pickup to delivery, km. */
+  leg_km?: number;
+  pickup_eta_at?: string;
+  drop_eta_at?: string;
+  /** Band of the worse endpoint's offset from the traveller's route — not a crow-flies distance. */
   pickup_distance_band_km?: '<1' | '1-3' | '3-5' | '5-10';
   indicative_price_paise: number;
   accepts_documents_only: boolean;

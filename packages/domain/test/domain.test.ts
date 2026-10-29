@@ -12,6 +12,7 @@ import {
   reliabilityBandOf,
   reliabilityRatioOf,
   type MatchInput,
+  type RouteGeometry,
   type TripCandidate,
 } from '../src/matching.ts';
 
@@ -286,6 +287,24 @@ function trip(over: Partial<TripCandidate> = {}): TripCandidate {
 const rejectionOf = (res: ReturnType<typeof rankMatches>, tripId = 't1') =>
   res.rejections.find((r) => r.trip_id === tripId)?.code;
 
+/**
+ * Bareilly → Moradabad → Ghaziabad → Delhi, in travel order. Real road geometry from OSRM has hundreds
+ * of points; these four are enough to prove the projection and ordering logic.
+ */
+function bareillyDelhiRoute(): RouteGeometry {
+  return {
+    points: [
+      [28.367, 79.43],
+      [28.838, 78.773],
+      [28.669, 77.453],
+      [28.613, 77.209],
+    ],
+    distanceM: 270_000,
+    durationS: 5 * 3_600,
+    source: 'routed',
+  };
+}
+
 test('matching: an eligible trip is ranked, explained, and its points add up to its score', () => {
   const res = rankMatches(matchInput(), [trip()]);
   assert.equal(res.matches.length, 1);
@@ -302,7 +321,7 @@ test('matching: an eligible trip is ranked, explained, and its points add up to 
   assert.ok(m.reasons.includes('VERIFIED_ID'));
   assert.ok(!m.reasons.includes('SMALL_DETOUR'), 'the traveller never named a pickup area');
   const b = m.score_breakdown;
-  assert.equal(b.formula_version, 'match-p1.0');
+  assert.equal(b.formula_version, 'match-p2.0');
   assert.equal(Math.round(Object.values(b.points).reduce((a, x) => a + x, 0)), m.score);
   assert.ok(Object.values(b.fit).every((f) => f >= 0 && f <= 1));
 });
@@ -318,9 +337,9 @@ test('matching: a failed hard constraint is never outscored', () => {
 
 test('matching: route, timing, trust and handling constraints each reject on their own', () => {
   const cases: Array<[{ category?: MatchInput['category'] } & Partial<TripCandidate>, string]> = [
-    [{ destCityId: 'lucknow' }, 'DESTINATION_NOT_SERVED'],
-    [{ originCityId: 'meerut', originDetourKm: 40 }, 'ORIGIN_NOT_SERVED'],
-    [{ originCityId: 'meerut', originDetourKm: Number.NaN }, 'ORIGIN_NOT_SERVED'],
+    [{ destCityId: 'lucknow' }, 'ROUTE_NOT_EVALUABLE'],
+    [{ originCityId: 'meerut', originDetourKm: 40 }, 'ROUTE_NOT_EVALUABLE'],
+    [{ originCityId: 'meerut', originDetourKm: Number.NaN }, 'ROUTE_NOT_EVALUABLE'],
     [{ mode: 'bike' }, 'MODE_DISABLED'],
     [{ status: 'full' }, 'TRIP_NOT_ACTIVE'],
     [{ departureAt: new Date('2026-10-24T09:00:00Z') }, 'TRIP_DEPARTED'],
@@ -339,14 +358,27 @@ test('matching: route, timing, trust and handling constraints each reject on the
   }
 });
 
-test('matching: a nearby origin city is allowed and priced down for the detour', () => {
-  const near = trip({ id: 't2', travellerId: 'u3', originCityId: 'greater-noida', originDetourKm: 8 });
-  const res = rankMatches(matchInput(), [trip(), near]);
-  assert.equal(res.matches.length, 2);
-  assert.equal(res.matches[0]!.trip_id, 't1');
-  assert.equal(res.matches[1]!.pickup_distance_band_km, '5-10');
-  assert.equal(res.matches[1]!.score_breakdown.fit.detour, 0.2);
-  assert.ok(res.matches[1]!.score < res.matches[0]!.score);
+test('matching: a parcel whose delivery is mid-route is allowed, and geometry is required to say so', () => {
+  // The parcel ends in Ghaziabad; the trip ends in Delhi. Under the old rule this was invisible.
+  const exactOnly = trip({ id: 'no-route', travellerId: 'u2' });
+  const corridorTrip = trip({ id: 'mid-route', travellerId: 'u3', route: bareillyDelhiRoute() });
+  const res = rankMatches(
+    matchInput({
+      destCityId: 'ghaziabad',
+      parcelDestArea: 'Raj Nagar',
+      parcelOrigin: { lat: 28.367, lng: 79.43 },
+      parcelDest: { lat: 28.669, lng: 77.453 },
+      corridorKm: 210,
+    }),
+    [exactOnly, corridorTrip],
+  );
+  assert.equal(res.matches.length, 1);
+  assert.equal(res.matches[0]!.trip_id, 'mid-route');
+  assert.equal(res.matches[0]!.route_source, 'routed');
+  assert.equal(res.matches[0]!.detour_km, 0);
+  assert.ok(res.matches[0]!.leg_km > 0);
+  // Without geometry the same city pair is refused explicitly rather than guessed from a straight line.
+  assert.equal(rejectionOf(res, 'no-route'), 'ROUTE_NOT_EVALUABLE');
 });
 
 test('matching: an unknown contact or closed parcel stops the search before any trip is read', () => {
@@ -426,7 +458,7 @@ test('matching: weights are configurable and validated', () => {
   // The floor is lowered so the weaker trip is visible as an ordering proof rather than hidden.
   const policy = matchingPolicy({
     minScoreToShow: 0,
-    weights: { time: 0, departure: 0, detour: 0, reliability: 100, capacity: 0, preference: 0 },
+    weights: { time: 0, departure: 0, detour: 0, alignment: 0, reliability: 100, capacity: 0, preference: 0 },
   });
   const green = trip({ id: 'green', travellerId: 'u2', completedTrips: 0, arrivalEstimateAt: new Date('2026-10-25T05:00:00Z') });
   const seasoned = trip({ id: 'seasoned', travellerId: 'u3', completedTrips: 30, travellerCancellations: 1 });
@@ -437,7 +469,7 @@ test('matching: weights are configurable and validated', () => {
 
   assert.throws(() => matchingPolicy({ weights: { time: -1 } }), /non-negative/);
   assert.throws(
-    () => matchingPolicy({ weights: { time: 0, departure: 0, detour: 0, reliability: 0, capacity: 0, preference: 0 } }),
+    () => matchingPolicy({ weights: { time: 0, departure: 0, detour: 0, alignment: 0, reliability: 0, capacity: 0, preference: 0 } }),
     /at least one weight/,
   );
   assert.throws(() => matchingPolicy({ minScoreToShow: 140 }), /must be within/);
@@ -449,11 +481,27 @@ test('matching: grace hours and the detour limit are policy, not constants', () 
   ]);
   assert.equal(rejectionOf(tight), 'ARRIVES_TOO_LATE');
 
-  const generous = rankMatches(matchInput({ policy: matchingPolicy({ maxOriginDetourKm: 50 }) }), [
-    trip({ id: 't2', travellerId: 'u3', originCityId: 'lucknow', originDetourKm: 40 }),
-  ]);
+  const route = bareillyDelhiRoute();
+  // The pickup is ~4.4 km off the road; out and back costs ~8.8 km of detour.
+  const offset = { lat: 28.367, lng: 79.475 };
+  const parcel = {
+    originCityId: 'bareilly',
+    destCityId: 'ghaziabad',
+    parcelOrigin: offset,
+    parcelDest: { lat: 28.669, lng: 77.453 },
+  };
+  const strict = rankMatches(
+    matchInput({ ...parcel, policy: matchingPolicy({ maxDetourKm: 6, maxCorridorKm: 10 }) }),
+    [trip({ route })],
+  );
+  assert.equal(rejectionOf(strict), 'DETOUR_TOO_LARGE');
+
+  const generous = rankMatches(
+    matchInput({ ...parcel, policy: matchingPolicy({ maxDetourKm: 16, maxCorridorKm: 10 }) }),
+    [trip({ route })],
+  );
   assert.equal(generous.matches.length, 1);
-  assert.equal(generous.matches[0]!.score_breakdown.fit.detour, 0.2);
+  assert.ok(generous.matches[0]!.detour_km > 0);
 });
 
 test('matching: SMALL_DETOUR is only claimed when the pickup areas actually agree', () => {

@@ -14,7 +14,7 @@
  * it sends them. A campaign can hide, retitle or recolour a section; it cannot move the search card or
  * introduce a new kind of UI.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { router, useFocusEffect } from 'expo-router';
 import {
   Animated,
@@ -103,7 +103,9 @@ export default function HomeScreen() {
   const [pastHero, setPastHero] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
 
-  const scrollY = useRef(new Animated.Value(0)).current;
+  // An `Animated.Value` is read during render (interpolations and the scroll handler), so it is state
+  // with a lazy initialiser rather than a ref — the same reason as Reveal.tsx.
+  const [scrollY] = useState(() => new Animated.Value(0));
 
   // The hero greets by local time, so the clock is re-read whenever the screen is shown again — a tab
   // switch or the app returning from the background — instead of staying at the time of first mount.
@@ -161,6 +163,9 @@ export default function HomeScreen() {
   useEffect(() => {
     if (!dest || cities.isLoading) return;
     if (cities.serviceable.length === 0) return;
+    // A remembered destination that left service has to be cleared, and there is no render-time
+    // alternative: the list arrives asynchronously. The guard above makes this a one-shot correction.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!cities.serviceable.some((city) => city.id === dest.id)) setDest(null);
   }, [cities.isLoading, cities.serviceable, dest]);
 

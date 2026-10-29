@@ -55,7 +55,12 @@ export function MatchCard({
             </AppText>
             <Row gap={6} style={{ marginTop: 3 }}>
               <Badge label={match.band.toUpperCase()} tone={bandTone} />
-              {match.pickup_distance_band_km ? (
+              {match.detour_km !== undefined ? (
+                <Badge
+                  label={match.detour_km === 0 ? 'On route' : `+${match.detour_km} km detour`}
+                  tone="neutral"
+                />
+              ) : match.pickup_distance_band_km ? (
                 <Badge label={`${match.pickup_distance_band_km} km away`} tone="neutral" />
               ) : null}
             </Row>
@@ -97,11 +102,11 @@ export function MatchCard({
           <Row gap={4}>
             <Ionicons name="flag-outline" size={11} color={colors.ink500} />
             <AppText variant="micro" tone="muted" style={{ fontFamily: font.regular }}>
-              Arrives by
+              Drop by
             </AppText>
           </Row>
           <AppText variant="micro" numberOfLines={1} style={{ marginTop: 1 }}>
-            {formatDateTime(match.arrival_estimate_at)}
+            {formatDateTime(match.drop_eta_at ?? match.arrival_estimate_at)}
           </AppText>
         </View>
         <View style={{ width: 1, backgroundColor: colors.line }} />

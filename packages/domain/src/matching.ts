@@ -12,11 +12,15 @@
  *
  *   score = Σ (w_i · fit_i) / Σ w_i
  *
- *   time        w=30  1 when the trip lands at least `timeTargetLeadHours` before the window closes,
- *                     linear to 0 at `windowEnd + arrivalGraceHours` (the hard cut-off).
- *   departure   w=20  1 when the trip leaves after the window opens; linear to 0 `departureEarlyDecayHours`
+ *   time        w=25  1 when the trip lands at least `timeTargetLeadHours` before the window closes,
+ *                     linear to 0 at `windowEnd + arrivalGraceHours` (the hard cut-off). The clock
+ *                     used is the ETA at the parcel's delivery point.
+ *   departure   w=15  1 when the trip leaves after the window opens; linear to 0 `departureEarlyDecayHours`
  *                     before it, because an early handover is the sender's problem, not the traveller's.
- *   detour      w=20  1 − originDetourKm / maxOriginDetourKm. See "distance honesty" below.
+ *   detour      w=15  1 − corridor detour / maxDetourKm, where detour is the out-and-back cost of
+ *                     reaching both parcel endpoints: 2 × pickup offset + 2 × drop offset.
+ *   alignment   w=15  1 − worst endpoint offset / maxCorridorKm. How close the parcel's cities sit to
+ *                     the road the traveller is actually driving, independent of the detour budget.
  *   reliability w=15  completed / (completed + traveller cancellations) over the last 20 finished trips
  *                     (docs/BUSINESS_LOGIC.md §9). No history is `newTravellerFit`, not a free pass.
  *   capacity    w=10  1 at `capacityFullFitRatio`× the required kg, 0 at the hard capacity floor.
@@ -26,19 +30,36 @@
  * surfaced through the honest low-confidence fallback (top `lowConfidenceFallbackCount`), per
  * docs/MATCHING_ENGINE.md §8.
  *
- * Distance honesty: this schema has no area geocoding — `areas` carries a name only, and no routing
- * provider is configured. Distances here are therefore great-circle distances between *city
- * centroids* (`haversineKm`), which are a lower bound on road distance, never road kilometres. They
- * are only ever exposed through the `pickup_distance_band_km` band the API contract already defines,
- * and a same-city trip has detour 0 by construction. Within a city, pickup proximity is reported by
- * area *name agreement* and never converted into a distance.
+ * Route compatibility (v2): the endpoints no longer have to be the same two cities. A parcel is
+ * compatible when both of its cities project onto the traveller's road route, in travel order, close
+ * enough to the road and cheap enough to detour to. `route-match.ts` owns that arithmetic; this file
+ * only decides what to do with the answer. Two consequences worth stating plainly:
+ *
+ *  - the ETA that matters is the ETA *at the parcel's delivery point*, not the trip's final arrival.
+ *    A Ghaziabad delivery on a Delhi-bound trip lands hours before the traveller reaches Delhi;
+ *  - a trip with no measured geometry still matches an exact city pair. Anything else is refused with
+ *    `ROUTE_NOT_EVALUABLE` rather than guessed from a straight line.
+ *
+ * Distance honesty: offsets and detours come from the route polyline, which is road geometry when the
+ * provider answered and a labelled straight line when it did not. The match exposes `route_source`,
+ * `detour_km`, `leg_km`, both ETAs, and `pickup_distance_band_km` — the band of the *worse* endpoint's
+ * offset from the route, not a crow-flies distance between city centres.
  */
 
 import type { Category, MatchBand, MatchReasonCode, ReliabilityBand, TransportMode, VerificationState } from './enums.ts';
 import { detectProhibitedContent, PILOT_LIMITS } from './eligibility.ts';
 import { indicativeLaunchPricePaise } from './launch-pricing.ts';
+import {
+  buildRouteIndex,
+  evaluateCorridor,
+  type GeoPoint,
+  type RouteGeometry,
+  type RouteSource,
+} from './route-match.ts';
 
-export const MATCHING_FORMULA_VERSION = 'match-p1.0';
+export type { GeoPoint, RouteGeometry, RouteSource } from './route-match.ts';
+
+export const MATCHING_FORMULA_VERSION = 'match-p2.0';
 
 export interface MatchingPolicy {
   version: string;
@@ -57,6 +78,7 @@ export interface MatchingPolicy {
     time: number;
     departure: number;
     detour: number;
+    alignment: number;
     reliability: number;
     capacity: number;
     preference: number;
@@ -72,6 +94,14 @@ export interface MatchingPolicy {
   /** §9: below this ratio once `reliabilitySample` trips exist, automated matching stops. */
   minReliabilityRatio: number;
   reliabilitySample: number;
+  /** How far a parcel's city may sit from the traveller's road before it is not "on the way". */
+  maxCorridorKm: number;
+  /** Extra road distance, out-and-back included, a trip may absorb to serve a parcel. */
+  maxDetourKm: number;
+  /** Minimum distance along the route between pickup and delivery. */
+  minLegKm: number;
+  /** When true, only provider-measured geometry may produce a non-exact match. */
+  requireRoutedGeometry: boolean;
 }
 
 export const DEFAULT_MATCHING_POLICY: MatchingPolicy = {
@@ -83,13 +113,17 @@ export const DEFAULT_MATCHING_POLICY: MatchingPolicy = {
   lowConfidenceFallbackCount: 3,
   maxResults: 10,
   bandThresholds: { excellent: 80, good: 65 },
-  weights: { time: 30, departure: 20, detour: 20, reliability: 15, capacity: 10, preference: 5 },
+  weights: { time: 25, departure: 15, detour: 15, alignment: 15, reliability: 15, capacity: 10, preference: 5 },
   timeTargetLeadHours: 2,
   departureEarlyDecayHours: 48,
   capacityFullFitRatio: 2,
   newTravellerFit: 0.25,
   minReliabilityRatio: 0.7,
   reliabilitySample: 10,
+  maxCorridorKm: 8,
+  maxDetourKm: 16,
+  minLegKm: 1,
+  requireRoutedGeometry: false,
 };
 
 /** Merge partial overrides onto the defaults. Weights are accepted as ratios; the score normalises. */
@@ -113,6 +147,9 @@ export function matchingPolicy(overrides: DeepPartial<MatchingPolicy> = {}): Mat
   if (merged.capacityFullFitRatio <= 1) bad('capacityFullFitRatio must exceed the packaging allowance');
   if (merged.minScoreToShow < 0 || merged.minScoreToShow > 100) bad('minScoreToShow must be within 0–100');
   if (merged.maxResults < 1) bad('maxResults must be at least 1');
+  if (merged.maxCorridorKm < 0) bad('maxCorridorKm must not be negative');
+  if (merged.maxDetourKm < 0) bad('maxDetourKm must not be negative');
+  if (merged.minLegKm < 0) bad('minLegKm must not be negative');
   return merged;
 }
 
@@ -134,8 +171,16 @@ export interface TripCandidate {
   /**
    * Straight-line km between the trip's origin city centroid and the parcel's origin city centroid.
    * 0 for a same-city trip. Not a road distance — see the header.
+   *
+   * Kept for the same-city proximity band and for callers that have no geometry; route compatibility
+   * itself is decided by `route`.
    */
   originDetourKm: number;
+  /**
+   * The traveller's road route, when it has been measured. `null` means the route is unknown, and
+   * only an exact city pair can match.
+   */
+  route?: RouteGeometry | null;
   departureAt: Date;
   arrivalEstimateAt: Date;
   capacityKg: number;
@@ -167,6 +212,12 @@ export interface MatchInput {
   windowStart: Date;
   windowEnd: Date;
   corridorKm: number;
+  /**
+   * City centroids for the parcel's two ends. When either is missing, only an exact city pair can be
+   * matched — the engine will not invent a position.
+   */
+  parcelOrigin?: GeoPoint | null;
+  parcelDest?: GeoPoint | null;
   enabledModes: readonly TransportMode[];
   /** Parcel lifecycle gate: only an open parcel is matchable. */
   parcelStatus: string;
@@ -180,6 +231,7 @@ export interface MatchScorePoints {
   time: number;
   departure: number;
   detour: number;
+  alignment: number;
   reliability: number;
   capacity: number;
   preference: number;
@@ -205,6 +257,16 @@ export interface Match {
   pickup_distance_band_km: '<1' | '1-3' | '3-5' | '5-10';
   indicative_price_paise: number;
   accepts_documents_only: boolean;
+  /** Where the route came from. `exact` means the two city pairs were identical. */
+  route_source: RouteSource | 'exact';
+  /** Extra road distance this parcel costs the traveller, in km. */
+  detour_km: number;
+  /** Distance along the traveller's route from pickup to delivery, in km. */
+  leg_km: number;
+  /** When the traveller is expected at the parcel's pickup point. */
+  pickup_eta_at: string;
+  /** When the traveller is expected at the parcel's delivery point — the ETA that gates the window. */
+  drop_eta_at: string;
   /** Weighted points per component; they sum to `score`. The explanation the audit trail needs. */
   score_breakdown: { formula_version: string; fit: MatchScorePoints; points: MatchScorePoints };
 }
@@ -212,6 +274,7 @@ export interface Match {
 /** Aggregate reasons safe to show a sender. Never names, never another user's records. */
 export type NoMatchReason =
   | 'NO_TRIP_ON_DATE'
+  | 'NO_TRIP_ON_ROUTE'
   | 'NO_CAPACITY'
   | 'WINDOW_TOO_TIGHT'
   | 'ORIGIN_NOT_SERVED'
@@ -238,7 +301,13 @@ export type MatchRejectionCode =
   | 'PARCEL_TOO_LARGE'
   | 'NO_CAPACITY'
   | 'DEPARTS_AFTER_WINDOW'
-  | 'ARRIVES_TOO_LATE';
+  | 'ARRIVES_TOO_LATE'
+  | 'ROUTE_NOT_EVALUABLE'
+  | 'PICKUP_OFF_CORRIDOR'
+  | 'DROP_OFF_CORRIDOR'
+  | 'WRONG_DIRECTION'
+  | 'LEG_TOO_SHORT'
+  | 'DETOUR_TOO_LARGE';
 
 export interface MatchRejection {
   trip_id: string;
@@ -322,27 +391,19 @@ export function rankMatches(input: MatchInput, trips: readonly TripCandidate[]):
   const prohibited = detectProhibitedContent(`${input.category} ${input.description}`);
   const parcelOriginArea = normArea(input.parcelOriginArea);
   const parcelDestArea = normArea(input.parcelDestArea);
+  const limits = {
+    maxCorridorM: policy.maxCorridorKm * 1000,
+    maxDetourM: policy.maxDetourKm * 1000,
+    minLegM: policy.minLegKm * 1000,
+  };
 
-  const scored: Array<{ match: Match; arrivalMs: number; departureMs: number }> = [];
+  const scored: Array<{ match: Match; dropMs: number; departureMs: number }> = [];
 
   for (const trip of trips) {
     // ---- hard constraints: cheapest first. Failing any of these is terminal. ----
     if (!input.enabledModes.includes(trip.mode)) {
       rejected(trip, 'MODE_DISABLED');
       continue;
-    }
-    if (trip.destCityId !== input.destCityId) {
-      rejected(trip, 'DESTINATION_NOT_SERVED');
-      continue;
-    }
-    if (trip.originCityId !== input.originCityId) {
-      // §3.2 allows a trip that starts in a *different* city, but only inside the pilot detour limit.
-      // The limit is a straight-line distance between city centroids; the caller must have measured
-      // it. An unmeasured distance is never a pass.
-      if (!Number.isFinite(trip.originDetourKm) || trip.originDetourKm > policy.maxOriginDetourKm) {
-        rejected(trip, 'ORIGIN_NOT_SERVED');
-        continue;
-      }
     }
     if (!['published', 'partially_booked'].includes(trip.status)) {
       rejected(trip, 'TRIP_NOT_ACTIVE');
@@ -390,25 +451,72 @@ export function rankMatches(input: MatchInput, trips: readonly TripCandidate[]):
       rejected(trip, 'NO_CAPACITY');
       continue;
     }
-    if (trip.departureAt.getTime() > windowEndMs) {
+
+    // ---- route compatibility: is the parcel actually on the way? ----
+    //
+    // This replaces the old "same destination city" rule. The endpoints may differ from the trip's
+    // endpoints; what has to hold is that both project onto the road, in order, within the offset and
+    // detour limits. An exact city pair is compatible even with no geometry, because there is nothing
+    // for geometry to add.
+    const routeIndex = buildRouteIndex(trip.route ?? null);
+    const exactEndpoints =
+      trip.originCityId === input.originCityId && trip.destCityId === input.destCityId;
+    const corridor = evaluateCorridor({
+      route: routeIndex,
+      pickup: input.parcelOrigin ?? null,
+      drop: input.parcelDest ?? null,
+      limits,
+      exactEndpoints,
+    });
+    if (!corridor.ok) {
+      rejected(trip, corridor.reason ?? 'ROUTE_NOT_EVALUABLE');
+      continue;
+    }
+    if (
+      policy.requireRoutedGeometry &&
+      corridor.source !== 'routed' &&
+      corridor.source !== 'exact'
+    ) {
+      // The deployment has decided a straight line is not evidence of a road.
+      rejected(trip, 'ROUTE_NOT_EVALUABLE');
+      continue;
+    }
+
+    // The ETA that matters is the one at the parcel's delivery point, not the trip's final arrival:
+    // a Ghaziabad drop on a Delhi-bound trip lands well before the traveller reaches Delhi.
+    const departureMs = trip.departureAt.getTime();
+    const declaredDurationS = Math.max(0, (trip.arrivalEstimateAt.getTime() - departureMs) / 1000);
+    const durationS =
+      routeIndex && routeIndex.durationS > 0 ? routeIndex.durationS : declaredDurationS;
+    const pickupFraction = corridor.pickup?.fraction ?? 0;
+    const dropFraction = corridor.drop?.fraction ?? 1;
+    const pickupMs = departureMs + pickupFraction * durationS * 1000;
+    const dropMs =
+      corridor.source === 'exact'
+        ? trip.arrivalEstimateAt.getTime()
+        : departureMs + dropFraction * durationS * 1000;
+
+    if (pickupMs > windowEndMs) {
       rejected(trip, 'DEPARTS_AFTER_WINDOW');
       continue;
     }
-    if (trip.arrivalEstimateAt.getTime() > windowEndMs + graceMs) {
+    if (dropMs > windowEndMs + graceMs) {
       rejected(trip, 'ARRIVES_TOO_LATE');
       continue;
     }
 
     // ---- scoring: every component is a normalised 0–1 fit. ----
-    const arrivalMs = trip.arrivalEstimateAt.getTime();
-    const departureMs = trip.departureAt.getTime();
+    const timeFit = clamp01(
+      (windowEndMs + graceMs - dropMs) / ((policy.arrivalGraceHours + policy.timeTargetLeadHours) * HOUR),
+    );
 
-    const timeFit = clamp01((windowEndMs + graceMs - arrivalMs) / ((policy.arrivalGraceHours + policy.timeTargetLeadHours) * HOUR));
-
-    const hoursEarly = (windowStartMs - departureMs) / HOUR;
+    const hoursEarly = (windowStartMs - pickupMs) / HOUR;
     const departureFit = hoursEarly <= 0 ? 1 : clamp01(1 - hoursEarly / policy.departureEarlyDecayHours);
 
-    const detourFit = clamp01(1 - trip.originDetourKm / Math.max(1, policy.maxOriginDetourKm));
+    const detourFit = clamp01(1 - corridor.detourM / Math.max(1, limits.maxDetourM));
+
+    const worstOffsetM = Math.max(corridor.pickup?.offsetM ?? 0, corridor.drop?.offsetM ?? 0);
+    const alignmentFit = clamp01(1 - worstOffsetM / Math.max(1, limits.maxCorridorM));
 
     const reliabilityFit = reliability ?? policy.newTravellerFit;
 
@@ -431,6 +539,7 @@ export function rankMatches(input: MatchInput, trips: readonly TripCandidate[]):
       time: round3(timeFit),
       departure: round3(departureFit),
       detour: round3(detourFit),
+      alignment: round3(alignmentFit),
       reliability: round3(reliabilityFit),
       capacity: round3(capacityFit),
       preference: round3(preferenceFit),
@@ -439,6 +548,7 @@ export function rankMatches(input: MatchInput, trips: readonly TripCandidate[]):
       time: round1(timeFit * policy.weights.time),
       departure: round1(departureFit * policy.weights.departure),
       detour: round1(detourFit * policy.weights.detour),
+      alignment: round1(alignmentFit * policy.weights.alignment),
       reliability: round1(reliabilityFit * policy.weights.reliability),
       capacity: round1(capacityFit * policy.weights.capacity),
       preference: round1(preferenceFit * policy.weights.preference),
@@ -447,6 +557,7 @@ export function rankMatches(input: MatchInput, trips: readonly TripCandidate[]):
       ((timeFit * policy.weights.time +
         departureFit * policy.weights.departure +
         detourFit * policy.weights.detour +
+        alignmentFit * policy.weights.alignment +
         reliabilityFit * policy.weights.reliability +
         capacityFit * policy.weights.capacity +
         preferenceFit * policy.weights.preference) *
@@ -455,16 +566,16 @@ export function rankMatches(input: MatchInput, trips: readonly TripCandidate[]):
     const score = Math.max(0, Math.min(100, Math.round(rawScore)));
 
     const reasons: MatchReasonCode[] = ['ON_ROUTE', 'CAPACITY_OK', 'VERIFIED_ID'];
-    if (arrivalMs <= windowEndMs) reasons.push('ARRIVES_IN_WINDOW');
+    if (dropMs <= windowEndMs) reasons.push('ARRIVES_IN_WINDOW');
     else reasons.push('DELAYED_ARRIVAL');
-    if (trip.originDetourKm <= 5 && areaFit >= 0.8) reasons.push('SMALL_DETOUR');
+    if (corridor.detourM <= 3_000 && alignmentFit >= 0.6 && areaFit >= 0.8) reasons.push('SMALL_DETOUR');
     if (reliability !== null && reliability >= 0.8 && trip.completedTrips >= 5) reasons.push('HIGH_RELIABILITY');
 
     const band: MatchBand =
       score >= policy.bandThresholds.excellent ? 'excellent' : score >= policy.bandThresholds.good ? 'good' : 'fair';
 
     scored.push({
-      arrivalMs,
+      dropMs,
       departureMs,
       match: {
         trip_id: trip.id,
@@ -481,20 +592,25 @@ export function rankMatches(input: MatchInput, trips: readonly TripCandidate[]):
         departure_at: trip.departureAt.toISOString(),
         arrival_estimate_at: trip.arrivalEstimateAt.toISOString(),
         capacity_kg_remaining: trip.capacityKgRemaining,
-        pickup_distance_band_km: distanceBandKm(trip.originDetourKm),
+        pickup_distance_band_km: distanceBandKm(worstOffsetM / 1000),
         indicative_price_paise: indicativeLaunchPricePaise(input.corridorKm, input.weightKg, input.category),
         accepts_documents_only: trip.acceptsDocumentsOnly,
+        route_source: corridor.source,
+        detour_km: round1(corridor.detourM / 1000),
+        leg_km: round1(corridor.legM / 1000),
+        pickup_eta_at: new Date(pickupMs).toISOString(),
+        drop_eta_at: new Date(dropMs).toISOString(),
         score_breakdown: { formula_version: policy.version, fit, points },
       },
     });
   }
 
-  // Deterministic: score, then the earliest arrival, then the earliest departure, then the id.
+  // Deterministic: score, then the earliest delivery, then the earliest departure, then the id.
   // Two identical trips therefore always come back in the same order.
   scored.sort(
     (a, b) =>
       b.match.score - a.match.score ||
-      a.arrivalMs - b.arrivalMs ||
+      a.dropMs - b.dropMs ||
       a.departureMs - b.departureMs ||
       a.match.trip_id.localeCompare(b.match.trip_id),
   );
@@ -552,6 +668,15 @@ function aggregateReasons(rejections: readonly MatchRejection[]): NoMatchReason[
       case 'TRIP_DEPARTED':
       case 'TRIP_NOT_ACTIVE':
         out.add('NO_TRIP_ON_DATE');
+        break;
+      case 'ROUTE_NOT_EVALUABLE':
+      case 'PICKUP_OFF_CORRIDOR':
+      case 'DROP_OFF_CORRIDOR':
+      case 'WRONG_DIRECTION':
+      case 'LEG_TOO_SHORT':
+      case 'DETOUR_TOO_LARGE':
+        // The trip exists and may be fine for someone else; it just does not pass this parcel.
+        out.add('NO_TRIP_ON_ROUTE');
         break;
       case 'SELF_TRIP':
       case 'ITEM_PROHIBITED':

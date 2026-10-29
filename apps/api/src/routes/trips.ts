@@ -18,7 +18,8 @@ import { AppError } from '../lib/errors.ts';
 import { requireAuth } from '../lib/auth.ts';
 import { num, tripView, toIso } from '../lib/serialize.ts';
 import { audit, queueNotification } from '../services/audit.ts';
-import { loadCity, nearbyCityIds, round1, type CityRow, type ParcelRowFull } from './parcels.ts';
+import { ensureTripRoute, loadTripRoutes, queueTripRoute, type TripRoute } from '../services/trip-route.ts';
+import { corridorPad, loadCity, round1, type CityRow, type ParcelRowFull } from './parcels.ts';
 
 const createSchema = z
   .object({
@@ -70,6 +71,9 @@ interface TripRowFull {
   accepts_documents_only: boolean;
   status: string;
   created_at: Date;
+  route_status?: string | null;
+  route_source?: string | null;
+  route_distance_m?: number | null;
 }
 
 /** The statuses in which a trip can be offered work at all. */
@@ -140,6 +144,10 @@ export async function tripRoutes(app: FastifyInstance): Promise<void> {
       resourceId: inserted.rows[0]!.id,
       after: { mode: body.mode, capacity_kg: body.capacity_kg },
     });
+
+    // Measured in the background: publishing must not wait on a routing provider. Until it lands, the
+    // trip is still discoverable for an exact city pair, and the response says `route_status: pending`.
+    queueTripRoute(app, inserted.rows[0]!.id);
 
     return reply.code(201).send(tripView(inserted.rows[0]! as never));
   });
@@ -214,26 +222,74 @@ export async function tripRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const policy = matchPolicy;
-      const originCity = await loadCity(app, trip.origin_city_id);
-      const originIds = await nearbyCityIds(app, originCity, policy.maxOriginDetourKm);
+      const [originCity, destCity] = await Promise.all([
+        loadCity(app, trip.origin_city_id),
+        loadCity(app, trip.dest_city_id),
+      ]);
 
+      // Stored geometry, not a routing call. If it is missing, the trip is still matched against an
+      // exact city pair; the measurement is queued and the response says `route_status`.
+      const tripRoute = (await loadTripRoutes(app, [trip.id])).get(trip.id) ?? null;
+      if (!tripRoute?.geometry) void ensureTripRoute(app, trip.id);
+
+      const pad = corridorPad(Number(originCity.lat), Number(destCity.lat), policy.maxCorridorKm);
+      const bbox = tripRoute?.geometry
+        ? {
+            minLat: Math.min(...tripRoute.geometry.points.map((p) => p[0])) - pad.lat,
+            maxLat: Math.max(...tripRoute.geometry.points.map((p) => p[0])) + pad.lat,
+            minLng: Math.min(...tripRoute.geometry.points.map((p) => p[1])) - pad.lng,
+            maxLng: Math.max(...tripRoute.geometry.points.map((p) => p[1])) + pad.lng,
+          }
+        : // No geometry: only the exact city pair can match, so make the box empty.
+          { minLat: 1, maxLat: -1, minLng: 1, maxLng: -1 };
+
+      // Stage A, traveller → parcels. Same two ways to be a candidate as the sender side: the exact
+      // city pair, or both parcel cities inside the trip route's (corridor-widened) bounding box.
+      // Capacity, window and status are cheap hard filters; direction and detour are the engine's.
       const found = await db.query<ParcelRowFull>(
-        `SELECT * FROM parcels
-         WHERE status IN ('posted','matched')
-           AND dest_city_id = $1
-           AND origin_city_id = ANY($2::uuid[])
-           AND sender_id <> $3
-           AND window_end >= now()
-         ORDER BY window_start
-         LIMIT $4`,
-        [trip.dest_city_id, originIds, auth.userId, config.MATCH_CANDIDATE_SCAN_LIMIT],
+        `SELECT p.* FROM parcels p
+         JOIN cities po ON po.id = p.origin_city_id
+         JOIN cities pd ON pd.id = p.dest_city_id
+         WHERE p.status IN ('posted','matched')
+           AND p.sender_id <> $1
+           AND p.window_end >= now()
+           AND p.window_start <= $2
+           AND p.weight_kg * $3 <= $4
+           AND (
+             (p.origin_city_id = $5 AND p.dest_city_id = $6)
+             OR (
+               po.lat BETWEEN $7 AND $8 AND po.lng BETWEEN $9 AND $10
+               AND pd.lat BETWEEN $7 AND $8 AND pd.lng BETWEEN $9 AND $10
+             )
+           )
+         ORDER BY p.window_start
+         LIMIT $11`,
+        [
+          auth.userId,
+          new Date(new Date(trip.arrival_estimate_at).getTime() + policy.arrivalGraceHours * 3_600_000),
+          policy.packagingAllowance,
+          num(trip.capacity_kg_remaining),
+          trip.origin_city_id,
+          trip.dest_city_id,
+          bbox.minLat,
+          bbox.maxLat,
+          bbox.minLng,
+          bbox.maxLng,
+          config.MATCH_CANDIDATE_SCAN_LIMIT,
+        ],
       );
       const parcels = found.rows;
       if (parcels.length === 0) {
-        return { trip_id: trip.id, trip_status: trip.status, items: [], no_match_reasons: ['NO_PARCEL_ON_ROUTE'] };
+        return {
+          trip_id: trip.id,
+          trip_status: trip.status,
+          route_status: tripRoute?.status ?? 'pending',
+          items: [],
+          no_match_reasons: ['NO_PARCEL_ON_ROUTE'],
+        };
       }
 
-      const { items, blocked } = await scoreParcelsForTrip(app, trip, parcels);
+      const { items, blocked } = await scoreParcelsForTrip(app, trip, parcels, [], tripRoute);
       items.sort((a, b) => Number(b.score) - Number(a.score));
 
       // What this traveller has already offered for, so the list does not invite a second offer.
@@ -247,6 +303,7 @@ export async function tripRoutes(app: FastifyInstance): Promise<void> {
       return {
         trip_id: trip.id,
         trip_status: trip.status,
+        route_status: tripRoute?.status ?? 'pending',
         capacity_kg_remaining: num(trip.capacity_kg_remaining),
         items: items.slice(0, q.limit),
         no_match_reasons: items.length === 0 ? [...blocked.keys()] : [],
@@ -277,7 +334,8 @@ export async function tripRoutes(app: FastifyInstance): Promise<void> {
       // Someone else's parcel and a parcel that does not exist answer the same way.
       if (!parcel || parcel.sender_id === auth.userId) throw new AppError('NOT_FOUND');
 
-      const { items, blocked, gateByParcel } = await scoreParcelsForTrip(app, trip, [parcel]);
+      const tripRoute = (await loadTripRoutes(app, [trip.id])).get(trip.id) ?? null;
+      const { items, blocked, gateByParcel } = await scoreParcelsForTrip(app, trip, [parcel], [], tripRoute);
       if (items.length === 0) {
         throw new AppError('OPPORTUNITY_NOT_AVAILABLE', {
           // The gate this parcel actually failed, not the summarised reason the list shows: the
@@ -373,6 +431,7 @@ export async function tripRoutes(app: FastifyInstance): Promise<void> {
       // Checked one parcel at a time, and with its own reservation given back to it: "is there room for
       // this parcel" is the question the sender answered when they chose this trip, and the space the
       // other parcels on the trip already occupy is not this parcel's problem.
+      const tripRoute = (await loadTripRoutes(app, [trip.id])).get(trip.id) ?? null;
       for (const row of held.rows) {
         const ownKg = num(row.weight_kg) * matchPolicy.packagingAllowance;
         const proposed: TripRowFull = {
@@ -389,7 +448,7 @@ export async function tripRoutes(app: FastifyInstance): Promise<void> {
           // is room; the status only decides who gets to ask.
           status: 'partially_booked',
         };
-        const { items, blocked, gateByParcel } = await scoreParcelsForTrip(app, proposed, [row], [row.booking_id]);
+        const { items, blocked, gateByParcel } = await scoreParcelsForTrip(app, proposed, [row], [row.booking_id], tripRoute);
         if (items.length === 0) {
           throw new AppError('TRIP_EDIT_BREAKS_BOOKING', {
             booking_id: row.booking_id,
@@ -500,12 +559,18 @@ async function scoreParcelsForTrip(
    * has to ignore that booking and keep every other one.
    */
   ignoreBookings: string[] = [],
+  /**
+   * The trip's stored route, when the caller already read it. Passing it avoids a second query in the
+   * edit loop; omitting it makes this function read the row itself.
+   */
+  tripRoute: TripRoute | null = null,
 ): Promise<ScoredParcels> {
   const db = app.db;
   if (parcels.length === 0) return { items: [], blocked: new Map(), gateByParcel: new Map() };
 
   const policy = matchPolicy;
-  const [originCity, destCity] = await Promise.all([loadCity(app, trip.origin_city_id), loadCity(app, trip.dest_city_id)]);
+  const originCity = await loadCity(app, trip.origin_city_id);
+  const route = tripRoute ?? (await loadTripRoutes(app, [trip.id])).get(trip.id) ?? null;
 
   const [assignedRes, citiesRes, senderVerifications, myVerification, myHistory] = await Promise.all([
     // The same partial-index predicate the sender side uses: an active booking already holds it.
@@ -519,7 +584,16 @@ async function scoreParcelsForTrip(
     ),
     db.query<CityRow>(
       `SELECT id, name, state, lat, lng, is_serviceable FROM cities WHERE id = ANY($1::uuid[])`,
-      [[...new Set([...parcels.map((p) => p.origin_city_id), trip.origin_city_id, trip.dest_city_id])]],
+      [
+        [
+          ...new Set([
+            ...parcels.map((p) => p.origin_city_id),
+            ...parcels.map((p) => p.dest_city_id),
+            trip.origin_city_id,
+            trip.dest_city_id,
+          ]),
+        ],
+      ],
     ),
     db.query<{ user_id: string; state: string }>(
       `SELECT DISTINCT ON (user_id) user_id, state FROM verifications
@@ -557,6 +631,7 @@ async function scoreParcelsForTrip(
     destCityId: trip.dest_city_id,
     originArea: trip.origin_area,
     destArea: trip.dest_area,
+    route: route?.geometry ?? null,
     departureAt: new Date(trip.departure_at),
     arrivalEstimateAt: new Date(trip.arrival_estimate_at),
     capacityKg: num(trip.capacity_kg),
@@ -577,6 +652,9 @@ async function scoreParcelsForTrip(
 
   for (const p of parcels) {
     const pOrigin = cityById.get(p.origin_city_id) ?? originCity;
+    const pDest = cityById.get(p.dest_city_id) ?? originCity;
+    const parcelOriginPoint = { lat: Number(pOrigin.lat), lng: Number(pOrigin.lng) };
+    const parcelDestPoint = { lat: Number(pDest.lat), lng: Number(pDest.lng) };
     const result = rankMatches(
       {
         senderId: p.sender_id,
@@ -584,18 +662,17 @@ async function scoreParcelsForTrip(
         destCityId: p.dest_city_id,
         parcelOriginArea: p.origin_area,
         parcelDestArea: p.dest_area,
+        parcelOrigin: parcelOriginPoint,
+        parcelDest: parcelDestPoint,
         originServiceable: pOrigin.is_serviceable,
-        destServiceable: destCity.is_serviceable,
+        destServiceable: pDest.is_serviceable,
         category: p.category as MatchInput['category'],
         description: p.description,
         weightKg: num(p.weight_kg),
         dimsCm: p.dims_cm,
         windowStart: new Date(p.window_start),
         windowEnd: new Date(p.window_end),
-        corridorKm: corridorKm(
-          { lat: Number(pOrigin.lat), lng: Number(pOrigin.lng) },
-          { lat: Number(destCity.lat), lng: Number(destCity.lng) },
-        ),
+        corridorKm: corridorKm(parcelOriginPoint, parcelDestPoint),
         enabledModes: enabledModes(config),
         parcelStatus: p.status,
         parcelAlreadyAssigned: assigned.has(p.id),
@@ -608,7 +685,7 @@ async function scoreParcelsForTrip(
           originDetourKm:
             p.origin_city_id === trip.origin_city_id
               ? 0
-              : round1(haversineKm(originPoint, { lat: Number(pOrigin.lat), lng: Number(pOrigin.lng) })),
+              : round1(haversineKm(originPoint, parcelOriginPoint)),
         },
       ],
     );

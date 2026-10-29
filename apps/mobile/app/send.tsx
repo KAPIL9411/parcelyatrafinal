@@ -145,7 +145,6 @@ function SendWizard() {
     const to = resolve(params.dest);
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (from) setOriginId((current) => current || from.id);
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (to) setDestId((current) => current || to.id);
   }, [cities.cities, params.origin, params.dest]);
 

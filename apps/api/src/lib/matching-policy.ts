@@ -2,7 +2,7 @@ import { matchingPolicy, type MatchingPolicy } from '@py/domain';
 
 import { config, type Config } from '../config.ts';
 
-const WEIGHT_KEYS = ['time', 'departure', 'detour', 'reliability', 'capacity', 'preference'] as const;
+const WEIGHT_KEYS = ['time', 'departure', 'detour', 'alignment', 'reliability', 'capacity', 'preference'] as const;
 
 /**
  * `MATCH_WEIGHTS` is a plain `key=value` list rather than JSON: it is meant to be typed into a
@@ -32,6 +32,10 @@ export function matchPolicyFor(c: Config): MatchingPolicy {
     arrivalGraceHours: c.MATCH_ARRIVAL_GRACE_HOURS,
     minScoreToShow: c.MATCH_MIN_SCORE,
     maxResults: c.MATCH_MAX_RESULTS,
+    maxCorridorKm: c.MATCH_MAX_CORRIDOR_KM,
+    maxDetourKm: c.MATCH_MAX_DETOUR_KM,
+    minLegKm: c.MATCH_MIN_LEG_KM,
+    requireRoutedGeometry: c.MATCH_REQUIRE_ROUTED_GEOMETRY,
     ...(weights ? { weights } : {}),
   });
 }
