@@ -1,11 +1,16 @@
 # Cloudflare Workers migration — status, evidence, and limits
 
-**Status: implemented, not deployed.** The API can now run on Cloudflare Workers through a
-Workers-native HTTP layer. Render is still the production host and no traffic has been switched.
-The Worker has been bundled and its entry exercised locally; it has **not** been deployed to a real
-Cloudflare account and has **not** talked to Neon.
+**Status: deployed and verified against Neon. Production traffic still on Render.**
 
-Everything below was run on this machine on 2026-10-29 against the code in `apps/api`.
+- Worker: <https://parcel-yatra-api.parcelyatra.workers.dev> (`parcel-yatra-api`, version
+  `ba2fb391-faaf-416f-9332-b7e0a90ff91d`, deployed 2026-10-29)
+- Database: the same Neon project Render uses. No schema or data change; no migration was run by the
+  Worker (`MIGRATE_ON_BOOT=false`).
+- Render (`https://parcelyatrafinal.onrender.com`) keeps serving production and remains the rollback.
+- Nothing in the web or mobile clients points at the Worker yet.
+
+Everything below was measured on this machine on 2026-10-29 against the deployed Worker, not against
+a local emulator.
 
 ---
 
@@ -22,7 +27,7 @@ Fastify cannot run on Workers (see §3), so the transport was replaced, not the 
 - `apps/api/src/routes/register.ts` — the route table, prefixes and auth scopes, extracted from
   `buildApp()`. Both hosts mount this one list, so they cannot diverge.
 - `apps/api/src/worker.ts` — the Workers entry: lazy boot, safety rails, `deferredDb()`, console
-  logger, and `registerRoutes()`.
+  logger, `registerRoutes()`, and one database connection per request.
 - `apps/api/src/http/{security,error-response,rate-limit,write-limit,logger}.ts` — the pieces that
   used to come from `@fastify/cors`, `@fastify/helmet`, `@fastify/rate-limit` and pino.
 - `apps/api/src/app.ts` — still Fastify on Node/Render, now using the shared table and the shared
@@ -31,28 +36,79 @@ Fastify cannot run on Workers (see §3), so the transport was replaced, not the 
 The route modules, SQL, Zod validation, auth, cookies, OTP, payments, Cloudinary and webhooks are
 unchanged.
 
-One real bug surfaced only in the Workers runtime: `fileRoutes()` called `ensureStorage()` while
-registering, which does `mkdir`. A Worker has no writable volume, so **the whole Worker failed to
-boot** (`Error: operation not permitted`). The call was redundant — `putObject()` already creates its
-directory on the first write — so it was removed. This is exactly the class of problem the Node
-tests could not catch, and the reason `wrangler dev` is part of the check list.
+### Bugs that only the real runtime exposed
+
+Each of these was found by deploying and looking at the actual response, not by a local test.
+
+1. **`ensureStorage()` at registration** did `mkdir`. A Worker has no writable volume, so the whole
+   Worker failed to boot. Removed — `putObject()` already creates its directory on first write.
+2. **Missing non-secret configuration.** The 14 secrets were uploaded, but `PAYMENT_PROVIDER` and
+   `SMS_PROVIDER` are not secrets. `assertSafetyRails` therefore refused to start in production:
+
+   ```
+   Refusing to start:
+     - Refusing to start in production with PAYMENT_PROVIDER=mock.
+     - SMS_PROVIDER=log in production would print OTP codes to stdout.
+   ```
+
+   Every route answered `500` / Cloudflare `1101`. The values were recovered from the live Render
+   API rather than guessed: its CORS allow-list named `https://parcelyatra.vercel.app` and
+   `https://admin-parcelyatra.vercel.app` (the defaults in `config.ts` name `parcelyatrafinal…`,
+   which Render refuses), and `/v1/auth/google/authorize` returned the real Google client id and
+   redirect URI. All of it is now in `wrangler.jsonc` → `vars`.
+3. **`PUBLIC_API_URL` was missing its `/v1` suffix.** The file helpers concatenate that value
+   directly with `/files/…`, so every upload and signed URL would have 404'd. Fixed and verified by
+   uploading through the returned URL.
+4. **`pg.Pool` reused TCP sockets across requests.** Workers forbid that — "TCP sockets cannot be
+   created in global scope and shared across requests"
+   (<https://developers.cloudflare.com/workers/runtime-apis/tcp-sockets/>). The runtime closes the
+   socket when the request ends; the pool then handed the next request a dead one. Measured on the
+   deployed Worker: `/v1/homepage` alternated `500` (10.5 s) / `200` (1.5 s) forever. Fixed by
+   giving each request its own `pg.Client` (carried to the routes through `AsyncLocalStorage`, so no
+   route module changed) and letting **Hyperdrive** do the pooling, exactly as Cloudflare documents:
+   "Create a new client instance for each request. Hyperdrive maintains the underlying database
+   connection pool, so creating a new client is fast."
+   (<https://developers.cloudflare.com/hyperdrive/examples/connect-to-postgres/postgres-drivers-and-libraries/node-postgres/>)
+5. **`/v1/readiness` could not read the migrations.** It used `node:fs`, which does not exist on
+   Workers, so a healthy deployment reported `migrations: down / unreadable` and `503`.
+   `scripts/gen-migrations.mjs` now compiles `migrations/*.sql` into
+   `src/db/migrations.generated.ts` (run automatically by `deploy:worker`), and
+   `test/migration-manifest.test.ts` fails if that copy is stale. Checksums are computed over
+   LF-normalised text so a Windows checkout and a Linux deployment agree.
+6. **`/v1/health` reported `storage: degraded`** because it probed a local directory that Workers do
+   not have. With `STORAGE_PROVIDER=cloudinary` it now checks the credential set instead (the boot
+   rails already require those three values).
+7. **The first query timed out even with a warm pool.** Letting `query()` connect implicitly arms
+   node-postgres' query timer while the Hyperdrive handshake is still in flight. An explicit
+   `client.connect()` before the first query fixed it.
 
 ## 2. What was verified (PASS)
 
-| Check | Command / file | Result |
+| Check | Evidence | Result |
 |---|---|---|
-| Worker bundle builds | `npm run build:worker -w @py/api` | PASS — 2,939 KiB upload / 565 KiB gzip, 28 text modules (migrations + `schema.sql`) |
-| Worker runs in the real runtime | `npx wrangler dev` (workerd) | PASS — `GET /` 200, `GET /v1/nope` 404, `OPTIONS /v1/me` 204, `GET /v1/me` 401, security/CORS/rate-limit headers correct. `GET /v1/health` 503 with `database: down` because no `DATABASE_URL` was supplied |
-| Worker entry boots and serves | `apps/api/test/worker-entry.test.ts` | PASS — 6/6: root, health, 404, 401, preflight, wildcard |
-| Fastify vs Workers parity | `apps/api/test/hono-parity.test.ts` | PASS — 21/21 (status, headers, bodies; see §5) |
-| Whole API suite | `npm run test -w @py/api` | PASS — 119/119 |
-| Whole repository suite | `npm run test` | PASS — domain 108, api 119, web 7, mobile 16 |
-| Typecheck | `npm run typecheck` | PASS — domain, api, web, mobile |
-| Global-scope timer removed | `apps/api/src/services/redis.ts` | PASS — `MemoryTrackingStore` sweeps on write, no constructor timer |
-| Lazy tracking store | same file | PASS — constructed on first use, not at import |
-| Database kept out of boot | `deferredDb()` in `apps/api/src/db/client.ts` | PASS |
-| `getDb()` retries after a failed connect | same file | PASS — a rejected connect promise is cleared |
-| pino resolves to its Node build | `alias` in `apps/api/wrangler.jsonc` | PASS — the `pino.symbols` crash is gone |
+| Deploy | `npm run deploy:worker -w @py/api` | PASS — 2,939 KiB upload / 565 KiB gzip, startup 63 ms |
+| Root | `GET /` | PASS — `200 {"name":"Parcel Yatra API","status":"ok","version":"0.1.0"}` |
+| Health | `GET /v1/health` | PASS — `200`, `database: ok`, `storage: ok`, `queue: ok` |
+| Readiness | `GET /v1/readiness` | PASS — `200 {"status":"ready"}`, migrations `ok` (no drift, none pending) |
+| Worker → Neon | health/readiness/homepage | PASS — real reads against the production database |
+| Homepage | `GET /v1/homepage` | PASS — `200`, schema version 33, identical to Render's payload |
+| Auth required | `GET /v1/me`, `GET /v1/sync/state` | PASS — `401 AUTH_REQUIRED`, same envelope as Render |
+| Authenticated read | minted access token for a live session, then `GET /v1/me` and `GET /v1/sync/state` | PASS — `200` on both hosts, identical key sets, `id` matches the token subject |
+| Authenticated write | `PATCH /v1/me` through the Worker, then `GET /v1/me` on Render | PASS — `200`; the write is visible on Render immediately (one database) |
+| Cloudinary upload | `POST /v1/files/upload-url` → `PUT` the returned URL → `GET /v1/files/object/…` | PASS — `201`/`201`/`200`, bytes identical, URL carries the `/v1` prefix |
+| Google sign-in entry | `GET /v1/auth/google/authorize` | PASS — `200`, same client id, redirect URI, scopes, PKCE challenge as Render |
+| CORS | allowed origin, disallowed origin, preflight | PASS — allowed origin echoed, disallowed not echoed, preflight `204` with the same method/header lists |
+| Security headers | CSP, COOP, CORP, HSTS, nosniff, frame options, referrer policy | PASS — identical to Render |
+| Error envelopes | `401`, `404`, `405→404`, malformed JSON `400`, unknown method | PASS — same `code`/`message` shape |
+| Latency (warm) | `curl -w` against both hosts | PASS — Worker `0.47–0.76 s`, Render `0.49–1.03 s`; SQL 3–10 ms warm, 127 ms on the first query per isolate |
+| Whole API suite | `npm run test -w @py/api` | PASS — 121/121 (including the new manifest test) |
+| Typecheck | `npm run typecheck -w @py/api` | PASS |
+| Fastify vs Workers parity | `apps/api/test/hono-parity.test.ts` | PASS — 21/21 |
+| Worker entry | `apps/api/test/worker-entry.test.ts` | PASS — 6/6 |
+
+The only header difference found by the Render-vs-Worker sweep is `Vary: Accept-Encoding`: Render
+adds it from `@fastify/compress`, the Worker does not compress and Cloudflare handles encoding at
+the edge. Responses are identical; only a cache key differs.
 
 ## 3. Why Fastify itself cannot run on Workers
 
@@ -96,19 +152,18 @@ evaluates a string. The facade above it reproduces the Fastify behaviour the rou
 | Area | Verdict | Evidence / reason |
 |---|---|---|
 | Fastify 5 HTTP layer | **BLOCKER (bypassed)** | `new Function` in `find-my-way`; replaced by the Hono facade |
-| Hono routing, 121 routes | **PASS** | `hono-parity.test.ts` and `worker-entry.test.ts` register and serve the real table |
-| CORS / security headers | **PASS (parity)** | Captured from the running Fastify app, reproduced, compared per request |
-| Body limits and parsers | **PASS (parity)** | 1 MiB default, 10 MiB files, raw webhook bodies, 413/415 envelopes |
+| Hono routing, 121 routes | **PASS** | Real table served on Workers; parity + entry tests |
+| CORS / security headers | **PASS** | Compared per request against the live Render API |
+| Body limits and parsers | **PASS** | 1 MiB default, 10 MiB files, raw webhook bodies, 413/415 envelopes; a real PNG went through the upload sink byte-for-byte |
+| `pg` + Neon over TCP | **PASS, with Hyperdrive** | Direct pooling is unusable (§1.4). Hyperdrive (free plan, 100k queries/day) with one `pg.Client` per request: warm SQL 3–10 ms |
+| Cloudinary | **PASS** | Upload authorisation, signed write, authenticated read-back |
+| Google OAuth | **PASS (entry), NOT VERIFIED (callback)** | `/authorize` matches Render; the code exchange needs a browser round-trip |
 | Rate limiting | **PARTIAL** | Counted per isolate, not global. Stops double-submits and one abusive client; not a distributed defence. Global enforcement needs a Durable Object |
-| Socket.IO | **BLOCKER** | Workers have no HTTP `upgrade` event. Already mitigated: clients use `/v1/sync/state` + polling |
+| Socket.IO | **BLOCKER** | Workers have no HTTP `upgrade` event. Mitigated: clients use `/v1/sync/state` + polling |
 | Background jobs (`setInterval`) | **HIGH** | Timers do not outlive a request; `JOBS_ENABLED=false`. OTP-counter pruning and trip-route backfill need a Cron Trigger |
 | Live tracking store | **HIGH** | The default store is per-isolate memory. Cross-isolate tracking needs `REDIS_URL` or a Durable Object |
-| `pg` over TCP to Neon | **HIGH, unverified** | Documented as supported; 6 outbound connections per invocation on the free plan. Never exercised against a real Neon database here |
-| `node:fs` virtual file system | **MEDIUM** | Supported but per-isolate and ephemeral: `STORAGE_PROVIDER=cloudinary` is required |
-| pino | **MEDIUM** | Node build pinned via `alias`; the Worker uses a console JSON logger instead |
-| PGlite | **N/A** | Development-only; `deferredDb()` keeps its WebAssembly out of the Worker path |
-| Migrations at boot | **LOW** | Already a separate step (`npm run db:migrate`); bundled as text modules for `/v1/readiness` |
-| Free-tier budget | **MEDIUM** | 100k requests/day, 10 ms CPU, 50 subrequests, 128 MB. A 25 s foreground poll is roughly 3,456 requests/user/day; ~25 concurrently active users fit the daily budget |
+| Migrations at boot | **LOW** | Still a separate step (`npm run db:migrate`); `/v1/readiness` reads the compiled manifest |
+| Free-tier budget | **MEDIUM** | 100k requests/day, 10 ms CPU, 50 subrequests, 128 MB; Hyperdrive free adds 100k queries/day. A 25 s foreground poll is ~3,456 requests/user/day; ~25 concurrently active users fit |
 
 ## 5. Behaviour parity, case by case
 
@@ -124,8 +179,10 @@ layer over one PGlite database and compares status, `content-type`, selected hea
 - the webhook raw-body parser, including its (existing) 500 on malformed JSON;
 - a binary `image/png` response with its content type and byte-for-byte body.
 
-Two intentional differences remain, both documented above: rate-limit counters are per isolate, and
-there are no background jobs.
+The same sweep was then run against the two live hosts for `/`, health, readiness, `401`s,
+`/v1/cities`, `/v1/config`, `/v1/homepage`, Google authorize, `404`, wrong method, preflight,
+disallowed origin and malformed JSON: all identical apart from request ids, latencies and the
+`Vary` header noted in §2.
 
 ## 6. Known limits on Workers
 
@@ -137,11 +194,20 @@ there are no background jobs.
 - **Live tracking is per isolate** unless `REDIS_URL` is configured. The change feed
   (`/v1/sync/state`) and tracking polling still work; only the in-memory geofence/telemetry store is
   local.
-- **Local storage is not durable.** Use `STORAGE_PROVIDER=cloudinary`.
+- **`statement_timeout` is not applied on Workers.** node-postgres sends it as a startup parameter
+  and Hyperdrive did not honour it, which hung the query. Hyperdrive enforces its own 60 s statement
+  limit; the client keeps a 20 s query timeout.
+- **Hyperdrive has a 100k queries/day free ceiling.** Every statement through Hyperdrive counts,
+  including the two the auth hook runs on each authenticated request. Exceeding it fails queries
+  until 00:00 UTC.
+- **Local storage is not durable.** `STORAGE_PROVIDER=cloudinary` is required and set.
 
 ## 7. Commands
 
 ```powershell
+# Regenerate the compiled migration manifest (deploy:worker does this automatically)
+npm run gen:migrations -w @py/api
+
 # Bundle only — proves nothing about runtime
 npm run build:worker -w @py/api
 
@@ -149,9 +215,6 @@ npm run build:worker -w @py/api
 # routes that do not touch the database will answer.
 cd apps/api
 npx wrangler dev --var NODE_ENV:development --var JOBS_ENABLED:false --var AUTO_SEED:false
-
-# Local Worker against Neon, with the real secrets
-npx wrangler dev --var DATABASE_URL:"postgres://…neon.tech/…?sslmode=require"
 
 # Secrets (one per command, never on the command line in a shared shell)
 npx wrangler secret put DATABASE_URL
@@ -162,32 +225,47 @@ npx wrangler secret put PHONE_HASH_SECRET
 npx wrangler secret put OTP_SEAL_SECRET
 npx wrangler secret put FILE_SIGNING_SECRET
 npx wrangler secret put PAYMENT_WEBHOOK_SECRET
+# plus CLOUDINARY_*, GOOGLE_CLIENT_SECRET, FAST2SMS_API_KEY, REDIS_URL for the configured providers
+
+# Hyperdrive: one config, pointing at the DIRECT Neon endpoint (the -pooler host hung)
+npx wrangler hyperdrive create parcel-yatra-neon-direct --connection-string="postgres://…"
 
 # Migrations still run from a machine with Node, not from the Worker
 npm run db:migrate -w @py/api
 
-# Deploy
+# Deploy (regenerates the manifest first)
 npm run deploy:worker -w @py/api
 ```
 
-`PUBLIC_API_URL` in `apps/api/wrangler.jsonc` is a placeholder and must be replaced with the real
-`workers.dev` (or custom domain) URL before deploy, because it is embedded in file-signing and OAuth
-callbacks. `TRUST_PROXY=true` is set there so the per-IP OTP budget reads the client address from
-`cf-connecting-ip`.
+`wrangler.jsonc` holds the non-secret production configuration copied from Render:
+`PUBLIC_API_URL` (must end in `/v1`), `PUBLIC_WEB_URL`, `ADMIN_WEB_URL`, `PAYMENT_PROVIDER`,
+`SMS_PROVIDER`, `GOOGLE_OAUTH_ENABLED`, `GOOGLE_CLIENT_ID`, `GOOGLE_REDIRECT_URI`,
+`STORAGE_PROVIDER=cloudinary`, `DATABASE_SSL=require`, `TRUST_PROXY=true` (so the per-IP OTP budget
+reads `cf-connecting-ip`).
 
-**Rollback:** no production traffic is switched by any of this. Render keeps serving; deleting the
-Worker (`npx wrangler delete`) has no effect on the live API.
+**Rollback:** Render is untouched and still serving. `npx wrangler delete` removes the Worker with no
+effect on the live API. The Hyperdrive config and the Neon database are independent of the Worker.
 
 ## 8. Not verified
 
-- No Cloudflare account or credentials were available: no real `workers.dev` deployment exists. The
-  Worker has run locally in `wrangler dev` (workerd), but not on Cloudflare's network.
-- No Neon credentials and no local PostgreSQL: no Worker request ever reached a database. The local
-  health check correctly reported `database: down` instead of crashing.
-- No staging environment: nothing here proves the API works under load, or that Neon's pooled
-  connection limit survives the Worker's per-invocation connections.
-- Google OAuth redirect URIs, payment webhooks and Cloudinary callbacks would all need their
-  registered URLs updated for any new host; none were changed.
+- **`SMS_PROVIDER=fast2sms` is inferred, not confirmed.** It was set because `FAST2SMS_API_KEY` is
+  present as a Worker secret; compare the Render Environment tab before switching traffic. No OTP
+  was sent — that would have texted a real phone number.
+- **Google OAuth callback** (`/v1/auth/google/callback`) was not exercised: it needs a browser
+  round-trip with a real Google account.
+- **Payment webhooks** were not replayed: a valid signature creates real payment records.
+- **Live tracking writes** (`POST /v1/tracking/…`) were not exercised: they need a live trip.
+- **Socket.IO** is not available on Workers at all (see §4); clients already fall back to polling.
+- **Cron jobs** (OTP-counter prune, trip-route backfill) do not run on Workers.
+- **Load and concurrency** were not tested. The free plan allows 6 simultaneous outbound connections
+  per invocation and 100k requests/day; the pilot's ~25 concurrent users is an estimate, not a
+  measurement.
+- **Clients still point at Render.** `apps/mobile/app.json`, `apps/mobile/eas.json`,
+  `apps/mobile/src/api/client.ts`, `apps/web/src/components/LiveTrackingMap.tsx` and
+  `EXPO_PUBLIC_API_BASE` all reference `parcelyatrafinal.onrender.com`. Switching them is a separate,
+  reversible step, and the Android build must be re-cut for a native URL change.
+- **Registered third-party URLs still name the old hosts**: Google OAuth redirect URIs, payment
+  webhook URLs and any Cloudinary callback. None were changed.
 
 ## 9. What also shipped from this work
 
@@ -202,3 +280,5 @@ Independent of the host, and verified by the suite:
   discovery and live-position polls where seconds matter.
 - `deferredDb()`, lazy `getDb()` retry, lazy tracking store — all three are correct on Node too and
   remove module-scope side effects.
+- `scripts/gen-migrations.mjs` + `test/migration-manifest.test.ts` — one compiled source of migration
+  text for hosts without a filesystem, with a test that refuses to let it drift.

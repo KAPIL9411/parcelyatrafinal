@@ -18,6 +18,7 @@ apps/api/data/
 .env.local
 .env.*.local
 .env.production
+.env.cloudflare
 
 # Logs and editor noise
 *.log

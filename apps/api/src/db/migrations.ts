@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 
 import { config } from '../config.ts';
 import type { Db } from './client.ts';
+import { MIGRATION_SOURCES } from './migrations.generated.ts';
+import { normalizeSql } from './migration-source.ts';
 
 /**
  * Versioned migrations.
@@ -71,6 +73,30 @@ export function migrationsDir(): string {
 }
 
 export async function loadMigrations(): Promise<Migration[]> {
+  const migrations = await readMigrationsFromDisk().catch((err: unknown) => {
+    // Workers have no filesystem: `readdir`/`readFile` throw there. Fall back to the manifest that
+    // `scripts/gen-migrations.mjs` compiles before each Worker build. The manifest is generated from
+    // the same files, so the fallback cannot disagree with a correct checkout; a stale one is caught
+    // by `test/migration-manifest.test.ts`.
+    if (MIGRATION_SOURCES.length === 0) throw err;
+    return MIGRATION_SOURCES.map((m) => ({
+      version: m.version,
+      name: m.name,
+      path: `migrations/${m.version}_${m.name}.sql`,
+      sql: m.sql,
+      checksum: m.checksum,
+    }));
+  });
+
+  const seen = new Set<string>();
+  for (const m of migrations) {
+    if (seen.has(m.version)) throw new Error(`Duplicate migration version ${m.version}.`);
+    seen.add(m.version);
+  }
+  return migrations;
+}
+
+async function readMigrationsFromDisk(): Promise<Migration[]> {
   const dir = migrationsDir();
   const files = (await readdir(dir)).filter((f) => /^\d{4}_[a-z0-9_]+\.sql$/i.test(f)).sort();
 
@@ -87,15 +113,10 @@ export async function loadMigrations(): Promise<Migration[]> {
       name: file.replace(/^\d+_/, '').replace(/\.sql$/, ''),
       path,
       sql,
-      checksum: createHash('sha256').update(sql, 'utf8').digest('hex'),
+      checksum: createHash('sha256').update(normalizeSql(sql), 'utf8').digest('hex'),
     });
   }
 
-  const seen = new Set<string>();
-  for (const m of migrations) {
-    if (seen.has(m.version)) throw new Error(`Duplicate migration version ${m.version}.`);
-    seen.add(m.version);
-  }
   return migrations;
 }
 

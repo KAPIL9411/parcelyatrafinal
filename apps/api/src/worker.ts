@@ -37,13 +37,21 @@
 import type { FastifyInstance } from 'fastify';
 
 import { assertSafetyRails, config, corsOrigins } from './config.ts';
-import { deferredDb } from './db/client.ts';
+import { deferredDb, withRequestDb } from './db/client.ts';
 import { createCompatApp, type CompatScope } from './http/fastify-compat.ts';
 import { makeConsoleLogger } from './http/logger.ts';
 import { registerRoutes } from './routes/register.ts';
 
 interface Booted {
   app: CompatScope;
+}
+
+interface Env {
+  /**
+   * Hyperdrive binding (`wrangler.jsonc` → `hyperdrive`). It points at a pooled, already-warm
+   * connection to Neon, which is what makes a per-request `pg.Client` cheap.
+   */
+  HYPERDRIVE?: { connectionString: string };
 }
 
 let booting: Promise<Booted> | null = null;
@@ -81,8 +89,10 @@ function boot(): Promise<Booted> {
 }
 
 export default {
-  async fetch(request: Request): Promise<Response> {
+  async fetch(request: Request, env: Env = {}): Promise<Response> {
     const { app } = await boot();
-    return app.fetch(request);
+    // Every request gets its own connection: a Worker may not reuse a TCP socket across requests.
+    // Hyperdrive supplies the pooling behind that connection.
+    return withRequestDb(env.HYPERDRIVE?.connectionString, () => app.fetch(request));
   },
 };

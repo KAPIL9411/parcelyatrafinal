@@ -15,9 +15,10 @@
     "db:reset": "tsx src/db/reset.ts",
     "geo:matrix": "tsx scripts/geo-matrix.ts",
     "test:load": "tsx scripts/load-test-tracking.ts",
-    "dev:worker": "wrangler dev",
-    "build:worker": "wrangler deploy --dry-run --outdir dist-worker",
-    "deploy:worker": "wrangler deploy"
+    "gen:migrations": "node scripts/gen-migrations.mjs",
+    "dev:worker": "node scripts/gen-migrations.mjs && wrangler dev",
+    "build:worker": "node scripts/gen-migrations.mjs && wrangler deploy --dry-run --outdir dist-worker",
+    "deploy:worker": "node scripts/gen-migrations.mjs && wrangler deploy"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.11",

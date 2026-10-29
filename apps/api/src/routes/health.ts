@@ -36,11 +36,21 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
 
     t = Date.now();
     let storageStatus: 'ok' | 'degraded' = 'ok';
-    try {
-      await mkdir(storageRoot(), { recursive: true });
-      await access(storageRoot());
-    } catch {
-      storageStatus = 'degraded';
+    if (config.STORAGE_PROVIDER === 'cloudinary') {
+      // Objects live in Cloudinary, so there is no directory to probe — and on Workers there is no
+      // writable filesystem at all, which made this check report `degraded` for a healthy deployment.
+      // Probing the credential set is the only free, offline signal; a live API call would spend
+      // quota on every healthcheck. Boot already refuses production without these three values.
+      if (!config.CLOUDINARY_CLOUD_NAME || !config.CLOUDINARY_API_KEY || !config.CLOUDINARY_API_SECRET) {
+        storageStatus = 'degraded';
+      }
+    } else {
+      try {
+        await mkdir(storageRoot(), { recursive: true });
+        await access(storageRoot());
+      } catch {
+        storageStatus = 'degraded';
+      }
     }
     checks.push({ name: 'storage', status: storageStatus, latency_ms: Date.now() - t });
 

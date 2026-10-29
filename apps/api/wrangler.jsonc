@@ -11,18 +11,30 @@
   "observability": {
     "enabled": true
   },
-  // Migrations are read from the virtual file system at /bundle/migrations. They are included as
-  // text modules so /v1/readiness can compare the schema with the checked-in files.
+  // Migrations are also compiled into `src/db/migrations.generated.ts` by
+  // `scripts/gen-migrations.mjs` (run automatically by `deploy:worker`), because a Worker has no
+  // filesystem and `/v1/readiness` needs the checked-in SQL to compare against `schema_migrations`.
+  // The text modules below are kept so the files stay inspectable in the uploaded bundle.
   "find_additional_modules": true,
   "preserve_file_names": true,
   "base_dir": ".",
-  "rules": [{ "type": "Text", "globs": ["migrations/*.sql"], "fallthrough": true }],
+  "rules": [
+    {
+      "type": "Text",
+      "globs": [
+        "migrations/*.sql"
+      ],
+      "fallthrough": true
+    }
+  ],
   // pino's package.json `browser` field points at a build that has no `symbols` export, and
   // Wrangler's bundler prefers the browser condition. Fastify reads `pino.symbols` whenever it is
   // given a logger at all, so the browser build throws `Cannot destructure property
   // 'serializersSym' of 'pino.symbols'` before the first request. Pin the Node build: the Worker
   // supplies its own logger instance, so pino is only ever inspected, never written through.
-  "alias": { "pino": "../../node_modules/pino/pino.js" },
+  "alias": {
+    "pino": "../../node_modules/pino/pino.js"
+  },
   // Worker-specific overrides. Everything else (secrets, provider keys, origins) is copied from
   // the Render environment unchanged — see docs/CLOUDFLARE_MIGRATION.md.
   "vars": {
@@ -35,8 +47,30 @@
     // The compatibility layer reads the client address from `cf-connecting-ip`; this flag also
     // gates the per-IP OTP budget in `routes/auth.ts`, which expects a trusted proxy in production.
     "TRUST_PROXY": "true",
-    "PUBLIC_API_URL": "https://parcel-yatra-api.example.workers.dev/v1"
+    // Must end in `/v1`: the file and signed-URL helpers concatenate this value directly with
+    // `/files/...` (apps/api/src/lib/storage.ts, routes/files.ts).
+    "PUBLIC_API_URL": "https://parcel-yatra-api.parcelyatra.workers.dev/v1",
+    // Browser origins, taken from the live Render deployment (it answers CORS for exactly these two
+    // and refuses the `parcelyatrafinal...` defaults baked into config.ts).
+    "PUBLIC_WEB_URL": "https://parcelyatra.vercel.app",
+    "ADMIN_WEB_URL": "https://admin-parcelyatra.vercel.app",
+    // assertSafetyRails refuses to boot in production with the `mock`/`log` defaults.
+    "PAYMENT_PROVIDER": "sandbox_provider",
+    "SMS_PROVIDER": "fast2sms",
+    // Google sign-in, read back from Render's own /v1/auth/google/authorize response.
+    "GOOGLE_OAUTH_ENABLED": "true",
+    "GOOGLE_CLIENT_ID": "130100214583-b8jp20gsi8teqgoqk116o6pnlb1tqlnm.apps.googleusercontent.com",
+    "GOOGLE_REDIRECT_URI": "https://parcelyatra.vercel.app/auth/google/callback"
   },
+  // Hyperdrive pools the connections Neon sees and keeps them warm at the edge. Without it, a Worker
+  // must open a fresh TLS connection per request (sockets cannot be reused across requests) and every
+  // API call pays ~1s of handshake to the database region.
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "53d92c4c76954b7da1d6af273174db0b"
+    }
+  ],
   // `wrangler deploy` refuses to upload until every one of these exists as a secret.
   "secrets": {
     "required": [
