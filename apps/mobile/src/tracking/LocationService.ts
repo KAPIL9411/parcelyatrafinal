@@ -63,40 +63,46 @@ export async function requestLocationPermissions(): Promise<boolean> {
  * Start foreground + background driver GPS streaming service for active booking.
  */
 export async function startDriverLocationService(bookingId: string): Promise<boolean> {
+  currentTrackingBookingId = bookingId;
   const permitted = await requestLocationPermissions();
   if (!permitted) {
+    if (currentTrackingBookingId === bookingId) currentTrackingBookingId = null;
     console.warn('[LocationService] Location permissions not granted');
     return false;
   }
 
   const client = getActiveDriverClient();
-  currentTrackingBookingId = bookingId;
   client.start(bookingId);
 
-  const isAlreadyRegistered = await TaskManager.isTaskRegisteredAsync(TRACKING_TASK_NAME);
-  if (!isAlreadyRegistered) {
-    await Location.startLocationUpdatesAsync(TRACKING_TASK_NAME, {
-      accuracy: Location.Accuracy.Balanced,
-      timeInterval: 2500, // 2.5s base interval
-      distanceInterval: 10, // 10 meters minimum movement
-      deferredUpdatesInterval: 2500,
-      showsBackgroundLocationIndicator: true,
-      foregroundService: {
-        notificationTitle: 'Parcel Yatra Live Delivery',
-        notificationBody: 'Sharing live location with customer for active parcel',
-        notificationColor: '#005DFD',
-      },
-      pausesUpdatesAutomatically: false,
-    });
-  }
+  // Always (re)start the updates: a task can be registered while its foreground service was never
+  // started (for example the first delivery arrived while the app was backgrounded), and skipping
+  // on `isTaskRegisteredAsync` left the courier streaming nothing for the rest of the trip.
+  await Location.startLocationUpdatesAsync(TRACKING_TASK_NAME, {
+    accuracy: Location.Accuracy.Balanced,
+    timeInterval: 2500, // 2.5s base interval
+    distanceInterval: 10, // 10 meters minimum movement
+    deferredUpdatesInterval: 2500,
+    showsBackgroundLocationIndicator: true,
+    foregroundService: {
+      notificationTitle: 'Parcel Yatra Live Delivery',
+      notificationBody: 'Sharing live location with customer for active parcel',
+      notificationColor: '#005DFD',
+    },
+    pausesUpdatesAutomatically: false,
+  });
 
   return true;
 }
 
 /**
  * Stop driver GPS streaming service and clear background task.
+ *
+ * Pass the booking that is finishing so a different active delivery is never stopped by a stale
+ * screen (e.g. the previous booking's detail unmounting after a new one started).
  */
-export async function stopDriverLocationService(): Promise<void> {
+export async function stopDriverLocationService(bookingId?: string): Promise<void> {
+  if (bookingId && currentTrackingBookingId && currentTrackingBookingId !== bookingId) return;
+
   if (activeTrackingClient) {
     activeTrackingClient.stop();
   }

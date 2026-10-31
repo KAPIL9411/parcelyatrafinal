@@ -155,11 +155,3 @@ export function sectionSurface(section: HomeSection, palette: HomePalette): Sect
     accent,
   };
 }
-
-/**
- * Opacity ramp for the faux gradient: the destination colour laid over the origin colour in even
- * steps. Six bands read as a smooth wash at phone sizes and cost nothing native.
- */
-export function gradientBands(to: string, steps = 6): string[] {
-  return Array.from({ length: steps }, (_, index) => withAlpha(to, (index + 1) / steps));
-}

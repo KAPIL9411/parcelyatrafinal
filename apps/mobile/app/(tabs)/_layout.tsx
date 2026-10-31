@@ -1,7 +1,7 @@
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Tabs, router } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Keyboard, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 
 import { conversationsApi, notificationsApi } from '../../src/api/client.ts';
@@ -91,6 +91,27 @@ interface PillTabBarProps {
 }
 
 function PillTabBar({ state, descriptors, navigateToTab, insets }: PillTabBarProps) {
+  // The navigator's own `tabBarHideOnKeyboard` left the bar stuck off-screen after some keyboard
+  // screens (chat, address entry) and only a tab switch brought it back. Visibility is derived here
+  // from the keyboard itself, and re-read on every tab change, so it can never latch hidden.
+  const [keyboardVisible, setKeyboardVisible] = useState(Keyboard.isVisible());
+  const tabIndex = state.index;
+
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    setKeyboardVisible(Keyboard.isVisible());
+  }, [tabIndex]);
+
+  if (keyboardVisible) return null;
+
   return (
     <View pointerEvents="box-none" style={[styles.layer, { bottom: insets.bottom + 24 }]}>
       <View style={styles.bar}>
@@ -164,7 +185,6 @@ export default function TabsLayout() {
         ...header,
         tabBarActiveTintColor: colors.brand,
         tabBarInactiveTintColor: colors.ink300,
-        tabBarHideOnKeyboard: true,
         sceneStyle: { backgroundColor: colors.canvas },
       }}
     >

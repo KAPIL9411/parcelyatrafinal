@@ -4,13 +4,17 @@
  * It is intentionally two fields rather than a single "Search" pill. The sender's first decision is
  * "from here to where", and asking for it on the homepage removes a screen from the booking flow.
  * Both fields open the serviceable-city picker; the arrow only navigates once the pair is real.
+ *
+ * The button is the one loud element inside the card: a gold coin-size target with the campaign's own
+ * accent, so the eye lands on "go" before it reads the two fields. Everything else is quiet.
  */
 import { Pressable, StyleSheet, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { AppText } from '../../components/ui.tsx';
 import { font, radius, shadow, spacing } from '../../theme.ts';
-import { withAlpha, type HomePalette } from '../theme.ts';
+import { mixHex, withAlpha, type HomePalette } from '../theme.ts';
 
 export function SearchCard({
   palette,
@@ -29,6 +33,13 @@ export function SearchCard({
   onSwap: () => void;
   onSubmit: () => void;
 }) {
+  const ready = Boolean(originName && destName);
+  const submitLabel = !originName
+    ? 'Choose your pickup city'
+    : !destName
+      ? 'Choose where the parcel is going'
+      : `Search travellers from ${originName} to ${destName}`;
+
   return (
     <View
       style={[
@@ -39,7 +50,7 @@ export function SearchCard({
     >
       <View style={styles.routeMark} pointerEvents="none">
         <View style={[styles.originDot, { borderColor: palette.brand }]} />
-        <View style={[styles.routeLine, { backgroundColor: withAlpha(palette.navy, 0.16) }]} />
+        <View style={[styles.routeLine, { backgroundColor: withAlpha(palette.navy, 0.18) }]} />
         <View style={[styles.destDot, { backgroundColor: palette.accent }]} />
       </View>
 
@@ -48,11 +59,11 @@ export function SearchCard({
           accessibilityRole="button"
           accessibilityLabel={originName ? `From ${originName}. Change pickup city` : 'Choose pickup city'}
           onPress={onPressOrigin}
-          style={({ pressed }) => [styles.field, pressed && styles.pressed]}
+          style={({ pressed }) => [styles.field, pressed && styles.pressedField]}
         >
-          <AppText style={[styles.label, { color: withAlpha(palette.navy, 0.5) }]}>FROM</AppText>
+          <AppText style={[styles.label, { color: withAlpha(palette.navy, 0.46) }]}>FROM</AppText>
           <AppText
-            style={[styles.value, { color: originName ? palette.navy : withAlpha(palette.navy, 0.4) }]}
+            style={[styles.value, { color: originName ? palette.navy : withAlpha(palette.navy, 0.36) }]}
             numberOfLines={1}
           >
             {originName ?? 'Pickup city'}
@@ -65,11 +76,11 @@ export function SearchCard({
           accessibilityRole="button"
           accessibilityLabel={destName ? `To ${destName}. Change destination` : 'Choose destination city'}
           onPress={onPressDest}
-          style={({ pressed }) => [styles.field, pressed && styles.pressed]}
+          style={({ pressed }) => [styles.field, pressed && styles.pressedField]}
         >
-          <AppText style={[styles.label, { color: withAlpha(palette.navy, 0.5) }]}>TO</AppText>
+          <AppText style={[styles.label, { color: withAlpha(palette.navy, 0.46) }]}>TO</AppText>
           <AppText
-            style={[styles.value, { color: destName ? palette.navy : withAlpha(palette.navy, 0.4) }]}
+            style={[styles.value, { color: destName ? palette.navy : withAlpha(palette.navy, 0.36) }]}
             numberOfLines={1}
           >
             {destName ?? 'Where to?'}
@@ -78,7 +89,7 @@ export function SearchCard({
       </View>
 
       <View style={styles.actions}>
-        {originName && destName ? (
+        {ready ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Swap pickup and destination"
@@ -91,14 +102,16 @@ export function SearchCard({
         ) : null}
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Search travellers for this route"
+          accessibilityLabel={submitLabel}
           onPress={onSubmit}
-          style={({ pressed }) => [
-            styles.submit,
-            { backgroundColor: palette.badgeBackground },
-            pressed && styles.pressed,
-          ]}
+          style={({ pressed }) => [styles.submit, shadow.soft, pressed && styles.pressed]}
         >
+          <LinearGradient
+            colors={[mixHex(palette.badgeBackground, '#ffffff', 0.16), palette.badgeBackground]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
           <Ionicons name="arrow-forward" size={21} color={palette.badgeText} />
         </Pressable>
       </View>
@@ -113,33 +126,35 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     borderRadius: radius.xl,
     borderWidth: 1,
-    paddingVertical: spacing.sm + 2,
-    paddingLeft: spacing.md,
-    paddingRight: spacing.sm,
+    paddingVertical: spacing.sm + 3,
+    paddingLeft: spacing.md + 2,
+    paddingRight: spacing.sm + 1,
   },
   routeMark: { width: 14, alignItems: 'center', alignSelf: 'stretch', justifyContent: 'center', gap: 3 },
-  originDot: { width: 9, height: 9, borderRadius: 5, borderWidth: 2.5, backgroundColor: 'transparent' },
+  originDot: { width: 10, height: 10, borderRadius: 5, borderWidth: 2.5, backgroundColor: 'transparent' },
   routeLine: { width: 1.5, flex: 1, maxHeight: 18 },
   destDot: { width: 9, height: 9, borderRadius: 2.5 },
   fields: { flex: 1 },
-  field: { minHeight: 40, justifyContent: 'center' },
-  label: { fontFamily: font.bold, fontSize: 9, letterSpacing: 1.1 },
-  value: { fontFamily: font.semibold, fontSize: 15, lineHeight: 19, marginTop: 1 },
+  field: { minHeight: 42, justifyContent: 'center' },
+  label: { fontFamily: font.bold, fontSize: 9, letterSpacing: 1.2 },
+  value: { fontFamily: font.semibold, fontSize: 16, lineHeight: 21, marginTop: 1 },
   divider: { height: StyleSheet.hairlineWidth },
-  actions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   swap: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
   },
   submit: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 52,
+    height: 52,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
-  pressed: { opacity: 0.82, transform: [{ scale: 0.97 }] },
+  pressed: { opacity: 0.85, transform: [{ scale: 0.96 }] },
+  pressedField: { opacity: 0.7 },
 });

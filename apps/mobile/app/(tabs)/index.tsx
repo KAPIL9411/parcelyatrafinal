@@ -23,12 +23,14 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  StyleSheet,
   View,
   useWindowDimensions,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery } from '@tanstack/react-query';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -436,13 +438,22 @@ export default function HomeScreen() {
                   styles.activeCard,
                   shadow.card,
                   { backgroundColor: palette.surface, borderColor: withAlpha(palette.navy, 0.08) },
-                  pressed && { opacity: 0.92 },
+                  pressed && { opacity: 0.94 },
                 ]}
               >
+                <LinearGradient
+                  colors={[palette.brand, palette.accent]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.activeRail}
+                  pointerEvents="none"
+                />
                 <Row style={{ justifyContent: 'space-between', alignItems: 'center' }}>
                   <Row gap={spacing.sm}>
-                    <View style={[styles.liveDot, { backgroundColor: palette.brand }]} />
-                    <AppText variant="micro" style={{ letterSpacing: 0.6, color: palette.brandDark }}>
+                    <View style={[styles.liveHalo, { backgroundColor: withAlpha(palette.brand, 0.14) }]}>
+                      <View style={[styles.liveDot, { backgroundColor: palette.brand }]} />
+                    </View>
+                    <AppText variant="micro" style={{ letterSpacing: 0.7, color: palette.brandDark }}>
                       {active.role === 'sender' ? 'YOU ARE SENDING' : 'YOU ARE CARRYING'}
                     </AppText>
                   </Row>
@@ -463,18 +474,18 @@ export default function HomeScreen() {
                     tone={active.role === 'traveller' ? 'partner' : 'brand'}
                   />
                 </View>
-                <Row style={{ justifyContent: 'space-between', marginTop: spacing.md }}>
-                  <AppText variant="small" tone="muted">
+                <View style={[styles.activeFooter, { borderTopColor: withAlpha(palette.navy, 0.07) }]}>
+                  <AppText variant="small" tone="muted" numberOfLines={1} style={{ flex: 1 }}>
                     {active.role === 'sender' ? 'Traveller' : 'Sender'} ·{' '}
                     {active.role === 'sender' ? 'verified partner' : 'sender'}
                   </AppText>
-                  <Row gap={4}>
-                    <AppText variant="subheading" style={{ color: palette.brandDark }}>
-                      Track
+                  <View style={[styles.trackPill, { backgroundColor: withAlpha(palette.brand, 0.09) }]}>
+                    <AppText variant="micro" style={{ color: palette.brandDark, fontFamily: font.semibold }}>
+                      Track live
                     </AppText>
-                    <Ionicons name="arrow-forward" size={15} color={palette.brandDark} />
-                  </Row>
-                </Row>
+                    <Ionicons name="arrow-forward" size={13} color={palette.brandDark} />
+                  </View>
+                </View>
               </Pressable>
             </View>
           </Reveal>
@@ -554,6 +565,12 @@ export default function HomeScreen() {
                     <AppText variant="subheading" style={{ fontFamily: font.semibold }}>
                       {inr(booking.agreed_total_paise)}
                     </AppText>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={15}
+                      color={withAlpha(palette.navy, 0.35)}
+                      style={{ marginLeft: -4 }}
+                    />
                   </Pressable>
                 ))}
               </View>
@@ -630,8 +647,39 @@ const styles = {
     borderRadius: radius.xl,
     borderWidth: 1,
     padding: spacing.lg,
+    overflow: 'hidden' as const,
+  },
+  activeRail: {
+    position: 'absolute' as const,
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 3,
+  },
+  liveHalo: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
   },
   liveDot: { width: 7, height: 7, borderRadius: 4 },
+  activeFooter: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  trackPill: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 4,
+    borderRadius: radius.pill,
+    paddingHorizontal: 11,
+    height: 30,
+  },
   recentRow: {
     flexDirection: 'row' as const,
     alignItems: 'center' as const,

@@ -21,7 +21,9 @@ async function call(method, path, { token, body, headers = {} } = {}) {
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: {
-      'content-type': 'application/json',
+      // Fastify treats a JSON content-type with an empty body as a parse error, so only advertise
+      // JSON when there is a body to send.
+      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       'x-py-client': 'native',
       ...(token ? { authorization: `Bearer ${token}` } : {}),
       ...headers,

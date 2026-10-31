@@ -1,16 +1,19 @@
 /**
  * Small visual primitives for the hero and promo cards.
  *
- * There is no gradient library in the app and adding one would mean a native dependency, so a
- * gradient is drawn as a handful of adjacent bands of increasing opacity. At phone sizes the bands
- * are invisible; at build time it costs nothing. The same trick gives artwork a scrim dark enough for
- * white type without flattening the image.
+ * Gradients are drawn by `expo-linear-gradient`, the same native surface the hero uses. An earlier
+ * version stacked a handful of opacity bands to avoid the dependency; on a 152 dp promo card the
+ * seams between those bands read as stripes, so the real gradient replaced it.
+ *
+ * The scrim is a gradient for the same reason: stepped darkness over a photograph looks like a
+ * rendering fault, and white type needs an even wash underneath it.
  */
 import type { ReactNode } from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import type { HomeDecoration } from '@py/domain';
 
-import { gradientBands, withAlpha } from '../theme.ts';
+import { withAlpha } from '../theme.ts';
 
 /** A percentage string with the narrow type React Native's style props expect. */
 function pct(value: number): `${number}%` {
@@ -21,52 +24,45 @@ export function FauxGradient({
   from,
   to,
   style,
-  steps = 8,
   children,
 }: {
   from: string;
   to: string;
   style?: StyleProp<ViewStyle>;
-  steps?: number;
   children?: ReactNode;
 }) {
   return (
     <View style={[{ backgroundColor: from, overflow: 'hidden' }, style]}>
-      <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-        {gradientBands(to, steps).map((colour, index) => (
-          <View key={index} style={{ flex: 1, backgroundColor: colour }} />
-        ))}
-      </View>
+      <LinearGradient
+        pointerEvents="none"
+        colors={[withAlpha(to, 0), to]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFill}
+      />
       {children}
     </View>
   );
 }
 
-/** A bottom-weighted dark scrim, stepped so it cannot introduce visible bands over a photograph. */
+/** A bottom-weighted scrim, smooth enough to sit over a photograph without banding. */
 export function Scrim({ strength = 0.62, heightRatio = 0.85 }: { strength?: number; heightRatio?: number }) {
-  const steps = 6;
+  const from = withAlpha('#081226', strength);
+  const to = withAlpha('#081226', 0);
   return (
-    <View
+    <LinearGradient
       pointerEvents="none"
+      colors={[from, to]}
+      start={{ x: 0.5, y: 1 }}
+      end={{ x: 0.5, y: 0 }}
       style={{
         position: 'absolute',
         left: 0,
         right: 0,
         bottom: 0,
         height: pct(heightRatio * 100),
-        flexDirection: 'column',
       }}
-    >
-      {Array.from({ length: steps }, (_, index) => (
-        <View
-          key={index}
-          style={{
-            flex: 1,
-            backgroundColor: withAlpha('#081226', (strength * (index + 1)) / steps),
-          }}
-        />
-      ))}
-    </View>
+    />
   );
 }
 

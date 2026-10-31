@@ -37,7 +37,9 @@ export function CategoryGrid({
   const cardWidth = Math.floor((width - spacing.lg * 2 - GAP * (COLUMNS - 1)) / COLUMNS);
   if (items.length === 0) return null;
 
-  const cream = mixHex(palette.surface, palette.accent, 0.12);
+  // A warm wash rather than a solid gold block: the campaign accent belongs on the icon, and the
+  // tile stays close enough to white that the labels keep full contrast.
+  const cream = mixHex(palette.surface, palette.accent, 0.08);
   const ink = readableOn(undefined, cream, palette.navy);
 
   return (
@@ -55,20 +57,28 @@ export function CategoryGrid({
               shadow.soft,
               {
                 width: cardWidth,
-                backgroundColor: cream,
-                borderColor: active ? palette.brand : withAlpha(palette.navy, 0.05),
+                backgroundColor: active ? mixHex(palette.surface, palette.brand, 0.06) : cream,
+                borderColor: active ? palette.brand : withAlpha(palette.accent, 0.22),
               },
               pressed && styles.pressed,
             ]}
           >
-            <View style={[styles.iconBubble, { backgroundColor: withAlpha(palette.accent, 0.4) }]}>
+            <View
+              style={[
+                styles.iconBubble,
+                {
+                  backgroundColor: active ? palette.brand : palette.accent,
+                  borderColor: withAlpha(palette.navy, 0.06),
+                },
+              ]}
+            >
               {item.image_url ? (
                 <Image source={{ uri: item.image_url }} style={styles.image} resizeMode="contain" />
               ) : (
                 <Ionicons
                   name={(item.icon ?? 'cube-outline') as IconName}
-                  size={22}
-                  color={withAlpha(palette.navy, 0.72)}
+                  size={21}
+                  color={active ? '#ffffff' : palette.navy}
                 />
               )}
             </View>
@@ -99,27 +109,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
   },
   card: {
-    minHeight: 92,
+    minHeight: 96,
     borderRadius: radius.lg,
     borderWidth: 1,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.sm,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 7,
+    gap: 8,
   },
   iconBubble: {
-    width: 38,
-    height: 38,
-    borderRadius: 13,
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
   image: { width: 26, height: 26 },
   title: {
     fontFamily: font.semibold,
-    fontSize: 12,
-    lineHeight: 15,
+    fontSize: 12.5,
+    lineHeight: 16,
     textAlign: 'center',
   },
   badge: {
@@ -132,5 +143,5 @@ const styles = StyleSheet.create({
     maxWidth: '80%',
   },
   badgeText: { fontFamily: font.bold, fontSize: 8, letterSpacing: 0.4 },
-  pressed: { opacity: 0.86, transform: [{ scale: 0.97 }] },
+  pressed: { opacity: 0.9, transform: [{ scale: 0.97 }] },
 });

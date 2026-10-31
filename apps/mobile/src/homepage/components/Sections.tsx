@@ -362,7 +362,6 @@ function PromoCards({ section, palette, originCity }: SectionProps) {
                   from={palette.navy}
                   to={palette.brand}
                   style={StyleSheet.absoluteFill}
-                  steps={6}
                 />
               )}
               <View style={styles.promoCopy}>
@@ -618,7 +617,7 @@ function CampaignBanner({ section, palette, originCity }: SectionProps) {
               <Scrim strength={0.68} heightRatio={1} />
             </>
           ) : (
-            <FauxGradient from={palette.navy} to={palette.brand} style={StyleSheet.absoluteFill} steps={6} />
+            <FauxGradient from={palette.navy} to={palette.brand} style={StyleSheet.absoluteFill} />
           )}
           <View style={styles.campaignCopy}>
             <AppText style={[styles.campaignTitle, { color: text }]} numberOfLines={2}>

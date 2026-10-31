@@ -65,6 +65,16 @@ export function getAccessToken(): string | null {
   return accessToken;
 }
 
+/** A token for work outside a screen (background location sync), refreshed when missing or stale. */
+export async function ensureAccessToken(): Promise<string | null> {
+  return accessToken ?? (await refresh());
+}
+
+/** Exchange the refresh token even when an access token is still held; used after an auth rejection. */
+export async function refreshAccessToken(): Promise<string | null> {
+  return refresh();
+}
+
 export function hasAccessToken(): boolean {
   return accessToken !== null;
 }
@@ -111,9 +121,16 @@ async function refresh(): Promise<string | null> {
   }
 
   if (!res.ok) {
-    lastRefreshFailure = 'invalid';
-    await writeRefreshToken(null);
-    accessToken = null;
+    // Only a real authentication rejection ends the session. A 429 from the write limiter or a 5xx
+    // from a restarting API used to delete the refresh token and drop the user onto the sign-in
+    // screen; the phone then had no way back without a fresh OTP.
+    if (res.status === 401 || res.status === 403) {
+      lastRefreshFailure = 'invalid';
+      await writeRefreshToken(null);
+      accessToken = null;
+    } else {
+      lastRefreshFailure = 'network';
+    }
     return null;
   }
   lastRefreshFailure = null;

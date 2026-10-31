@@ -82,6 +82,9 @@ export async function registerRoutes(
       // what the caller is already allowed to read.
       await scope.register(syncRoutes);
       await scope.register(fileRoutes);
+      // Live tracking reads and the driver batch sync all call requireAuth(). Registered outside
+      // this scope they never received a session and answered 401 to every caller.
+      await scope.register(trackingRoutes);
     },
     { prefix: '/v1' },
   );
@@ -90,7 +93,6 @@ export async function registerRoutes(
   // /auth/google/callback is called from the browser after Google redirects, before any session
   // exists — they must sit outside the authenticated scope.
   await app.register(googleAuthRoutes, { prefix: '/v1' });
-  await app.register(trackingRoutes, { prefix: '/v1' });
 
   await app.register(adminRoutes, { prefix: '/v1' });
   await app.register(adminGeoRoutes, { prefix: '/v1' });

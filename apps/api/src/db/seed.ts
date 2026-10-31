@@ -250,10 +250,10 @@ async function seedDemoBooking(db: Db): Promise<void> {
     [BOOKING_DEMO, priced.traveller_paise],
   );
   await db.query(
-    `INSERT INTO booking_events (booking_id, from_state, to_state, actor_kind, command)
-     SELECT $1, NULL, 'pending_traveller_acceptance', 'user', 'create'
+    `INSERT INTO booking_events (booking_id, from_state, to_state, actor_id, actor_kind, command)
+     SELECT $1, NULL, 'pending_traveller_acceptance', $2, 'user', 'create'
      WHERE NOT EXISTS (SELECT 1 FROM booking_events WHERE booking_id = $1)`,
-    [BOOKING_DEMO],
+    [BOOKING_DEMO, USER.sender],
   );
   await db.query(`UPDATE trips SET capacity_kg_remaining = 8.5, status = 'partially_booked' WHERE id = $1`, [
     TRIP.imranDelhi,

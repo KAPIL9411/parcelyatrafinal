@@ -132,7 +132,9 @@ function Shell() {
         }}
       >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="sign-in" options={{ headerShown: false, presentation: 'modal' }} />
+        {/* Not a modal: when signed out this is the first screen in the stack, and a modal
+            presentation there makes the navigator warn and start with a card underneath. */}
+        <Stack.Screen name="sign-in" options={{ headerShown: false }} />
         <Stack.Screen name="send" options={{ title: 'Send a parcel' }} />
         <Stack.Screen name="parcels/[id]" options={{ title: 'Parcel' }} />
         <Stack.Screen name="bookings/[id]" options={{ title: 'Booking' }} />

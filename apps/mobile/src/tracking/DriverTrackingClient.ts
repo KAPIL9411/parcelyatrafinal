@@ -1,5 +1,5 @@
 import { io, type Socket } from 'socket.io-client';
-import { API_BASE } from '../api/client.ts';
+import { API_BASE, ensureAccessToken, refreshAccessToken } from '../api/client.ts';
 import { GpsFilterPipeline, type RawGpsPoint } from './GpsFilter.ts';
 import { OfflineBuffer } from './OfflineBuffer.ts';
 
@@ -9,6 +9,7 @@ export class DriverTrackingClient {
   private offlineBuffer = new OfflineBuffer();
   private bookingId: string | null = null;
   private isConnected: boolean = false;
+  private lastReauthAt = 0;
   private getToken: () => string | null;
 
   constructor(getToken: () => string | null) {
@@ -21,7 +22,7 @@ export class DriverTrackingClient {
   start(bookingId: string): void {
     this.bookingId = bookingId;
     this.filter.reset();
-    this.connectSocket();
+    void this.connectSocket();
   }
 
   /**
@@ -37,18 +38,22 @@ export class DriverTrackingClient {
     this.isConnected = false;
   }
 
-  private connectSocket(): void {
+  private async connectSocket(): Promise<void> {
     if (this.socket) {
       this.socket.disconnect();
+      this.socket = null;
     }
 
-    const token = this.getToken();
+    // A background task can run in a fresh JS context where no screen has established the session
+    // yet, and a 30-minute access token can expire mid-delivery. Ask the API client to restore or
+    // renew it instead of silently streaming nothing.
+    const token = this.getToken() ?? (await ensureAccessToken());
     if (!token) return;
 
     // Remove /v1 suffix to reach socket root
     const socketUrl = API_BASE.replace(/\/v1$/, '');
 
-    this.socket = io(socketUrl, {
+    const socket = io(socketUrl, {
       auth: { token },
       transports: ['websocket', 'polling'],
       reconnection: true,
@@ -56,19 +61,33 @@ export class DriverTrackingClient {
       reconnectionDelayMax: 10000,
       timeout: 10000,
     });
+    this.socket = socket;
 
-    this.socket.on('connect', () => {
+    socket.on('connect', () => {
       this.isConnected = true;
       void this.flushOfflineBuffer();
     });
 
-    this.socket.on('disconnect', () => {
+    socket.on('disconnect', () => {
       this.isConnected = false;
     });
 
-    this.socket.on('connect_error', () => {
+    socket.on('connect_error', async () => {
       this.isConnected = false;
+      const now = Date.now();
+      if (now - this.lastReauthAt < 30_000) return;
+      this.lastReauthAt = now;
+      const fresh = await refreshAccessToken();
+      if (fresh && this.socket === socket) {
+        socket.auth = { token: fresh };
+        socket.connect();
+      }
     });
+  }
+
+  /** Flushes anything buffered while offline; safe to call when the socket reconnects. */
+  async sync(): Promise<void> {
+    await this.flushOfflineBuffer();
   }
 
   /**
@@ -105,7 +124,7 @@ export class DriverTrackingClient {
     }
 
     const points = this.offlineBuffer.getPoints();
-    const token = this.getToken();
+    const token = this.getToken() ?? (await ensureAccessToken());
     if (!token) return;
 
     try {
@@ -130,6 +149,9 @@ export class DriverTrackingClient {
 
       if (res.ok) {
         this.offlineBuffer.clear();
+      } else if (res.status === 401) {
+        // The buffered points are kept; the next reconnect/flush uses the renewed token.
+        await refreshAccessToken();
       }
     } catch {
       // Will retry on next reconnect

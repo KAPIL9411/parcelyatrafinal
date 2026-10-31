@@ -209,7 +209,9 @@ export function Screen({
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: background }}
-      behavior={keyboard && Platform.OS === 'ios' ? 'padding' : undefined}
+      // Edge-to-edge is on, so Android no longer shrinks the window for the keyboard; without this
+      // the field being typed into sits under it.
+      behavior={keyboard ? 'padding' : undefined}
     >
       {body}
       {footer ? <View style={{ paddingBottom: insets.bottom }}>{footer}</View> : null}

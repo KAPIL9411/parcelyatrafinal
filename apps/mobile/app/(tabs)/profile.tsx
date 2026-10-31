@@ -518,10 +518,11 @@ function ProfileBody({
 
       <Sheet visible={signOutOpen} onClose={() => setSignOutOpen(false)} title="Sign out?">
         <AppText variant="body">
-          Signing out of every device also ends sessions on other phones and browsers. You can sign in again
+          Sign out only this phone, or end every session on all phones and browsers. You can sign in again
           with Google.
         </AppText>
-        <Button label="Sign out everywhere" variant="danger" onPress={() => void doSignOut(true)} style={{ marginTop: spacing.lg }} />
+        <Button label="Sign out this phone" variant="danger" onPress={() => void doSignOut(false)} style={{ marginTop: spacing.lg }} />
+        <Button label="Sign out everywhere" variant="secondary" onPress={() => void doSignOut(true)} style={{ marginTop: spacing.sm }} />
         <Button label="Cancel" variant="secondary" onPress={() => setSignOutOpen(false)} style={{ marginTop: spacing.sm }} />
       </Sheet>
 

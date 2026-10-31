@@ -21,6 +21,7 @@ import {
 } from './api/client.ts';
 import { ApiError } from './api/http.ts';
 import type { AuthResponse, OtpChallenge, Profile } from './api/types.ts';
+import { stopDriverLocationService } from './tracking/LocationService.ts';
 
 const PROFILE_KEY = 'py.profile';
 
@@ -160,6 +161,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(
     async (everywhere = false) => {
+      // A courier signing out must not keep a foreground GPS notification alive.
+      await stopDriverLocationService().catch(() => {});
       queryClient.clear();
       await apiSignOut(everywhere);
       setUser(null);

@@ -29,7 +29,7 @@ import {
 import { Avatar, RouteTimeline, StatusTrack } from '../../src/components/kit.tsx';
 import { LiveTrackingView } from '../../src/components/LiveTrackingView.tsx';
 import { startDriverLocationService, stopDriverLocationService } from '../../src/tracking/LocationService.ts';
-import { pickPhoto } from '../../src/lib/photo.ts';
+import { capturePhoto, pickPhoto } from '../../src/lib/photo.ts';
 import {
   CANCEL_REASONS,
   DISPUTE_CATEGORY_LABELS,
@@ -104,14 +104,26 @@ function BookingDetail({ bookingId }: { bookingId: string }) {
       });
   }, [unread, bookingId, queryClient]);
 
+  const bookingStatus = booking?.status;
   useEffect(() => {
-    if (role === 'traveller' && booking?.status === 'in_transit') {
-      void startDriverLocationService(bookingId);
-      return () => {
-        void stopDriverLocationService();
-      };
+    if (role !== 'traveller') return;
+    if (bookingStatus === 'in_transit') {
+      // Tracking is best-effort: a device without the permission or the service cannot block the
+      // journey, but the failure must not surface as an unhandled rejection. It deliberately is not
+      // torn down on unmount: a courier who opens the chat or the home tab must keep streaming.
+      startDriverLocationService(bookingId).catch((err: unknown) => {
+        console.warn('[tracking] could not start the location service', err);
+      });
+    } else if (
+      bookingStatus &&
+      ['delivered', 'payout_eligible', 'paid_out', 'refunded', 'expired', 'cancelled_by_sender',
+        'cancelled_by_traveller', 'cancelled_ineligible', 'cancelled_safety', 'delivery_attempt_failed'].includes(
+        bookingStatus,
+      )
+    ) {
+      void stopDriverLocationService(bookingId);
     }
-  }, [role, booking?.status, bookingId]);
+  }, [role, bookingStatus, bookingId]);
 
   async function refreshBooking() {
     await bookingQ.refetch();
@@ -938,7 +950,9 @@ function HandoverPanel({
     setUploading(true);
     setError(null);
     try {
-      const photo = await pickPhoto();
+      // Handover evidence has to be captured now: a library image cannot prove the parcel's
+      // condition at the door.
+      const photo = await capturePhoto();
       if (!photo) return;
       const uploaded = await filesApi.upload(pickup ? 'parcel_sealed' : 'parcel_delivery', photo.uri, photo.contentType);
       setPhotoKey(uploaded.object_key);
@@ -1013,7 +1027,7 @@ function HandoverPanel({
 
       <Row style={{ marginTop: spacing.sm, justifyContent: 'space-between' }}>
         <Button
-          label={photoKey ? 'Photo attached' : pickup ? 'Attach sealed-parcel photo' : 'Attach handover photo'}
+          label={photoKey ? 'Photo attached' : pickup ? 'Take sealed-parcel photo' : 'Take handover photo'}
           variant={photoKey ? 'secondary' : 'tertiary'}
           size="sm"
           fullWidth={false}
@@ -1480,7 +1494,8 @@ function TimelineCard({ booking, role }: { booking: Booking; role: 'sender' | 't
                   {statusLabel(event.to_state)}
                 </AppText>
                 <AppText variant="small" tone="muted">
-                  {actorLabel(event.actor_role, event.actor_kind, role)} · {formatDateTime(event.occurred_at)}
+                  {actorLabel(event.actor_role, event.actor_kind, role, event.from_state)} ·{' '}
+                  {formatDateTime(event.occurred_at)}
                   {event.reason_code ? ` · ${event.reason_code.replace(/_/g, ' ').toLowerCase()}` : ''}
                 </AppText>
               </View>
@@ -1496,12 +1511,17 @@ function actorLabel(
   actorRole: 'sender' | 'traveller' | null | undefined,
   actorKind: string,
   viewerRole: 'sender' | 'traveller' | null,
+  fromState: string | null | undefined,
 ): string {
   if (actorRole) {
     if (actorRole === viewerRole) return 'You';
     return actorRole === 'sender' ? 'The sender' : 'The traveller';
   }
   if (actorKind === 'system') return 'Parcel Yatra';
+  // The opening event has no actor id on older rows, but only the sender can create a booking.
+  if (actorKind === 'user' && fromState === null) {
+    return viewerRole === 'sender' ? 'You' : 'The sender';
+  }
   return actorKind.replace(/_/g, ' ');
 }
 
