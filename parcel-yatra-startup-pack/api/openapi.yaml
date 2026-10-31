@@ -1049,12 +1049,21 @@ paths:
     post:
       tags: [Payments]
       operationId: createPaymentIntent
-      summary: Create a sandbox payment intent
+      summary: Create a payment intent
       description: |
-        **Sandbox only.** The amount is taken from the stored quote, never from the request.
-        Returns `501 PAYMENTS_NOT_ENABLED` when `PAYMENTS_LIVE` is false and the mock adapter
-        is not selected, which is the expected production configuration until the launch gates
-        are cleared.
+        The amount is taken from the stored quote, never from the request.
+
+        - `mock` — a test row. Only the development simulator can capture it, and the simulator
+          is refused when the provider is `upi_direct`.
+        - `sandbox_provider` — the shape a hosted gateway would use. No checkout is wired, so the
+          intent stays `created`.
+        - `upi_direct` — returns `payment_link` (a `upi://pay` intent with the exact amount and a
+          unique reference) and `payee`. The sender pays from their own UPI app; a `finance` user
+          then records the bank reference at `POST /admin/bookings/{bookingId}/payment/receipt`.
+          No event from a UPI app is accepted as proof of payment.
+
+        Returns `501 PAYMENTS_NOT_ENABLED` when neither a provider nor the mock adapter is
+        selected, which is the expected configuration until the launch gates are cleared.
       responses:
         '201':
           description: Intent created
@@ -1514,6 +1523,96 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+
+  /admin/payments/upi-awaiting:
+    get:
+      tags: [Admin]
+      operationId: adminListUpiAwaiting
+      summary: Direct-UPI collections with no receipt yet
+      description: |
+        Requires the `finance` role. Lists `upi_direct` payments still in `created`, with the
+        sender, the amount and the reference to look for on the bank statement. Nothing here
+        has been confirmed; the list is the work queue for `POST /admin/bookings/{bookingId}/payment/receipt`.
+      responses:
+        '200':
+          description: Awaiting collections, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/UpiReceipt'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /admin/bookings/{bookingId}/payment/receipt:
+    parameters:
+      - $ref: '#/components/parameters/BookingId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Admin]
+      operationId: adminRecordUpiReceipt
+      summary: Record a bank reference as received for a direct-UPI collection
+      description: |
+        Requires the `finance` role. The only way a `upi_direct` payment becomes `captured`.
+
+        The call is refused unless the operator supplies the UTR printed on the bank statement.
+        It moves the payment to `captured`, writes one `capture` ledger entry and advances the
+        booking (`payment_authorised`) in the same transaction. `payments.provider_event_id` is
+        unique, so one bank line cannot settle two bookings; a repeat call answers
+        `409 PAYMENT_ALREADY_EXISTS`, and a UTR already used elsewhere answers
+        `409 CONFLICT` with `reason: utr_already_recorded`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [utr]
+              properties:
+                utr:
+                  type: string
+                  pattern: '^[A-Za-z0-9]{6,30}$'
+                  description: Bank/UPI reference from the statement, case-insensitive.
+                note:
+                  type: string
+                  maxLength: 300
+      responses:
+        '201':
+          description: Receipt recorded and booking advanced
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [booking_id, payment_id, state, utr, amount_paise, booking_status]
+                properties:
+                  booking_id:
+                    type: string
+                    format: uuid
+                  payment_id:
+                    type: string
+                    format: uuid
+                  state:
+                    type: string
+                    const: captured
+                  utr:
+                    type: string
+                  amount_paise:
+                    type: integer
+                  booking_status:
+                    type: string
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Booking or awaiting payment missing
+        '409':
+          description: PAYMENT_NOT_PAYABLE, PAYMENT_ALREADY_EXISTS or CONFLICT (utr_already_recorded)
 
   /admin/refunds:
     post:
@@ -2458,7 +2557,7 @@ components:
     PaymentIntent:
       type: object
       additionalProperties: false
-      required: [id, state, amount_paise, currency, provider, sandbox]
+      required: [id, state, amount_paise, currency, provider, sandbox, provider_ref, payment_link, payee]
       properties:
         id:
           type: string
@@ -2473,17 +2572,60 @@ components:
           const: INR
         provider:
           type: string
-          enum: [mock, sandbox_provider]
+          enum: [mock, sandbox_provider, upi_direct]
         sandbox:
           type: boolean
-          description: True for every pilot payment. Must be shown in the UI as "test mode".
+          description: |
+            True while no real money can move. A `upi_direct` intent is `false`: it names a live
+            merchant handle, and the payment only counts once finance records the bank reference.
         client_secret:
           type: [string, 'null']
         provider_ref:
           type: [string, 'null']
+        payment_link:
+          type: [string, 'null']
+          description: |
+            `upi://pay?...` intent with the handle, exact amount and reference baked in. Present
+            only for `upi_direct`; render it as a QR code and as a link, and never treat the
+            intent as paid.
+        payee:
+          type: [object, 'null']
+          additionalProperties: false
+          required: [vpa, name]
+          properties:
+            vpa:
+              type: string
+            name:
+              type: string
         created_at:
           type: string
           format: date-time
+
+    UpiReceipt:
+      type: object
+      additionalProperties: false
+      required: [payment_id, booking_id, amount_paise, reference, created_at, booking_status]
+      properties:
+        payment_id:
+          type: string
+          format: uuid
+        booking_id:
+          type: string
+          format: uuid
+        amount_paise:
+          type: integer
+        reference:
+          type: [string, 'null']
+        created_at:
+          type: string
+          format: date-time
+        booking_status:
+          type: string
+        sender_name:
+          type: [string, 'null']
+        sender_phone:
+          type: [string, 'null']
+          description: Masked, as stored (`users.phone_masked`).
 
     Refund:
       type: object

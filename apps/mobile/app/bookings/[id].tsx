@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, Pressable, Text, View } from 'react-native';
+import { Alert, Linking, Pressable, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -336,7 +336,7 @@ function ActionPanel({
   const [cancelReason, setCancelReason] = useState<string | null>(null);
   const [disputeOpen, setDisputeOpen] = useState(false);
 
-  const now = useTick(Boolean(booking.accept_by) || Boolean(booking.dispute_deadline));
+  const now = useTick([booking.accept_by, booking.dispute_deadline]);
   const acceptRemaining = remainingMs(booking.accept_by, now);
   const disputeRemaining = remainingMs(booking.dispute_deadline, now);
   const disputeExpired = Boolean(booking.dispute_deadline) && disputeRemaining <= 0;
@@ -631,10 +631,35 @@ function ActionPanel({
 // ---------------------------------------------------------------------------- payment
 
 function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Promise<void> }) {
-  const [state, setState] = useState<'idle' | 'creating' | 'awaiting' | 'paid'>('idle');
+  const [state, setState] = useState<'idle' | 'creating' | 'awaiting' | 'checking' | 'paid'>('idle');
   const [intent, setIntent] = useState<PaymentIntent | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [checked, setChecked] = useState(false);
   const afterDelivery = booking.status !== 'payment_pending';
+
+  // A reload must not lose the collection the sender already started: the booking payload carries
+  // the same link the intent returned, so the panel rebuilds itself from the server's copy.
+  const stored = booking.payment;
+  const payment: PaymentIntent | null =
+    intent ??
+    (stored?.payment_link
+      ? {
+          id: stored.reference ?? '',
+          state: stored.state,
+          amount_paise: stored.amount_paise,
+          currency: 'INR',
+          provider: 'upi_direct',
+          sandbox: stored.sandbox,
+          client_secret: null,
+          provider_ref: stored.reference ?? '',
+          payment_link: stored.payment_link,
+          payee: stored.payee ?? null,
+          created_at: '',
+        }
+      : null);
+
+  /** A direct-UPI collection waiting for a receipt: the sender pays, finance confirms. */
+  const awaitingUpi = payment?.payment_link != null && payment.state === 'created';
 
   async function createIntent() {
     setState('creating');
@@ -642,6 +667,11 @@ function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Pro
     try {
       const created = await bookingsApi.paymentIntent(booking.id);
       setIntent(created);
+
+      if (created.payment_link) {
+        setState('idle');
+        return;
+      }
 
       if (!__DEV__) {
         // No provider checkout is connected in this build. The intent is real, the money is not:
@@ -666,6 +696,24 @@ function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Pro
     }
   }
 
+  async function refresh() {
+    setState('checking');
+    setChecked(true);
+    await onPaid();
+    setState('idle');
+  }
+
+  async function openUpiApp() {
+    const link = payment?.payment_link;
+    if (!link) return;
+    setError(null);
+    try {
+      await Linking.openURL(link);
+    } catch {
+      setError(new Error('No UPI app on this device accepted the payment request. Use the UPI ID and reference below from your own app.'));
+    }
+  }
+
   return (
     <Card>
       <AppText variant="heading">{afterDelivery ? 'Pay for this delivery' : 'Confirm and pay'}</AppText>
@@ -679,7 +727,66 @@ function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Pro
             )} and comes from the stored quote.`}
       </AppText>
 
-      {state === 'awaiting' ? (
+      {awaitingUpi && payment ? (
+        <View
+          style={{
+            marginTop: spacing.md,
+            borderWidth: 1,
+            borderColor: colors.line,
+            borderRadius: radius.md,
+            backgroundColor: colors.canvas,
+            padding: spacing.lg,
+          }}
+        >
+          <AppText variant="subheading">Pay {inr(payment.amount_paise)} by UPI</AppText>
+          <AppText variant="small" tone="muted" style={{ marginTop: 4 }}>
+            Send the exact amount and keep the reference in the note. That is how the payment is matched to this
+            booking.
+          </AppText>
+
+          <View style={{ marginTop: spacing.md }}>
+            <AppText variant="label" tone="muted">
+              UPI ID
+            </AppText>
+            <AppText variant="subheading" selectable style={{ fontFamily: font.bold }}>
+              {payment.payee?.vpa ?? '—'}
+            </AppText>
+            {payment.payee?.name ? (
+              <AppText variant="small" tone="muted">
+                {payment.payee.name}
+              </AppText>
+            ) : null}
+          </View>
+
+          <View style={{ marginTop: spacing.md }}>
+            <AppText variant="label" tone="muted">
+              Reference
+            </AppText>
+            <AppText variant="subheading" selectable style={{ fontFamily: font.bold, letterSpacing: 1 }}>
+              {payment.provider_ref}
+            </AppText>
+          </View>
+
+          <Button label="Open UPI app" onPress={() => void openUpiApp()} style={{ marginTop: spacing.lg }} />
+          <Button
+            label="I have paid — check status"
+            variant="secondary"
+            size="sm"
+            loading={state === 'checking'}
+            onPress={() => void refresh()}
+            style={{ marginTop: spacing.sm }}
+          />
+          {checked ? (
+            <AppText variant="small" tone="muted" style={{ marginTop: spacing.sm }}>
+              Not confirmed yet. Receipts are matched by hand, so it can take a few hours.
+            </AppText>
+          ) : null}
+          <AppText variant="small" tone="muted" style={{ marginTop: spacing.sm }}>
+            The payment is recorded only after our finance team matches this reference to the bank statement. This
+            screen never marks itself paid.
+          </AppText>
+        </View>
+      ) : state === 'awaiting' ? (
         <View style={{ marginTop: spacing.md }}>
           <Banner
             tone="warn"
@@ -1514,13 +1621,48 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function useTick(active: boolean): number {
+function useTick(deadlines: Array<string | null>): number {
   const [now, setNow] = useState(() => Date.now());
+  const key = deadlines.filter(Boolean).join('|');
+
   useEffect(() => {
-    if (!active) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [active]);
+    if (!key) return;
+    const list = key.split('|');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    /**
+     * Wake only when the label on screen would change. The previous version ticked every second for
+     * the whole 30-minute acceptance window, re-rendering the booking screen — chat, history, live
+     * tracking — sixty times a minute. That is visible jank on the screen users leave open the
+     * longest, and it costs battery. Above a minute the label has minute resolution, so the timer
+     * sleeps until the next minute boundary; below a minute it counts seconds.
+     */
+    const schedule = (): void => {
+      const remaining = list
+        .map((iso) => new Date(iso).getTime())
+        .filter((at) => !Number.isNaN(at))
+        .map((at) => at - Date.now())
+        .filter((ms) => ms > 0);
+
+      if (remaining.length === 0) {
+        setNow(Date.now());
+        return;
+      }
+
+      const soonest = Math.min(...remaining);
+      const step = soonest >= 60_000 ? (soonest % 60_000 || 60_000) : 1_000;
+      timer = setTimeout(() => {
+        setNow(Date.now());
+        schedule();
+      }, step);
+    };
+
+    schedule();
+    return () => {
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [key]);
+
   return now;
 }
 
@@ -1531,10 +1673,11 @@ function remainingMs(iso: string | null, now: number): number {
 }
 
 function countdownLabel(ms: number): string {
-  const total = Math.floor(ms / 1000);
+  const total = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(total / 3600);
   const minutes = Math.floor((total % 3600) / 60);
   const seconds = total % 60;
   if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${seconds}s`;
 }

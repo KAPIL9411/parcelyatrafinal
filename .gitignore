@@ -33,3 +33,6 @@ Thumbs.db
 
 # Smoke-test token cache (local only)
 .smoke-tokens.json
+
+# Emulator UI run artefacts (screenshots, dumps)
+.e2e-shots/

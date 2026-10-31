@@ -540,6 +540,159 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
+  // ---------------------------------------------------------------- direct UPI receipts
+
+  /**
+   * The bank line is the evidence. Finance reads the UTR off the statement, enters it here, and only
+   * then does the payment become money in the journal. The UTR is unique across payments, so the same
+   * statement line can never settle two bookings.
+   */
+  const receiptSchema = z
+    .object({
+      utr: z
+        .string()
+        .trim()
+        .min(6)
+        .max(30)
+        .regex(/^[A-Za-z0-9]+$/, 'Use the bank reference exactly as it appears: letters and digits only.'),
+      note: z.string().trim().max(300).optional(),
+    })
+    .strict();
+
+  app.get('/admin/payments/upi-awaiting', async (req) => {
+    requireRole(req, 'finance');
+
+    const rows = await db.query<{
+      payment_id: string;
+      booking_id: string;
+      amount_paise: number;
+      reference: string | null;
+      created_at: Date;
+      booking_status: string;
+      sender_name: string | null;
+      sender_phone: string | null;
+    }>(
+      `SELECT p.id AS payment_id, p.booking_id, p.amount_paise, p.provider_ref AS reference, p.created_at,
+              b.status AS booking_status, u.name AS sender_name, u.phone_masked AS sender_phone
+         FROM payments p
+         JOIN bookings b ON b.id = p.booking_id
+         JOIN users u ON u.id = b.sender_id
+        WHERE p.provider = 'upi_direct' AND p.state = 'created'
+        ORDER BY p.created_at ASC
+        LIMIT 200`,
+    );
+
+    return {
+      items: rows.rows.map((row) => ({
+        payment_id: row.payment_id,
+        booking_id: row.booking_id,
+        amount_paise: Number(row.amount_paise),
+        reference: row.reference,
+        created_at: toIso(row.created_at),
+        booking_status: row.booking_status,
+        sender_name: row.sender_name,
+        sender_phone: row.sender_phone,
+      })),
+    };
+  });
+
+  app.post<{ Params: { bookingId: string } }>('/admin/bookings/:bookingId/payment/receipt', async (req, reply) => {
+    const auth = requireRole(req, 'finance');
+    const body = receiptSchema.parse(req.body);
+    const utr = body.utr.toUpperCase();
+
+    const found = await db.query<BookingRowFull>(`SELECT * FROM bookings WHERE id = $1`, [req.params.bookingId]);
+    const booking = found.rows[0];
+    if (!booking) throw new AppError('NOT_FOUND');
+    if (booking.status !== 'delivered' && booking.status !== 'payment_pending') {
+      throw new AppError('PAYMENT_NOT_PAYABLE', { status: booking.status });
+    }
+
+    const paymentRes = await db.query<{ id: string; amount_paise: number; provider_ref: string | null }>(
+      `SELECT id, amount_paise, provider_ref FROM payments
+        WHERE booking_id = $1 AND provider = 'upi_direct' AND state = 'created'
+        ORDER BY created_at DESC LIMIT 1`,
+      [booking.id],
+    );
+    const payment = paymentRes.rows[0];
+    if (!payment) {
+      // A second click on the same receipt is a repeat, not an unpayable booking. Say which.
+      const settled = await db.query(
+        `SELECT 1 FROM payments WHERE booking_id = $1 AND provider = 'upi_direct'
+          AND state IN ('captured','refunded','partially_refunded')`,
+        [booking.id],
+      );
+      if (settled.rows.length > 0) throw new AppError('PAYMENT_ALREADY_EXISTS');
+      throw new AppError('PAYMENT_NOT_PAYABLE', { reason: 'no_awaiting_upi_payment' });
+    }
+
+    try {
+      await db.transaction(async (tx) => {
+        const updated = await tx.query(
+          `UPDATE payments SET state = 'captured', provider_event_id = $2, updated_at = now()
+            WHERE id = $1 AND state = 'created'`,
+          [payment.id, utr],
+        );
+        if (updated.rowCount === 0) throw new AppError('PAYMENT_ALREADY_EXISTS');
+
+        await tx.query(
+          `INSERT INTO payment_ledger (booking_id, entry_type, amount_paise, provider_ref, memo)
+           SELECT $1,'capture',$2,$3,$4
+            WHERE NOT EXISTS (
+              SELECT 1 FROM payment_ledger
+               WHERE booking_id = $1 AND entry_type = 'capture' AND provider_ref = $3
+            )`,
+          [
+            booking.id,
+            payment.amount_paise,
+            payment.provider_ref ?? payment.id,
+            `UPI receipt ${utr}${body.note ? ` — ${body.note}` : ''}`,
+          ],
+        );
+
+        await applyBookingTransition(withDb(app, tx), booking, 'payment_authorised', 'system', {
+          actorId: auth.userId,
+          reasonCode: 'upi_receipt_confirmed',
+          metadata: { utr, reference: payment.provider_ref },
+        });
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        throw new AppError(
+          'CONFLICT',
+          { reason: 'utr_already_recorded', utr },
+          'That bank reference is already recorded against another payment.',
+        );
+      }
+      throw err;
+    }
+
+    const next = await db.query<{ status: string }>(`SELECT status FROM bookings WHERE id = $1`, [booking.id]);
+
+    await audit(db, {
+      actorId: auth.userId,
+      actorKind: 'support',
+      action: 'payment.upi_receipt_confirmed',
+      resource: 'payment',
+      resourceId: payment.id,
+      after: {
+        utr,
+        amount_paise: Number(payment.amount_paise),
+        reference: payment.provider_ref,
+        booking_status: next.rows[0]?.status ?? booking.status,
+      },
+    });
+
+    return reply.code(201).send({
+      booking_id: booking.id,
+      payment_id: payment.id,
+      state: 'captured',
+      utr,
+      amount_paise: Number(payment.amount_paise),
+      booking_status: next.rows[0]?.status ?? booking.status,
+    });
+  });
+
   // ---------------------------------------------------------------- refunds
 
   app.post('/admin/refunds', async (req, reply) => {
@@ -1173,4 +1326,9 @@ export async function isPayoutEligible(app: FastifyInstance, booking: BookingRow
     [booking.id],
   );
   return Number(captured.rows[0]?.total ?? 0) >= booking.traveller_share_paise;
+}
+
+/** Postgres unique violation. The UTR index is what stops one bank line settling two bookings. */
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505';
 }

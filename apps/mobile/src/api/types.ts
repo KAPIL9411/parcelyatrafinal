@@ -236,6 +236,10 @@ export interface Booking {
     state: string;
     amount_paise: number;
     sandbox: boolean;
+    /** Present only while a direct-UPI collection is waiting for a receipt. */
+    reference?: string;
+    payment_link?: string;
+    payee?: { vpa: string; name: string } | null;
   } | null;
   allowed_commands: string[];
   timeline: {
@@ -316,8 +320,11 @@ export interface PaymentIntent {
   currency: string;
   provider: string;
   sandbox: boolean;
-  client_secret: string;
+  client_secret: string | null;
   provider_ref: string;
+  /** Set when the server collects money on its own UPI handle instead of a checkout provider. */
+  payment_link: string | null;
+  payee: { vpa: string; name: string } | null;
   created_at: string;
 }
 

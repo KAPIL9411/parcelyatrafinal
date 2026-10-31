@@ -14,6 +14,7 @@
  */
 import { useEffect, useRef, useState, type ComponentRef } from 'react';
 import {
+  Animated,
   Image,
   ScrollView,
   StyleSheet,
@@ -28,6 +29,7 @@ import type { HomeHero } from '@py/domain';
 import { AppText } from '../../components/ui.tsx';
 import { font, radius, spacing } from '../../theme.ts';
 import { Decoration } from './Decorations.tsx';
+import { Lights } from './Lights.tsx';
 import type { HomePalette } from '../theme.ts';
 
 const ROTATE_MS = 6_500;
@@ -75,15 +77,26 @@ function useCountdown(target: string | undefined): string | null {
 export function HeroCarousel({
   heroes,
   palette,
+  baseGradient,
   width,
   topInset,
   greeting,
+  lightsOn,
+  lightsReady,
+  lightsProgress,
+  onToggleLights,
 }: {
   heroes: HomeHero[];
   palette: HomePalette;
+  /** The brand gradient under the campaign one; revealed when the lights are switched off. */
+  baseGradient: string[];
   width: number;
   topInset: number;
   greeting: string;
+  lightsOn: boolean;
+  lightsReady: boolean;
+  lightsProgress: Animated.Value;
+  onToggleLights: () => void;
 }) {
   const [index, setIndex] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -132,10 +145,15 @@ export function HeroCarousel({
             key={hero.id}
             hero={hero}
             palette={palette}
+            baseGradient={baseGradient}
             width={width}
             height={height}
             topInset={topInset}
             greeting={greeting}
+            lightsOn={lightsOn}
+            lightsReady={lightsReady}
+            lightsProgress={lightsProgress}
+            onToggleLights={onToggleLights}
           />
         ))}
       </ScrollView>
@@ -162,23 +180,34 @@ export function HeroCarousel({
 function HeroSlide({
   hero,
   palette,
+  baseGradient,
   width,
   height,
   topInset,
   greeting,
+  lightsOn,
+  lightsReady,
+  lightsProgress,
+  onToggleLights,
 }: {
   hero: HomeHero;
   palette: HomePalette;
+  baseGradient: string[];
   width: number;
   height: number;
   topInset: number;
   greeting: string;
+  lightsOn: boolean;
+  lightsReady: boolean;
+  lightsProgress: Animated.Value;
+  onToggleLights: () => void;
 }) {
   const countdown = useCountdown(hero.countdown_to);
   const hasImage = Boolean(hero.image_url);
   const text = hasImage ? '#ffffff' : (hero.text_color ?? palette.heroText);
   const muted = hasImage ? 'rgba(255,255,255,0.84)' : palette.heroMuted;
   const gradient = hero.gradient ?? palette.heroGradient;
+  const hasLights = !hasImage && palette.decoration === 'lamp';
 
   return (
     <View style={{ width, height }}>
@@ -192,14 +221,33 @@ function HeroSlide({
           />
         </>
       ) : (
-        <LinearGradient
-          colors={gradient as [string, string, ...string[]]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={StyleSheet.absoluteFill}
-        />
+        <>
+          <LinearGradient
+            colors={baseGradient as [string, string, ...string[]]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
+          {/* The campaign wash fades out when the lights are switched off, so the switch changes the
+              theme itself rather than only the bulbs. Cross-fading two layers keeps this native-driven;
+              animating the gradient's colours would run it on the JS thread. */}
+          <Animated.View style={[StyleSheet.absoluteFill, { opacity: lightsProgress }]}>
+            <LinearGradient
+              colors={gradient as [string, string, ...string[]]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFill}
+            />
+          </Animated.View>
+        </>
       )}
-      <Decoration kind={hasImage ? 'none' : palette.decoration} accent={palette.accent} text={text} />
+      {hasLights ? (
+        lightsReady ? (
+          <Lights accent={palette.accent} text={text} on={lightsOn} onToggle={onToggleLights} />
+        ) : null
+      ) : (
+        <Decoration kind={hasImage ? 'none' : palette.decoration} accent={palette.accent} text={text} />
+      )}
 
       {/* The header floats above this slide; without the wash its white controls disappear on pale art. */}
       <LinearGradient

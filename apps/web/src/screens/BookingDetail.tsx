@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { QRCodeSVG } from 'qrcode.react';
 
 import {
   BOOKING_STATUS_HINTS,
@@ -10,7 +11,7 @@ import {
   type DisputeCategory,
 } from '@py/domain';
 
-import { api, type Booking, type BookingSummary, type Dispute, type PaymentIntent, getAccessToken } from '../lib/api';
+import { api, ApiError, type Booking, type BookingSummary, type Dispute, type PaymentIntent, getAccessToken } from '../lib/api';
 import { errorCopy } from '../lib/copy';
 import { countdown, formatDateTime, formatWindow, inr } from '../lib/format';
 import { useCountdown, useDevCode, useDocumentTitle, useHandoverCode } from '../lib/hooks';
@@ -505,9 +506,34 @@ function ActionPanel({
 // ---------------------------------------------------------------------------- payment
 
 function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Promise<void> }) {
-  const [state, setState] = useState<'idle' | 'creating' | 'confirming' | 'done' | 'awaiting'>('idle');
+  const [state, setState] = useState<'idle' | 'creating' | 'confirming' | 'checking' | 'done' | 'awaiting'>('idle');
   const [error, setError] = useState<unknown>(null);
   const [intent, setIntent] = useState<PaymentIntent | null>(null);
+  const [checked, setChecked] = useState(false);
+
+  // A reload must not lose the payment the sender already started. The booking payload carries the
+  // same link, so the panel renders from the server's copy when there is no in-memory intent.
+  const stored = booking.payment;
+  const payment: PaymentIntent | null =
+    intent ??
+    (stored?.payment_link
+      ? {
+          id: stored.reference ?? '',
+          state: stored.state,
+          amount_paise: stored.amount_paise,
+          currency: 'INR',
+          provider: 'upi_direct',
+          sandbox: stored.sandbox,
+          client_secret: null,
+          provider_ref: stored.reference ?? '',
+          payment_link: stored.payment_link,
+          payee: stored.payee ?? null,
+          created_at: '',
+        }
+      : null);
+
+  /** A UPI collection with no receipt yet: the sender has to pay, we cannot do it for them. */
+  const awaitingUpi = payment?.payment_link != null && payment.state === 'created';
 
   async function pay() {
     setState('creating');
@@ -515,6 +541,12 @@ function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Pro
     try {
       const created = await api.post<PaymentIntent>(`/bookings/${booking.id}/payment-intent`, {});
       setIntent(created);
+
+      if (created.payment_link) {
+        setState('idle');
+        return;
+      }
+
       setState('confirming');
 
       if (!import.meta.env.DEV) {
@@ -535,9 +567,22 @@ function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Pro
       await onPaid();
       setState('done');
     } catch (err) {
+      if (err instanceof ApiError && err.code === 'PAYMENT_ALREADY_EXISTS') {
+        // An earlier attempt exists. Refresh; if it was captured the panel disappears on its own.
+        await onPaid();
+        setState('idle');
+        return;
+      }
       setError(err);
       setState('idle');
     }
+  }
+
+  async function refresh() {
+    setState('checking');
+    setChecked(true);
+    await onPaid();
+    setState('idle');
   }
 
   return (
@@ -557,7 +602,7 @@ function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Pro
         </div>
       </div>
 
-      {import.meta.env.DEV ? (
+      {import.meta.env.DEV && !payment?.payment_link ? (
         <Banner tone="info" className="mt-4" title="Sandbox payments">
           This build uses a test payment provider. The booking moves forward exactly as it would after a real
           capture, and nothing leaves a bank account.
@@ -568,6 +613,46 @@ function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Pro
         <p className="mt-4 flex items-center gap-2 text-sm font-semibold text-ink-900">
           <ClockIcon size={18} className="text-brand-700" /> Confirming with the payment provider…
         </p>
+      ) : null}
+
+      {awaitingUpi && payment ? (
+        <div className="mt-4 rounded-card border border-line bg-canvas p-4">
+          <div className="grid gap-5 sm:grid-cols-[168px,1fr] sm:items-start">
+            <div className="mx-auto rounded-lg bg-white p-2.5 shadow-sm">
+              <QRCodeSVG value={payment.payment_link!} size={148} level="M" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-ink-900">Pay {inr(payment.amount_paise)} by UPI</p>
+              <p className="mt-1 text-sm text-ink-600">Scan the code with any UPI app, or send to</p>
+              <p className="mt-2 font-mono text-base font-semibold text-ink-900">{payment.payee?.vpa}</p>
+              <p className="text-xs text-ink-500">{payment.payee?.name}</p>
+              <p className="mt-2 text-sm text-ink-600">
+                Reference <span className="font-mono font-semibold text-ink-900">{payment.provider_ref}</span>
+              </p>
+              <p className="mt-1 text-xs text-ink-500">
+                The button below opens your UPI app with the handle, amount and reference filled in.
+              </p>
+              <a
+                href={payment.payment_link!}
+                className="mt-3 inline-flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 text-sm font-semibold text-ink-900 hover:bg-canvas"
+              >
+                Open UPI app
+              </a>
+            </div>
+          </div>
+          <p className="mt-4 text-xs text-ink-500">
+            The payment is recorded after our finance team matches this reference to the bank statement, usually
+            within a few hours. This page never marks itself paid.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <Button variant="secondary" size="sm" loading={state === 'checking'} onClick={() => void refresh()}>
+              Refresh status
+            </Button>
+            {checked ? (
+              <span className="text-xs text-ink-500">Not confirmed yet. If you have paid, give it a little time.</span>
+            ) : null}
+          </div>
+        </div>
       ) : null}
 
       {state === 'awaiting' ? (
@@ -585,14 +670,21 @@ function PaymentPanel({ booking, onPaid }: { booking: Booking; onPaid: () => Pro
 
       {error ? <ErrorPanel error={error} /> : null}
 
-      <div className="mt-4 flex flex-wrap items-center gap-3">
-        <Button size="lg" loading={state === 'creating' || state === 'confirming'} disabled={state === 'done'} onClick={() => void pay()}>
-          {state === 'awaiting' ? 'Try again' : `Pay ${inr(booking.agreed_total_paise)}`}
-        </Button>
-        <span className="text-xs text-ink-500">
-          Amount set by the server from the stored quote. A client-supplied amount is ignored.
-        </span>
-      </div>
+      {awaitingUpi ? null : (
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <Button
+            size="lg"
+            loading={state === 'creating' || state === 'confirming' || state === 'checking'}
+            disabled={state === 'done'}
+            onClick={() => void pay()}
+          >
+            {state === 'awaiting' ? 'Try again' : `Pay ${inr(booking.agreed_total_paise)}`}
+          </Button>
+          <span className="text-xs text-ink-500">
+            Amount set by the server from the stored quote. A client-supplied amount is ignored.
+          </span>
+        </div>
+      )}
     </Card>
   );
 }

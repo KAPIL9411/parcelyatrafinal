@@ -80,7 +80,7 @@ Parcel Yatra API
   url        http://${config.HOST}:${config.PORT}/v1
   env        ${config.NODE_ENV}
   database   ${db.driver}${config.DATABASE_URL ? '' : ` (${config.PGLITE_PATH})`}
-  payments   sandbox only (provider: ${config.PAYMENT_PROVIDER}, live: false)
+  payments   ${config.PAYMENT_PROVIDER}${config.PAYMENTS_LIVE ? ' (live money)' : ' (no real money)'}
   payouts    disabled
   sms        ${config.SMS_PROVIDER}
   dev routes ${config.ENABLE_DEV_ENDPOINTS ? 'enabled' : 'disabled'}

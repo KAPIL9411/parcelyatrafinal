@@ -3,6 +3,15 @@
 **Status:** Draft v0.1 · **Date:** 2026-10-24
 Applies to `POST /webhooks/payments/{provider}`. **Sandbox only until GATE-3.**
 
+> **2026-10-29 — launch rail note.** Payments are collected on the merchant UPI handle
+> (`PAYMENT_PROVIDER=upi_direct`), which has no gateway and therefore sends no webhook. The
+> contract below still governs the two provider adapters (`mock`, `sandbox_provider`), and its
+> central rule holds for direct UPI too: nothing is fulfilled on an app-side confirmation. For
+> `upi_direct` the only accepted proof is a `finance` user recording the bank reference at
+> `POST /admin/bookings/{bookingId}/payment/receipt`, which captures the payment and advances the
+> booking in one transaction. The mock webhook path is restricted to `mock`/`sandbox_provider`
+> rows and cannot touch a real UPI collection.
+
 ---
 
 ## 1. Why this document exists

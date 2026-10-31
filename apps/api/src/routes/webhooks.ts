@@ -78,9 +78,13 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       booking_id: string;
       state: string;
       amount_paise: number;
-    }>(`SELECT id, booking_id, state, amount_paise FROM payments WHERE provider_ref = $1`, [
-      String(event.data.provider_ref ?? ''),
-    ]);
+    }>(
+      // Only the sandbox rail accepts this signature scheme. A real provider's payment must never be
+      // captured by a webhook signed with the development secret.
+      `SELECT id, booking_id, state, amount_paise FROM payments
+        WHERE provider_ref = $1 AND provider IN ('mock','sandbox_provider')`,
+      [String(event.data.provider_ref ?? '')],
+    );
 
     const p = payment.rows[0];
     if (!p) {

@@ -142,12 +142,17 @@ const schema = z.object({
    */
   CLOUDINARY_SIGNATURE_ALGORITHM: z.enum(['sha1', 'sha256']).default('sha1'),
 
-  // Payments — sandbox only.
+  // Payments. `mock` never moves money; `upi_direct` collects into the merchant's own UPI handle and
+  // is confirmed by a finance operator against the bank statement.
   PAYMENTS_LIVE: bool(false),
   PAYOUTS_ENABLED: bool(false),
-  PAYMENT_PROVIDER: z.enum(['mock', 'sandbox_provider']).default('mock'),
+  PAYMENT_PROVIDER: z.enum(['mock', 'sandbox_provider', 'upi_direct']).default('mock'),
   PAYMENT_WEBHOOK_SECRET: z.string().default('dev_only_webhook_secret_change_me'),
   PAYMENT_CURRENCY: z.literal('INR').default('INR'),
+  /** The merchant UPI handle that receives payments when PAYMENT_PROVIDER=upi_direct. */
+  UPI_VPA: z.string().optional(),
+  /** Name shown in the payer's UPI app next to the handle. */
+  UPI_PAYEE_NAME: z.string().optional(),
   DUAL_APPROVAL_THRESHOLD_PAISE: int(100_000, 1),
 
   // Pilot limits
@@ -297,11 +302,28 @@ export const corsOrigins = Array.from(
 export function assertSafetyRails(c: Config): void {
   const problems: string[] = [];
 
-  if (c.PAYMENTS_LIVE) {
+  // Real money is only permitted through a rail that actually settles: the merchant's own UPI
+  // handle. The mock provider must never run with the live switch on, because that would label
+  // simulated money as real. Turning this on does not clear the legal gate; it only makes the
+  // configuration coherent.
+  if (c.PAYMENTS_LIVE && c.PAYMENT_PROVIDER !== 'upi_direct') {
     problems.push(
-      'PAYMENTS_LIVE=true is not permitted. The pilot is sandbox-only until GATE-3 is cleared in writing ' +
-        '(legal/LEGAL_REGULATORY_MATRIX.md §8).',
+      'PAYMENTS_LIVE=true requires PAYMENT_PROVIDER=upi_direct. Only the merchant UPI handle may collect ' +
+        'real money; clear GATE-3 in legal/LEGAL_REGULATORY_MATRIX.md §8 first.',
     );
+  }
+  if (c.PAYMENT_PROVIDER === 'upi_direct') {
+    if (!c.UPI_VPA || c.UPI_VPA === 'CHANGE_ME@upi' || !/^[A-Za-z0-9.\-_]{2,256}@[A-Za-z]{2,64}$/.test(c.UPI_VPA)) {
+      problems.push('PAYMENT_PROVIDER=upi_direct requires a real UPI_VPA in the form name@bank.');
+    }
+    if (!c.UPI_PAYEE_NAME || c.UPI_PAYEE_NAME === 'CHANGE_ME') {
+      problems.push('PAYMENT_PROVIDER=upi_direct requires UPI_PAYEE_NAME.');
+    }
+    if (!c.PAYMENTS_LIVE) {
+      problems.push(
+        'PAYMENT_PROVIDER=upi_direct takes real money. Set PAYMENTS_LIVE=true to confirm this deployment may collect.',
+      );
+    }
   }
   if (c.PAYOUTS_ENABLED || c.FEATURE_PAYOUTS_ENABLED) {
     problems.push('Payouts are disabled at pilot (PAYOUTS_ENABLED=false).');

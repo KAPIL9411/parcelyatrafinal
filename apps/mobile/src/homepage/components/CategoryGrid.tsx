@@ -1,10 +1,13 @@
 /**
- * The 2-up category grid.
+ * The category grid.
  *
- * Cream cards, copy top-left, artwork bleeding off the bottom-right corner. The art is the item's
- * icon at low contrast unless an editor uploaded a transparent illustration, which is drawn at full
- * strength. The grid is data-driven: the server decides which categories exist, in what order, and
- * which one is pre-selected in the send flow.
+ * Three compact tiles per row instead of two tall ones. The earlier 2-up cards were 104 dp tall and
+ * mostly empty, so six categories filled more than a screen of scrolling before a sender reached the
+ * rest of the page — the opposite of the two-tap feel the rest of the flow aims for. A tile now reads
+ * icon first, label second, and the whole set fits in two rows.
+ *
+ * The grid is data-driven: the server decides which categories exist, in what order, and which one is
+ * pre-selected in the send flow.
  */
 import { Image, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -15,6 +18,9 @@ import { font, radius, shadow, spacing } from '../../theme.ts';
 import { mixHex, readableOn, withAlpha, type HomePalette } from '../theme.ts';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
+
+const COLUMNS = 3;
+const GAP = spacing.sm;
 
 export function CategoryGrid({
   items,
@@ -28,10 +34,11 @@ export function CategoryGrid({
   activeId?: string | null;
 }) {
   const { width } = useWindowDimensions();
-  const cardWidth = Math.floor((width - spacing.lg * 2 - spacing.sm) / 2);
+  const cardWidth = Math.floor((width - spacing.lg * 2 - GAP * (COLUMNS - 1)) / COLUMNS);
   if (items.length === 0) return null;
 
   const cream = mixHex(palette.surface, palette.accent, 0.12);
+  const ink = readableOn(undefined, cream, palette.navy);
 
   return (
     <View style={styles.grid}>
@@ -54,6 +61,22 @@ export function CategoryGrid({
               pressed && styles.pressed,
             ]}
           >
+            <View style={[styles.iconBubble, { backgroundColor: withAlpha(palette.accent, 0.4) }]}>
+              {item.image_url ? (
+                <Image source={{ uri: item.image_url }} style={styles.image} resizeMode="contain" />
+              ) : (
+                <Ionicons
+                  name={(item.icon ?? 'cube-outline') as IconName}
+                  size={22}
+                  color={withAlpha(palette.navy, 0.72)}
+                />
+              )}
+            </View>
+
+            <AppText style={[styles.title, { color: ink }]} numberOfLines={2}>
+              {item.title}
+            </AppText>
+
             {item.badge ? (
               <View style={[styles.badge, { backgroundColor: palette.badgeBackground }]}>
                 <AppText style={[styles.badgeText, { color: palette.badgeText }]} numberOfLines={1}>
@@ -61,28 +84,6 @@ export function CategoryGrid({
                 </AppText>
               </View>
             ) : null}
-
-            <AppText
-              style={[styles.title, { color: readableOn(undefined, cream, palette.navy) }]}
-              numberOfLines={2}
-            >
-              {item.title}
-            </AppText>
-
-            <View pointerEvents="none" style={styles.art}>
-              {item.image_url ? (
-                <Image source={{ uri: item.image_url }} style={styles.image} resizeMode="contain" />
-              ) : (
-                <>
-                  <View style={[styles.blob, { backgroundColor: withAlpha(palette.accent, 0.35) }]} />
-                  <Ionicons
-                    name={(item.icon ?? 'cube-outline') as IconName}
-                    size={52}
-                    color={withAlpha(palette.navy, 0.24)}
-                  />
-                </>
-              )}
-            </View>
           </Pressable>
         );
       })}
@@ -94,36 +95,42 @@ const styles = StyleSheet.create({
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
+    gap: GAP,
     paddingHorizontal: spacing.lg,
   },
   card: {
-    height: 104,
+    minHeight: 92,
     borderRadius: radius.lg,
     borderWidth: 1,
-    padding: spacing.md,
-    overflow: 'hidden',
-    justifyContent: 'flex-start',
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+  },
+  iconBubble: {
+    width: 38,
+    height: 38,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  image: { width: 26, height: 26 },
+  title: {
+    fontFamily: font.semibold,
+    fontSize: 12,
+    lineHeight: 15,
+    textAlign: 'center',
   },
   badge: {
-    alignSelf: 'flex-start',
+    position: 'absolute',
+    top: 5,
+    right: 5,
     borderRadius: radius.pill,
-    paddingHorizontal: 6,
+    paddingHorizontal: 5,
     paddingVertical: 1,
-    marginBottom: 2,
     maxWidth: '80%',
   },
-  badgeText: { fontFamily: font.bold, fontSize: 8.5, letterSpacing: 0.5 },
-  title: { fontFamily: font.semibold, fontSize: 14.5, lineHeight: 19, maxWidth: '76%' },
-  art: {
-    position: 'absolute',
-    right: -4,
-    bottom: -6,
-    alignItems: 'flex-end',
-    justifyContent: 'flex-end',
-  },
-  blob: { position: 'absolute', right: -12, bottom: -14, width: 74, height: 74, borderRadius: 37 },
-  image: { width: 74, height: 74 },
+  badgeText: { fontFamily: font.bold, fontSize: 8, letterSpacing: 0.4 },
   pressed: { opacity: 0.86, transform: [{ scale: 0.97 }] },
 });

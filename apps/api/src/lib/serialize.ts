@@ -170,7 +170,15 @@ export interface BookingRow {
   dispute_deadline: Date | string | null;
   payout_state: PayoutState;
   /** Latest payment attempt, so the UI can say "paid" without guessing from the booking status. */
-  payment?: { state: string; amount_paise: number; sandbox: boolean } | null;
+  payment?: {
+    state: string;
+    amount_paise: number;
+    sandbox: boolean;
+    /** Direct UPI only: the payer's reference and the intent link, so a reload does not lose them. */
+    reference?: string;
+    payment_link?: string;
+    payee?: { vpa: string; name: string };
+  } | null;
   created_at: Date | string;
   updated_at: Date | string;
   origin_area?: string | null;
@@ -228,6 +236,9 @@ export function bookingView(row: BookingRow, allowedCommands: string[], viewerRo
           state: row.payment.state,
           amount_paise: Number(row.payment.amount_paise),
           sandbox: row.payment.sandbox,
+          ...(row.payment.reference ? { reference: row.payment.reference } : {}),
+          ...(row.payment.payment_link ? { payment_link: row.payment.payment_link } : {}),
+          ...(row.payment.payee ? { payee: row.payment.payee } : {}),
         }
       : null,
     allowed_commands: allowedCommands,

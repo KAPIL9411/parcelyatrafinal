@@ -19,6 +19,7 @@ import { router, useFocusEffect } from 'expo-router';
 import {
   Animated,
   AppState,
+  Easing,
   Platform,
   Pressable,
   ScrollView,
@@ -31,7 +32,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery } from '@tanstack/react-query';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { visibleHeroes, visibleSections } from '@py/domain';
+import { visibleHeroes, visibleSections, defaultHomepageDocument } from '@py/domain';
 
 import { bookingsApi, conversationsApi, notificationsApi } from '../../src/api/client.ts';
 import { useSession } from '../../src/session.tsx';
@@ -63,12 +64,15 @@ import { colors, font, radius, shadow, spacing } from '../../src/theme.ts';
 import { openRouteToSend } from '../../src/homepage/actions.ts';
 import { greetingFor } from '../../src/lib/greeting.ts';
 import { useHomepage } from '../../src/homepage/use-homepage.ts';
-import { withAlpha } from '../../src/homepage/theme.ts';
+import { homePalette, withAlpha } from '../../src/homepage/theme.ts';
+import { lightsAvailable, resolveLights } from '../../src/homepage/lights-state.ts';
+import { readLightsPreference, writeLightsPreference } from '../../src/homepage/lights-preference.ts';
 import { HERO_SEAM, HeroCarousel, heroHeight } from '../../src/homepage/components/HeroCarousel.tsx';
 import { HomeHeader } from '../../src/homepage/components/HomeHeader.tsx';
 import { Reveal } from '../../src/homepage/components/Reveal.tsx';
 import { SearchCard } from '../../src/homepage/components/SearchCard.tsx';
 import { SectionRenderer } from '../../src/homepage/components/Sections.tsx';
+import { SkyBackdrop } from '../../src/homepage/components/SkyBackdrop.tsx';
 
 const CLOSED_STATUSES = new Set([
   'delivered',
@@ -84,6 +88,43 @@ const CLOSED_STATUSES = new Set([
 
 /** Clearance for the floating pill tab bar: its height plus its distance from the bottom. */
 const TAB_BAR_CLEARANCE = 104;
+
+/**
+ * The live card's headline must state what is actually happening. A parcel waiting for a traveller,
+ * sitting at a handover, or under dispute is not "moving", and saying so makes the app look like it
+ * has lost track of the booking.
+ */
+function activeHeadline(status: string, role: 'sender' | 'traveller'): string {
+  switch (status) {
+    case 'draft':
+    case 'pending_traveller_acceptance':
+      return role === 'sender' ? 'Waiting for a traveller' : 'A parcel needs your answer';
+    case 'payment_pending':
+      return 'Confirm the payment';
+    case 'confirmed':
+    case 'open_pickup':
+    case 'pickup_ready':
+      return role === 'sender' ? 'Hand it over with a code' : 'Collect it with a code';
+    case 'picked_up':
+      return role === 'sender' ? 'The traveller has your parcel' : 'Parcel collected';
+    case 'in_transit':
+      return 'On the way to the drop city';
+    case 'arrived':
+      return 'Arrived — delivery code next';
+    case 'delivery_attempt_failed':
+      return 'Delivery was attempted';
+    case 'delivered':
+      return role === 'sender' ? 'Delivered — complete payment' : 'Delivered — collect your payment';
+    case 'payout_eligible':
+      return 'Delivery complete';
+    case 'disputed':
+    case 'incident_open':
+    case 'locked_for_review':
+      return 'Under review';
+    default:
+      return 'Your parcel is moving';
+  }
+}
 
 interface CityChoice {
   id: string;
@@ -101,6 +142,7 @@ export default function HomeScreen() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerMode, setPickerMode] = useState<'origin' | 'dest'>('origin');
   const [pastHero, setPastHero] = useState(false);
+  const [headerHidden, setHeaderHidden] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
 
   // An `Animated.Value` is read during render (interpolations and the scroll handler), so it is state
@@ -143,6 +185,30 @@ export default function HomeScreen() {
   const heroes = useMemo(() => visibleHeroes(document), [document]);
   const sections = useMemo(() => visibleSections(document), [document]);
   const greeting = greetingFor(new Date(clock), user?.name);
+
+  // The light string is a campaign surface: it exists only when the published theme draws a lamp.
+  // The campaign sets the default; the device remembers a deliberate on/off choice.
+  const festive = lightsAvailable(palette.decoration);
+  const [lightsOn, setLightsOn] = useState(true);
+  const [lightsReady, setLightsReady] = useState(false);
+  // Read during render by the hero layers, so it is state with a lazy initialiser, as elsewhere.
+  const [lightsProgress] = useState(() => new Animated.Value(1));
+  const baseGradient = useMemo(() => homePalette(defaultHomepageDocument().theme).heroGradient, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void readLightsPreference().then((stored) => {
+      if (cancelled) return;
+      const on = resolveLights(palette.decoration, stored);
+      setLightsOn(on);
+      // A theme without a lamp keeps its full wash; only a deliberate "off" reveals the brand one.
+      lightsProgress.setValue(festive && !on ? 0 : 1);
+      setLightsReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [festive, lightsProgress, palette.decoration]);
 
   const all = bookings.data?.items ?? [];
   const active = all.find((booking) => !CLOSED_STATUSES.has(booking.status));
@@ -187,14 +253,12 @@ export default function HomeScreen() {
 
   const heroBottom = heroHeight(width, insets.top);
   const headerSwitch = heroBottom - insets.top - 64;
+  // The header belongs to the hero: it fades out over the first stretch of scrolling and is gone —
+  // no solid bar takes its place.
+  const headerFade = 72;
   const overlayOpacity = scrollY.interpolate({
-    inputRange: [Math.max(0, headerSwitch - 48), headerSwitch],
+    inputRange: [0, headerFade],
     outputRange: [1, 0],
-    extrapolate: 'clamp',
-  });
-  const solidOpacity = scrollY.interpolate({
-    inputRange: [Math.max(0, headerSwitch - 48), headerSwitch],
-    outputRange: [0, 1],
     extrapolate: 'clamp',
   });
 
@@ -243,6 +307,19 @@ export default function HomeScreen() {
     setDest({ id: origin.id, name: origin.name });
   }
 
+  const toggleLights = useCallback((): void => {
+    if (!festive) return;
+    const next = !lightsOn;
+    setLightsOn(next);
+    Animated.timing(lightsProgress, {
+      toValue: next ? 1 : 0,
+      duration: 420,
+      easing: Easing.inOut(Easing.cubic),
+      useNativeDriver: Platform.OS !== 'web',
+    }).start();
+    void writeLightsPreference(next);
+  }, [festive, lightsOn, lightsProgress]);
+
   const headerProps = {
     palette,
     originName: origin?.name ?? null,
@@ -265,8 +342,11 @@ export default function HomeScreen() {
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
           useNativeDriver: false,
           listener: (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-            const next = event.nativeEvent.contentOffset.y > headerSwitch;
+            const y = event.nativeEvent.contentOffset.y;
+            const next = y > headerSwitch;
+            const hidden = y > headerFade;
             setPastHero((current) => (current === next ? current : next));
+            setHeaderHidden((current) => (current === hidden ? current : hidden));
           },
         })}
         scrollEventThrottle={16}
@@ -274,13 +354,30 @@ export default function HomeScreen() {
           Platform.OS === 'web' ? undefined : <Refresh refreshing={refreshing} onRefresh={onRefresh} />
         }
       >
-        <HeroCarousel
-          heroes={heroes}
-          palette={palette}
-          width={width}
-          topInset={insets.top}
-          greeting={greeting}
-        />
+        <View>
+          <HeroCarousel
+            heroes={heroes}
+            palette={palette}
+            baseGradient={baseGradient}
+            width={width}
+            topInset={insets.top}
+            greeting={greeting}
+            lightsOn={lightsOn}
+            lightsReady={lightsReady}
+            lightsProgress={lightsProgress}
+            onToggleLights={toggleLights}
+          />
+          {/* The sky is a page surface, not a badge: one instance over the whole hero, scrolling with
+              it, and only when the campaign is a gradient rather than artwork. */}
+          {heroes.every((hero) => !hero.image_url) ? (
+            <SkyBackdrop
+              now={new Date(clock)}
+              width={width}
+              topInset={insets.top}
+              height={heroHeight(width, insets.top)}
+            />
+          ) : null}
+        </View>
 
         {/* The search card is the primary action, so it sits on the seam between hero and page. */}
         <View style={{ marginTop: -HERO_SEAM, paddingHorizontal: spacing.lg }}>
@@ -327,7 +424,7 @@ export default function HomeScreen() {
             <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.lg }}>
               <SectionHead
                 eyebrow="Live now"
-                title="Your parcel is moving"
+                title={activeHeadline(active.status, active.role)}
                 actionLabel="All bookings"
                 onAction={() => router.push('/bookings')}
               />
@@ -498,18 +595,12 @@ export default function HomeScreen() {
         </AppText>
       </ScrollView>
 
-      {/* Two headers cross-fade on the same scroll offset: white on the hero, solid over the page. */}
+      {/* One header only, and it belongs to the hero: fade it out and nothing replaces it. */}
       <Animated.View
-        pointerEvents={pastHero ? 'none' : 'auto'}
+        pointerEvents={headerHidden ? 'none' : 'auto'}
         style={[styles.headerLayer, { opacity: overlayOpacity }]}
       >
-        <HomeHeader variant="overlay" {...headerProps} />
-      </Animated.View>
-      <Animated.View
-        pointerEvents={pastHero ? 'auto' : 'none'}
-        style={[styles.headerLayer, { opacity: solidOpacity }]}
-      >
-        <HomeHeader variant="solid" {...headerProps} />
+        <HomeHeader {...headerProps} />
       </Animated.View>
 
       <PickerSheet

@@ -276,8 +276,12 @@ export class TrackingService {
 
   /**
    * Stop tracking automatically when delivery is confirmed.
+   *
+   * `using` exists because a caller may already hold a transaction (see lib/db-scope.ts). Issuing this
+   * UPDATE through the service's own handle would run it outside that transaction and, on the single
+   * connection PGlite runs on, deadlock behind it.
    */
-  async stopTracking(bookingId: string): Promise<void> {
+  async stopTracking(bookingId: string, using?: Db): Promise<void> {
     const session = sessionCache.get(bookingId);
     if (session) {
       session.isActive = false;
@@ -287,8 +291,9 @@ export class TrackingService {
     invalidateRouteCache(bookingId);
     historyWorker.clearBooking(bookingId);
 
-    if (this.db) {
-      await this.db.query(
+    const db = using ?? this.db;
+    if (db) {
+      await db.query(
         `UPDATE tracking_sessions SET is_active = false, ended_at = now(), updated_at = now()
          WHERE booking_id = $1`,
         [bookingId],

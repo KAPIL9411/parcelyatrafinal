@@ -12,6 +12,7 @@ import {
   type AdminDispute,
   type AdminIncident,
   type AdminThreadMessage,
+  type AdminUpiReceipt,
   type AdminVerification,
   type AuditEntry,
   type VerificationDocumentBundle,
@@ -44,6 +45,7 @@ import { ShieldCheckIcon, AlertTriangleIcon, SearchIcon, DocIcon, LockIcon } fro
 type Tab =
   | 'verifications'
   | 'bookings'
+  | 'receipts'
   | 'disputes'
   | 'incidents'
   | 'homepage'
@@ -53,6 +55,7 @@ type Tab =
 const TABS: Array<{ value: Tab; label: string }> = [
   { value: 'verifications', label: 'Verification queue' },
   { value: 'bookings', label: 'Bookings' },
+  { value: 'receipts', label: 'UPI receipts' },
   { value: 'disputes', label: 'Cases' },
   { value: 'incidents', label: 'Incidents' },
   { value: 'homepage', label: 'Homepage' },
@@ -96,6 +99,7 @@ export function Admin() {
 
       {tab === 'verifications' ? <VerificationQueue /> : null}
       {tab === 'bookings' ? <BookingSearch /> : null}
+      {tab === 'receipts' ? <UpiReceipts /> : null}
       {tab === 'disputes' ? <DisputeQueue /> : null}
       {tab === 'incidents' ? <IncidentQueue /> : null}
       {tab === 'homepage' ? <HomepageAdmin /> : null}
@@ -611,6 +615,189 @@ function BookingSearch() {
             {payoutError instanceof ApiError && payoutError.code === 'PAYOUTS_NOT_ENABLED' ? (
               <p className="mt-1 text-xs text-ink-500">Gate GATE-3 remains open. Nothing was changed.</p>
             ) : null}
+          </div>
+        ) : null}
+      </Sheet>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------- UPI receipts
+
+function UpiReceipts() {
+  const { user } = useSession();
+  const canRecord = (user?.roles ?? []).includes('finance');
+  const queryClient = useQueryClient();
+  const [target, setTarget] = useState<AdminUpiReceipt | null>(null);
+  const [utr, setUtr] = useState('');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [recorded, setRecorded] = useState<string | null>(null);
+
+  const query = useQuery({
+    queryKey: ['admin', 'upi-awaiting'],
+    queryFn: () => api.get<{ items: AdminUpiReceipt[] }>('/admin/payments/upi-awaiting'),
+    enabled: canRecord,
+    refetchInterval: 30_000,
+  });
+
+  async function record() {
+    if (!target) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.post<{ utr: string }>(`/admin/bookings/${target.booking_id}/payment/receipt`, {
+        utr: utr.trim(),
+        ...(note.trim() ? { note: note.trim() } : {}),
+      });
+      setRecorded(res.utr);
+      setTarget(null);
+      setUtr('');
+      setNote('');
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'upi-awaiting'] });
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!canRecord) {
+    return (
+      <Banner tone="info" title="Finance only">
+        Recording a bank receipt needs the finance role. The queue is not shown, because the API would refuse it.
+      </Banner>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <SectionHeading
+        title="UPI receipts"
+        description="Money is in the bank before it is in the app. Enter the reference from the statement; the amount comes from the booking."
+      />
+
+      <Banner tone="warn" title="Match the reference and the amount">
+        Only record a payment when the bank line shows the same UPI reference and the exact amount. A wrong entry moves a
+        booking forward with no money behind it.
+      </Banner>
+
+      {recorded ? (
+        <SuccessPanel title="Receipt recorded">
+          Bank reference <span className="font-mono">{recorded}</span> is now on the payment and in the booking timeline.
+        </SuccessPanel>
+      ) : null}
+
+      {query.isLoading ? (
+        <Card>
+          <p className="text-sm text-ink-500">Loading…</p>
+        </Card>
+      ) : query.isError ? (
+        <ErrorPanel error={query.error} onRetry={() => void query.refetch()} />
+      ) : (query.data?.items.length ?? 0) === 0 ? (
+        <EmptyState
+          title="No UPI payments waiting"
+          body="Every started payment has been matched to a bank line."
+          icon={<DocIcon size={22} />}
+        />
+      ) : (
+        <div className="overflow-hidden rounded-card border border-line bg-surface">
+          <table className="w-full text-left text-sm">
+            <thead className="border-b border-line bg-canvas text-xs text-ink-500 uppercase">
+              <tr>
+                <th className="px-3 py-2 font-semibold">Reference</th>
+                <th className="px-3 py-2 font-semibold">Booking</th>
+                <th className="px-3 py-2 text-right font-semibold">Amount</th>
+                <th className="px-3 py-2 font-semibold">Sender</th>
+                <th className="px-3 py-2 font-semibold">Waiting</th>
+                <th className="px-3 py-2" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {query.data?.items.map((row) => (
+                <tr key={row.payment_id}>
+                  <td className="tabular px-3 py-3 font-mono text-xs text-ink-900">{row.reference ?? '—'}</td>
+                  <td className="tabular px-3 py-3 font-mono text-xs text-ink-900">{shortId(row.booking_id)}</td>
+                  <td className="tabular px-3 py-3 text-right font-semibold text-ink-900">{inr(row.amount_paise)}</td>
+                  <td className="px-3 py-3 text-xs text-ink-600">
+                    {row.sender_name ?? '—'}
+                    <span className="tabular block text-ink-500">{row.sender_phone ?? ''}</span>
+                  </td>
+                  <td className="px-3 py-3 text-xs text-ink-500">{timeAgo(row.created_at)}</td>
+                  <td className="px-3 py-3 text-right">
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setTarget(row);
+                        setUtr('');
+                        setNote('');
+                        setError(null);
+                        setRecorded(null);
+                      }}
+                    >
+                      Record receipt
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <Sheet
+        open={Boolean(target)}
+        onClose={() => {
+          setTarget(null);
+          setError(null);
+        }}
+        title="Record a UPI receipt"
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setTarget(null);
+                setError(null);
+              }}
+            >
+              Close
+            </Button>
+            <Button loading={busy} disabled={utr.trim().length < 6} onClick={() => void record()}>
+              Record the payment
+            </Button>
+          </>
+        }
+      >
+        {target ? (
+          <div className="space-y-3">
+            <p className="text-sm text-ink-700">
+              Booking <span className="font-mono">{shortId(target.booking_id)}</span> · {inr(target.amount_paise)} · reference{' '}
+              <span className="font-mono">{target.reference ?? '—'}</span>
+            </p>
+            <Field label="Bank reference (UTR)" htmlFor="utr">
+              <TextInput
+                id="utr"
+                value={utr}
+                onChange={(event) => setUtr(event.target.value)}
+                placeholder="e.g. 412345678901"
+                autoComplete="off"
+              />
+            </Field>
+            <Field label="Note (optional)" htmlFor="receipt-note">
+              <TextInput
+                id="receipt-note"
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                placeholder="Anything worth remembering"
+              />
+            </Field>
+            <p className="text-xs text-ink-500">
+              The amount is fixed by the booking; this form cannot change it. The UTR is unique, so the same bank line
+              cannot settle two bookings.
+            </p>
+            {error ? <ErrorPanel error={error} /> : null}
           </div>
         ) : null}
       </Sheet>

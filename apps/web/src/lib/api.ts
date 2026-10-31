@@ -392,6 +392,10 @@ export interface Booking {
     state: string;
     amount_paise: number;
     sandbox: boolean;
+    /** Direct UPI only, while the payment is awaiting a bank match. */
+    reference?: string;
+    payment_link?: string;
+    payee?: { vpa: string; name: string };
   } | null;
   allowed_commands: string[];
   timeline: Array<{
@@ -513,6 +517,17 @@ export interface Verification {  id: string;
   created_at: string;
 }
 
+export interface AdminUpiReceipt {
+  payment_id: string;
+  booking_id: string;
+  amount_paise: number;
+  reference: string | null;
+  created_at: string;
+  booking_status: string;
+  sender_name: string | null;
+  sender_phone: string | null;
+}
+
 export interface PaymentIntent {
   id: string;
   state: string;
@@ -520,8 +535,11 @@ export interface PaymentIntent {
   currency: string;
   provider: string;
   sandbox: boolean;
-  client_secret: string;
+  client_secret: string | null;
   provider_ref: string;
+  /** Direct UPI only: the intent link and the merchant handle the payer sends money to. */
+  payment_link: string | null;
+  payee: { vpa: string; name: string } | null;
   created_at: string;
 }
 

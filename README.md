@@ -35,7 +35,7 @@ sets.
 
 | Thing | State |
 | --- | --- |
-| Live payments | Refused at boot. `PAYMENTS_LIVE=true` is a startup error. |
+| Live payments | Off by default. `PAYMENT_PROVIDER=upi_direct` + `PAYMENTS_LIVE=true` collects on your own UPI handle; each receipt is confirmed by a `finance` user from the bank statement (Admin → UPI receipts). |
 | Payout release | `501 PAYOUTS_NOT_ENABLED`. |
 | Split case settlement | `501 SPLIT_SETTLEMENT_NOT_ENABLED`; the staff option is disabled. |
 | Bike / bus / train / air | Refused at boot; car only. |
@@ -122,7 +122,8 @@ each host needs; nothing below requires a new service.
 2. **API.** Set `NODE_ENV=production`, `DATABASE_URL`, `DATABASE_SSL=require`, and every secret from
    `.env.example` to a generated value (`node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`).
    `PUBLIC_API_URL` must include `/v1`. `WEB_ORIGINS` lists exact origins — a `https://*.vercel.app`
-   pattern is refused. `ADMIN_WEB_URL` must differ from `PUBLIC_WEB_URL`. `PAYMENTS_LIVE` and
+   pattern is refused. `ADMIN_WEB_URL` must differ from `PUBLIC_WEB_URL`. `PAYMENTS_LIVE` stays false
+   unless you are switching to `PAYMENT_PROVIDER=upi_direct` with a real `UPI_VPA`, and
    `ENABLE_DEV_ENDPOINTS` must stay false; `assertSafetyRails` refuses to boot otherwise, and it also
    refuses default secrets. Leave `AUTO_SEED` unset (it defaults to false in production).
 3. **Web.** On Vercel, set the project root to `apps/web`, build with `npm run build -w @py/web`, and

@@ -945,6 +945,49 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
 
 
 
+### Direct UPI collections — the launch payment rail (2026-10-29)
+
+- **DECISION:** payments are collected on the owner's own merchant UPI handle
+  (`PAYMENT_PROVIDER=upi_direct`) instead of a gateway. UPI person-to-merchant has no MDR, so the fee
+  is zero; there is no gateway onboarding and no gateway KYC. The cost is that confirmation is
+  manual: a bank line is not an API event, so a `finance` user compares the statement with the queue.
+- **WHAT THE APP DOES:** `POST /bookings/{id}/payment-intent` stores a `upi_direct` row whose
+  `provider_ref` is a `PY` + 8-character reference, always derived server-side from the stored quote.
+  The response carries a `upi://pay` link (handle, exact amount, reference in `tr`/`tn`) and the
+  payee. The web booking page renders it as a QR code plus an "Open UPI app" link; the mobile
+  booking screen opens it with `Linking.openURL`. Both screens rebuild the same panel from
+  `booking.payment` after a reload.
+- **WHAT IT REFUSES:** no UPI app callback is trusted. The intent is `created` until a `finance` user
+  records the bank UTR at `POST /admin/bookings/{id}/payment/receipt` (Admin → UPI receipts). That
+  call is the only writer of a `upi_direct` capture: it sets `state='captured'`, stores the UTR in
+  `payments.provider_event_id` (unique, so one bank line cannot settle two bookings), writes one
+  `capture` ledger entry and applies `payment_authorised` in the same transaction. The mock webhook
+  path only matches `mock`/`sandbox_provider` rows, and the dev simulator answers
+  `PAYMENTS_NOT_ENABLED` under `upi_direct`, so neither can fake a receipt.
+- **CONFIG GUARD:** `upi_direct` requires `PAYMENTS_LIVE=true`, a real `UPI_VPA` and
+  `UPI_PAYEE_NAME`; `PAYMENTS_LIVE=true` with any other provider refuses to boot. A deployment
+  therefore cannot take real money while calling itself sandbox.
+- **VERIFICATION:** `apps/api/test/upi-payment.test.ts` (5 tests) covers the link/amount/reference,
+  sender refusal (403) and finance capture, repeat capture (`409 PAYMENT_ALREADY_EXISTS`), a
+  reused UTR (`409 CONFLICT`), a non-payable booking, and the finance-only queue. Full API suite
+  133/133, mobile 23/23, root typecheck and the web build pass. A browser run on 2026-10-29 with
+  `PAYMENT_PROVIDER=upi_direct PAYMENTS_LIVE=true`: the sender panel showed the QR, the handle and
+  the reference; a finance user recorded the UTR from Admin → UPI receipts; the queue afterwards
+  read "No UPI payments waiting"; the sender's booking then came back
+  `payment: {state: "captured", sandbox: false}`; the audit log held `payment.intent_created` and
+  `payment.upi_receipt_confirmed` against the same payment id; a repeated receipt answered
+  `409 PAYMENT_ALREADY_EXISTS` in 6 ms and `/v1/health` stayed green.
+- **OBSERVED, FIXED:** the receipt call first deadlocked the entire API on the embedded database.
+  `applyBookingTransition` runs inside the caller's transaction, and `trackingService.stopTracking`
+  wrote through the service's own outer handle; PGlite runs one connection, so that UPDATE queued
+  behind the open transaction forever. `stopTracking(bookingId, using?: Db)` now takes the scoped
+  handle and the call site passes it. The suite did not catch it because `trackingService.db` is
+  unset in tests. Rule: a side effect invoked from inside `db.transaction` must use the scoped `db`
+  (see `lib/db-scope.ts`), never a module-level handle.
+- **NOT VERIFIED:** no real rupee was sent. The merchant VPA does not exist yet, so the `upi://`
+  link was checked structurally, not by opening a UPI app on a phone; the QR was not scanned. The
+  operator queue was exercised against synthetically created bookings, not a real bank statement.
+
 ### PGlite as the development database
 
 - **OBSERVED:** the API runs embedded PostgreSQL (PGlite/WASM) from `apps/api/data/pgdata` unless
@@ -1024,7 +1067,7 @@ Labels for claims: **OBSERVED** (seen in this build), **PUBLISHED** (stated in t
 | --- | --- | --- |
 | Split case settlement | 501 | Amount, refund path, payout adjustment, ledger entries, reviewer UI (DEFECT-014). |
 | Payout release | 501 | No provider, no written fund-flow confirmation (GATE-3 / B-PROV-01). |
-| Live payments | refused at boot | Sandbox only; `PAYMENTS_LIVE=true` is a startup error. |
+| Live payments | available, opt-in | `PAYMENT_PROVIDER=upi_direct` with `PAYMENTS_LIVE=true`, a real `UPI_VPA` and `UPI_PAYEE_NAME` collects on the merchant handle. Every receipt is confirmed by a `finance` user from the bank statement; there is no automatic confirmation. |
 | Signed document viewer | absent | Staff see "documents are not rendered in this console"; no signed URL, no audit of views. |
 | External notifications | absent | No SMS/email provider; in-app rows only. |
 | Background expiry | absent | No job worker; deadlines are checked on access. |
@@ -1122,7 +1165,9 @@ penetration test, anything on a second machine, and any mobile UI on a real devi
   no penetration test.
 - It is **not** production-ready. PGlite, the local upload sink, the shared admin origin, the absent
   worker and the 501s above are all disqualifying on their own.
-- It does **not** move real money. Payments are sandbox; payouts and split settlement are refused.
+- It does **not** prove money movement. The default build is sandbox. The direct-UPI rail can take
+  real money when explicitly configured, but no rupee has been sent through it, and payouts and
+  split settlement are still refused.
 - It does **not** prove demand, unit economics, or any market claim. Prices are **HYPOTHESIS** from
   the pack; no figure here is measured.
 - It does **not** store Aadhaar, track location continuously, or store raw phone numbers.

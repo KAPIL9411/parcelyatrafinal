@@ -28,6 +28,7 @@ import { matchPolicy } from '../lib/matching-policy.ts';
 import { withIdempotency } from '../lib/idempotency.ts';
 import { audit, emitOutbox, queueNotification } from '../services/audit.ts';
 import { trackingService } from '../services/tracking-service.ts';
+import { upiPaymentLink } from '../services/upi.ts';
 
 const createSchema = z
   .object({
@@ -164,12 +165,28 @@ async function loadForViewer(app: FastifyInstance, bookingId: string, userId: st
     [bookingId],
   );
 
-  const payment = await app.db.query<{ state: string; amount_paise: number; sandbox: boolean }>(
-    `SELECT state, amount_paise, sandbox FROM payments
+  const payment = await app.db.query<{
+    state: string;
+    amount_paise: number;
+    sandbox: boolean;
+    provider: string;
+    provider_ref: string | null;
+  }>(
+    `SELECT state, amount_paise, sandbox, provider, provider_ref FROM payments
      WHERE booking_id = $1 AND state <> 'failed'
      ORDER BY created_at DESC LIMIT 1`,
     [bookingId],
   );
+  const attempt = payment.rows[0];
+  const paymentView =
+    attempt && attempt.provider === 'upi_direct' && attempt.state === 'created' && attempt.provider_ref
+      ? {
+          ...attempt,
+          reference: attempt.provider_ref,
+          payment_link: upiPaymentLink(Number(attempt.amount_paise), attempt.provider_ref),
+          payee: { vpa: config.UPI_VPA ?? '', name: config.UPI_PAYEE_NAME ?? '' },
+        }
+      : attempt;
 
   return {
     row,
@@ -179,7 +196,7 @@ async function loadForViewer(app: FastifyInstance, bookingId: string, userId: st
         ...detail.rows[0]!,
         timeline: events.rows,
         open_dispute: dispute.rows[0] ?? null,
-        payment: payment.rows[0] ?? null,
+        payment: paymentView ?? null,
       },
       cmds as string[],
       role,
@@ -352,7 +369,7 @@ export async function applyBookingTransition(
   }
 
   if (result.to === 'delivered' || releasesCapacity) {
-    await trackingService.stopTracking(booking.id).catch(() => {});
+    await trackingService.stopTracking(booking.id, db).catch(() => {});
   }
 
   const alert = TRANSITION_ALERTS[command];

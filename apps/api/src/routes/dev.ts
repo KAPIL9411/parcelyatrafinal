@@ -89,6 +89,12 @@ export async function devRoutes(app: FastifyInstance): Promise<void> {
     const auth = requireAuth(req);
     const body = simulateSchema.parse(req.body);
 
+    // A real UPI receipt has no webhook to simulate: it is recorded by finance against the bank
+    // statement. Letting the simulator mint one would be a way to fake money.
+    if (config.PAYMENT_PROVIDER === 'upi_direct') {
+      throw new AppError('PAYMENTS_NOT_ENABLED', { reason: 'upi_direct_has_no_provider_webhook' });
+    }
+
     // Only a party to the payment (or staff) may drive its lifecycle in the sandbox.
     const match = await db.query<{ sender_id: string; traveller_id: string }>(
       `SELECT b.sender_id, b.traveller_id
@@ -165,6 +171,9 @@ export async function devRoutes(app: FastifyInstance): Promise<void> {
         break;
       }
       case 'payment_pending': {
+        if (config.PAYMENT_PROVIDER === 'upi_direct') {
+          throw new AppError('PAYMENT_NOT_PAYABLE', { reason: 'confirm_receipt_in_admin' });
+        }
         const payment = await db.query<{ id: string; provider_ref: string | null }>(
           `SELECT id, provider_ref FROM payments WHERE booking_id = $1 AND state <> 'failed' ORDER BY created_at DESC LIMIT 1`,
           [booking.id],
@@ -248,6 +257,9 @@ export async function devRoutes(app: FastifyInstance): Promise<void> {
         break;
       }
       case 'delivered': {
+        if (config.PAYMENT_PROVIDER === 'upi_direct') {
+          throw new AppError('PAYMENT_NOT_PAYABLE', { reason: 'confirm_receipt_in_admin' });
+        }
         // Payment now happens after delivery. First call captures the sandbox payment; the next one
         // moves the problem deadline into the past and settles.
         const paid = await db.query<{ id: string }>(

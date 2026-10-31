@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, View } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { Alert, Pressable, View } from 'react-native';
+import { router, useLocalSearchParams, useNavigation } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -98,9 +98,12 @@ function SendWizard() {
     typeof params.category === 'string' ? params.category : 'documents',
   );
   const [description, setDescription] = useState('');
-  const [weightKg, setWeightKg] = useState('');
-  const [dims, setDims] = useState(['', '', '']);
-  const [declaredRupees, setDeclaredRupees] = useState('');
+  // Prefilled so the fast path is two taps: a typical document parcel already has sane numbers and
+  // the user only edits them when their parcel is unusual. Nothing here is hidden — every value is
+  // visible and editable in the form.
+  const [weightKg, setWeightKg] = useState('0.5');
+  const [dims, setDims] = useState(['20', '15', '10']);
+  const [declaredRupees, setDeclaredRupees] = useState('1000');
   const [receiverName, setReceiverName] = useState('');
   const [receiverPhone, setReceiverPhone] = useState('');
   const [photoKey, setPhotoKey] = useState<string | null>(null);
@@ -120,6 +123,53 @@ function SendWizard() {
   const [selectedTrip, setSelectedTrip] = useState<string | null>(null);
   const [bookingBusy, setBookingBusy] = useState(false);
   const [bookingError, setBookingError] = useState<unknown>(null);
+
+  /**
+   * Back inside a wizard is a step, not an exit. Step 2 returns to the route; step 1 asks before
+   * throwing away typing; step 3 is left alone because the parcel already exists and re-entering the
+   * form could post a duplicate.
+   *
+   * `beforeRemove` is a React Navigation stack event that expo-router's generic navigation type does
+   * not surface, so the handler is typed here against the part of the contract this screen uses.
+   */
+  const navigation = useNavigation() as unknown as {
+    addListener: (
+      event: 'beforeRemove',
+      handler: (event: { preventDefault: () => void; data: { action: { type: string } } }) => void,
+    ) => () => void;
+    dispatch: (action: { type: string }) => void;
+  };
+  const leaving = useRef(false);
+  const dirty = Boolean(
+    originId || destId || originArea || destArea || description.trim() || receiverName.trim() || receiverPhone.trim(),
+  );
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (event) => {
+      if (leaving.current) return;
+      const actionType = event.data.action.type;
+      if (actionType !== 'GO_BACK' && actionType !== 'POP') return;
+      if (step === 2) {
+        event.preventDefault();
+        setStep(1);
+        return;
+      }
+      if (step !== 1 || !dirty) return;
+      event.preventDefault();
+      Alert.alert('Discard this parcel?', 'Nothing has been posted yet, so your details will be lost.', [
+        { text: 'Keep editing', style: 'cancel' },
+        {
+          text: 'Discard',
+          style: 'destructive',
+          onPress: () => {
+            leaving.current = true;
+            navigation.dispatch(event.data.action);
+          },
+        },
+      ]);
+    });
+    return unsubscribe;
+  }, [navigation, step, dirty]);
 
   /**
    * A link from the homepage may name a city rather than an id ("Bareilly"), because the homepage is
@@ -366,8 +416,8 @@ function SendWizard() {
     ) : step === 2 ? (
       <StickyBar
         label="Parcel"
-        value={weightKg ? `${weightKg} kg` : 'Add details'}
-        caption={`Up to ${maxWeight} kg · ${inr(maxValue)} declared value`}
+        value={weightKg ? `${weightKg} kg · ${inr(Math.round(Number(declaredRupees || 0) * 100))}` : 'Add details'}
+        caption={`Limits: ${maxWeight} kg, ${inr(maxValue)} value`}
         buttonLabel="Find travellers"
         onPress={postParcel}
         loading={busy}
@@ -684,7 +734,7 @@ function SendWizard() {
 
           <View style={{ marginTop: spacing.lg }}>
             <Field
-              label="Description"
+              label="Description *"
               value={description}
               onChangeText={setDescription}
               placeholder="e.g. Sealed university transcripts in a folder"
@@ -697,7 +747,7 @@ function SendWizard() {
             <Row gap={spacing.md} style={{ alignItems: 'flex-start' }}>
               <View style={{ flex: 1 }}>
                 <Field
-                  label="Weight (kg)"
+                  label="Weight (kg) *"
                   value={weightKg}
                   onChangeText={setWeightKg}
                   keyboardType="decimal-pad"
@@ -707,7 +757,7 @@ function SendWizard() {
               </View>
               <View style={{ flex: 1 }}>
                 <Field
-                  label="Value (₹)"
+                  label="Value (₹) *"
                   value={declaredRupees}
                   onChangeText={setDeclaredRupees}
                   keyboardType="number-pad"
@@ -718,7 +768,7 @@ function SendWizard() {
             </Row>
 
             <AppText variant="label" tone="muted" style={{ textTransform: 'uppercase', marginBottom: 6 }}>
-              Dimensions L × W × H (cm)
+              Dimensions L × W × H (cm) *
             </AppText>
             <Row gap={spacing.sm} style={{ alignItems: 'flex-start' }}>
               {dims.map((value, index) => (
@@ -749,14 +799,14 @@ function SendWizard() {
               </View>
             </Row>
             <Field
-              label="Receiver name"
+              label="Receiver name *"
               value={receiverName}
               onChangeText={setReceiverName}
               placeholder="Who receives it"
               error={errors.receiverName}
             />
             <Field
-              label="Receiver mobile"
+              label="Receiver mobile *"
               value={receiverPhone}
               onChangeText={setReceiverPhone}
               keyboardType="phone-pad"
@@ -986,7 +1036,7 @@ function SendWizard() {
                 <InfoNote
                   icon="time-outline"
                   title="The traveller has 30 minutes to accept"
-                  body="A payment request follows acceptance. No money moves until the provider confirms."
+                  body="Pay only after the parcel is delivered and the delivery code is confirmed. Nothing is charged at booking."
                 />
               </View>
             ) : null}

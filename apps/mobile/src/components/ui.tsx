@@ -44,6 +44,7 @@ export function AppText({
   children,
   numberOfLines,
   onPress,
+  selectable,
 }: {
   variant?: keyof typeof type;
   tone?: Tone;
@@ -51,11 +52,13 @@ export function AppText({
   children: ReactNode;
   numberOfLines?: number;
   onPress?: () => void;
+  selectable?: boolean;
 }) {
   return (
     <Text
       onPress={onPress}
       numberOfLines={numberOfLines}
+      selectable={selectable}
       style={[type[variant], { color: TONE_COLORS[tone] }, style]}
     >
       {children}

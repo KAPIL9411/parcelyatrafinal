@@ -1,12 +1,11 @@
 /**
- * The compact utility row.
+ * The compact utility row that floats on the campaign hero.
  *
- * Two variants, same controls: a solid bar for ordinary screens, and a transparent overlay that
- * floats on the campaign hero. The overlay deliberately drops the wordmark — at 360 dp the mark,
- * city chip, inbox, bell and avatar already fill the row, and a squeezed wordmark reads as clutter.
- * A header is chrome; the hero is the brand statement.
+ * It carries the pickup city, inbox, bell and avatar — no wordmark and no badge: the sky behind the
+ * hero is the only mark at the top-left, and a squeezed logo beside four controls reads as clutter.
+ * The row belongs to the hero and leaves with it; past the fold there is no header at all.
  */
-import { Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -16,7 +15,6 @@ import { withAlpha, type HomePalette } from '../theme.ts';
 
 export function HomeHeader({
   palette,
-  variant = 'solid',
   originName,
   onPressOrigin,
   unreadNotifications,
@@ -27,7 +25,6 @@ export function HomeHeader({
   onPressProfile,
 }: {
   palette: HomePalette;
-  variant?: 'solid' | 'overlay';
   originName: string | null;
   onPressOrigin: () => void;
   unreadNotifications: number;
@@ -38,46 +35,16 @@ export function HomeHeader({
   onPressProfile?: () => void;
 }) {
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
-  const overlay = variant === 'overlay';
-  const showWordmark = !overlay && width >= 344;
-  const ink = overlay ? '#ffffff' : palette.navy;
+  const ink = '#ffffff';
   const initial = userName?.trim().charAt(0).toUpperCase() ?? null;
 
   return (
     <View
       style={[
         styles.bar,
-        {
-          paddingTop: insets.top + (overlay ? 6 : spacing.sm),
-          backgroundColor: overlay ? 'transparent' : palette.surface,
-        },
+        { paddingTop: insets.top + 6, backgroundColor: 'transparent' },
       ]}
     >
-      <View style={styles.brand}>
-        <View
-          style={[
-            styles.mark,
-            { backgroundColor: overlay ? '#ffffff' : palette.brand },
-          ]}
-        >
-          <AppText style={[styles.markLetter, { color: overlay ? palette.navy : '#ffffff' }]}>
-            P
-          </AppText>
-          <View
-            style={[
-              styles.markDot,
-              { backgroundColor: palette.accent, borderColor: overlay ? '#ffffff' : palette.surface },
-            ]}
-          />
-        </View>
-        {showWordmark ? (
-          <AppText style={[styles.wordmark, { color: palette.navy }]} numberOfLines={1}>
-            Parcel Yatra
-          </AppText>
-        ) : null}
-      </View>
-
       <View style={styles.utilities}>
         <Pressable
           accessibilityRole="button"
@@ -87,15 +54,11 @@ export function HomeHeader({
           onPress={onPressOrigin}
           style={({ pressed }) => [
             styles.location,
-            { backgroundColor: overlay ? 'rgba(255,255,255,0.16)' : palette.brandSoft },
+            { backgroundColor: 'rgba(255,255,255,0.16)' },
             pressed && { opacity: 0.75 },
           ]}
         >
-          <Ionicons
-            name="location-outline"
-            size={13}
-            color={overlay ? '#ffffff' : palette.brandDark}
-          />
+          <Ionicons name="location-outline" size={13} color="#ffffff" />
           <AppText numberOfLines={1} style={[styles.locationText, { color: ink }]}>
             {originName ?? 'Pickup city'}
           </AppText>
@@ -111,7 +74,7 @@ export function HomeHeader({
         >
           <Ionicons name="chatbubble-ellipses-outline" size={21} color={ink} />
           {unreadMessages > 0 ? (
-            <View style={[styles.dot, { backgroundColor: overlay ? palette.accent : palette.brand }]} />
+            <View style={[styles.dot, { backgroundColor: palette.accent }]} />
           ) : null}
         </Pressable>
 
@@ -133,11 +96,11 @@ export function HomeHeader({
             <View
               style={[
                 styles.badge,
-                { backgroundColor: overlay ? palette.accent : palette.brand },
+                { backgroundColor: palette.accent },
               ]}
             >
               <AppText
-                style={[styles.badgeText, { color: overlay ? palette.navy : '#ffffff' }]}
+                style={[styles.badgeText, { color: palette.navy }]}
               >
                 {unreadNotifications > 9 ? '9+' : unreadNotifications}
               </AppText>
@@ -154,14 +117,14 @@ export function HomeHeader({
             style={({ pressed }) => [
               styles.avatar,
               {
-                backgroundColor: overlay ? 'rgba(255,255,255,0.2)' : palette.brandSoft,
-                borderColor: overlay ? 'rgba(255,255,255,0.42)' : withAlpha(palette.brand, 0.2),
+                backgroundColor: 'rgba(255,255,255,0.2)',
+                borderColor: 'rgba(255,255,255,0.42)',
               },
               pressed && { opacity: 0.7 },
             ]}
           >
             {initial ? (
-              <AppText style={[styles.avatarText, { color: overlay ? '#ffffff' : palette.brandDark }]}>
+              <AppText style={[styles.avatarText, { color: '#ffffff' }]}>
                 {initial}
               </AppText>
             ) : (
@@ -178,34 +141,10 @@ const styles = StyleSheet.create({
   bar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     gap: spacing.sm,
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.sm,
-  },
-  brand: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 },
-  mark: {
-    width: 30,
-    height: 30,
-    borderRadius: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  markLetter: { fontFamily: font.bold, fontSize: 16, lineHeight: 19 },
-  markDot: {
-    position: 'absolute',
-    right: -2,
-    bottom: -2,
-    width: 9,
-    height: 9,
-    borderRadius: 5,
-    borderWidth: 2,
-  },
-  wordmark: {
-    fontFamily: font.bold,
-    fontSize: 16,
-    letterSpacing: -0.3,
-    flexShrink: 1,
   },
   utilities: { flexDirection: 'row', alignItems: 'center', gap: 3, flexShrink: 1 },
   location: {
