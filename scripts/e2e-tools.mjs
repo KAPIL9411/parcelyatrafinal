@@ -79,9 +79,12 @@ switch (command) {
     result = await call('POST', '/dev/lifecycle/run', { token });
     break;
   case 'track':
-    result = await call('POST', `/bookings/${args[0]}/tracking/points`, {
+    result = await call('POST', '/tracking/batch', {
       token,
-      body: { points: [{ lat: Number(args[1]), lng: Number(args[2]), recorded_at: new Date().toISOString() }] },
+      body: {
+        booking_id: args[0],
+        points: [{ lat: Number(args[1]), lng: Number(args[2]), timestamp: Date.now() }],
+      },
     });
     break;
   default:

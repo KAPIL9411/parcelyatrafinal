@@ -12,11 +12,12 @@
  *
  *   score = Σ (w_i · fit_i) / Σ w_i
  *
- *   time        w=25  1 when the trip lands at least `timeTargetLeadHours` before the window closes,
- *                     linear to 0 at `windowEnd + arrivalGraceHours` (the hard cut-off). The clock
- *                     used is the ETA at the parcel's delivery point.
- *   departure   w=15  1 when the trip leaves after the window opens; linear to 0 `departureEarlyDecayHours`
- *                     before it, because an early handover is the sender's problem, not the traveller's.
+ *   time        w=25  1 when the trip runs on a day the parcel's window covers. Timing is a date
+ *                     rule only: a traveller leaving at 8am and one leaving at 8pm on the same day
+ *                     are equally compatible, because the handover can happen whenever both are
+ *                     ready that day.
+ *   departure   w=15  the same date fact, kept as its own component so the published breakdown
+ *                     shape does not change.
  *   detour      w=15  1 − corridor detour / maxDetourKm, where detour is the out-and-back cost of
  *                     reaching both parcel endpoints: 2 × pickup offset + 2 × drop offset.
  *   alignment   w=15  1 − worst endpoint offset / maxCorridorKm. How close the parcel's cities sit to
@@ -302,6 +303,8 @@ export type MatchRejectionCode =
   | 'NO_CAPACITY'
   | 'DEPARTS_AFTER_WINDOW'
   | 'ARRIVES_TOO_LATE'
+  /** The trip runs on a different calendar day than the parcel's pickup window. */
+  | 'TRIP_OUTSIDE_DATE'
   | 'ROUTE_NOT_EVALUABLE'
   | 'PICKUP_OFF_CORRIDOR'
   | 'DROP_OFF_CORRIDOR'
@@ -322,6 +325,18 @@ export interface MatchResult {
 }
 
 const HOUR = 3_600_000;
+const DAY = 86_400_000;
+/** India has no DST: IST is UTC+05:30 all year, so a fixed offset is exact. */
+const IST_OFFSET_MS = 5.5 * HOUR;
+
+/**
+ * The calendar day a moment belongs to, in India. Matching is date-only, so "today" must mean the
+ * same day to a sender in Bareilly and a server running in UTC: 1 Nov 01:00 IST is still 31 Oct in
+ * UTC, and a trip that leaves at 01:00 IST must not be filed under the previous day.
+ */
+function serviceDay(moment: Date): number {
+  return Math.floor((moment.getTime() + IST_OFFSET_MS) / DAY);
+}
 
 const clamp01 = (v: number): number => Math.max(0, Math.min(1, v));
 
@@ -384,10 +399,13 @@ export function rankMatches(input: MatchInput, trips: readonly TripCandidate[]):
     return null;
   };
   const requiredKg = input.weightKg * policy.packagingAllowance;
-  const windowStartMs = input.windowStart.getTime();
-  const windowEndMs = input.windowEnd.getTime();
-  const nowMs = input.now.getTime();
-  const graceMs = policy.arrivalGraceHours * HOUR;
+  // Matching is date-only. These three day numbers are the whole timing rule: a trip is compatible
+  // when its departure day is one of the days the pickup window covers. Clock times are ignored on
+  // purpose — a traveller who leaves early can still take the parcel, because the pickup code is
+  // available as soon as the booking is confirmed.
+  const todayDay = serviceDay(input.now);
+  const windowFirstDay = serviceDay(input.windowStart);
+  const windowLastDay = serviceDay(input.windowEnd);
   const prohibited = detectProhibitedContent(`${input.category} ${input.description}`);
   const parcelOriginArea = normArea(input.parcelOriginArea);
   const parcelDestArea = normArea(input.parcelDestArea);
@@ -409,7 +427,9 @@ export function rankMatches(input: MatchInput, trips: readonly TripCandidate[]):
       rejected(trip, 'TRIP_NOT_ACTIVE');
       continue;
     }
-    if (trip.departureAt.getTime() <= nowMs) {
+    if (serviceDay(trip.departureAt) < todayDay) {
+      // Only a trip from an earlier day is gone. One that left this morning may still be reachable,
+      // and the sender can see it; refusing it would make a same-day search return nothing after 9am.
       rejected(trip, 'TRIP_DEPARTED');
       continue;
     }
@@ -496,22 +516,20 @@ export function rankMatches(input: MatchInput, trips: readonly TripCandidate[]):
         ? trip.arrivalEstimateAt.getTime()
         : departureMs + dropFraction * durationS * 1000;
 
-    if (pickupMs > windowEndMs) {
-      rejected(trip, 'DEPARTS_AFTER_WINDOW');
-      continue;
-    }
-    if (dropMs > windowEndMs + graceMs) {
-      rejected(trip, 'ARRIVES_TOO_LATE');
+    // The only timing gate: the trip must run on a day the pickup window covers. No clock comparison
+    // follows, so a trip at 08:00 and one at 20:00 on the right date are both offered.
+    const tripDay = serviceDay(trip.departureAt);
+    if (tripDay < windowFirstDay || tripDay > windowLastDay) {
+      rejected(trip, 'TRIP_OUTSIDE_DATE');
       continue;
     }
 
     // ---- scoring: every component is a normalised 0–1 fit. ----
-    const timeFit = clamp01(
-      (windowEndMs + graceMs - dropMs) / ((policy.arrivalGraceHours + policy.timeTargetLeadHours) * HOUR),
-    );
-
-    const hoursEarly = (windowStartMs - pickupMs) / HOUR;
-    const departureFit = hoursEarly <= 0 ? 1 : clamp01(1 - hoursEarly / policy.departureEarlyDecayHours);
+    //
+    // Time and departure are 1 for every survivor: the date gate above already answered the timing
+    // question, and scoring must not quietly re-impose the clock rule the product removed.
+    const timeFit = 1;
+    const departureFit = 1;
 
     const detourFit = clamp01(1 - corridor.detourM / Math.max(1, limits.maxDetourM));
 
@@ -565,9 +583,8 @@ export function rankMatches(input: MatchInput, trips: readonly TripCandidate[]):
       weightSum(policy);
     const score = Math.max(0, Math.min(100, Math.round(rawScore)));
 
-    const reasons: MatchReasonCode[] = ['ON_ROUTE', 'CAPACITY_OK', 'VERIFIED_ID'];
-    if (dropMs <= windowEndMs) reasons.push('ARRIVES_IN_WINDOW');
-    else reasons.push('DELAYED_ARRIVAL');
+    // Date compatibility is already proven by the gate above; there is no arrival-clock claim to make.
+    const reasons: MatchReasonCode[] = ['ON_ROUTE', 'CAPACITY_OK', 'VERIFIED_ID', 'ARRIVES_IN_WINDOW'];
     if (corridor.detourM <= 3_000 && alignmentFit >= 0.6 && areaFit >= 0.8) reasons.push('SMALL_DETOUR');
     if (reliability !== null && reliability >= 0.8 && trip.completedTrips >= 5) reasons.push('HIGH_RELIABILITY');
 
@@ -665,6 +682,7 @@ function aggregateReasons(rejections: readonly MatchRejection[]): NoMatchReason[
         break;
       case 'DEPARTS_AFTER_WINDOW':
       case 'ARRIVES_TOO_LATE':
+      case 'TRIP_OUTSIDE_DATE':
       case 'TRIP_DEPARTED':
       case 'TRIP_NOT_ACTIVE':
         out.add('NO_TRIP_ON_DATE');
@@ -684,9 +702,9 @@ function aggregateReasons(rejections: readonly MatchRejection[]): NoMatchReason[
         break;
     }
   }
-  // A window that was only ever missed by the grace margin is worth telling the sender about,
-  // because widening the window is the fix they can act on.
-  if (out.has('NO_TRIP_ON_DATE') && rejections.some((r) => r.code === 'ARRIVES_TOO_LATE')) out.add('WINDOW_TOO_TIGHT');
+  // `WINDOW_TOO_TIGHT` is no longer produced: the only timing rule left is the date gate, and a
+  // window is never "too tight" when the clock does not decide compatibility. It stays in the
+  // published reason list so older clients keep a label for it.
   return [...out];
 }
 

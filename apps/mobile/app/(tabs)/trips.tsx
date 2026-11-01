@@ -6,6 +6,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { travellerApi } from '../../src/api/client.ts';
 import { useSession } from '../../src/session.tsx';
 import { SignInPanel } from '../../src/components/auth-gate.tsx';
+import { BrandSignOff } from '../../src/components/BrandSignOff.tsx';
 import {
   AppText,
   Badge,
@@ -79,6 +80,7 @@ export default function TripsScreen() {
   return (
     <Screen
       contentStyle={{ paddingBottom: 128 }}
+      bleed={<BrandSignOff />}
       refreshControl={
         <Refresh
           refreshing={trips.isRefetching || verification.isRefetching}

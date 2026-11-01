@@ -6,16 +6,19 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import {
-  API_BASE,
   bookingsApi,
+  filesApi,
   notificationsApi,
   requestAccountDeletion,
   requestDataExport,
+  resolveApiUrl,
   travellerApi,
   updateMe,
 } from '../../src/api/client.ts';
+import { ApiError } from '../../src/api/http.ts';
 import { useSession } from '../../src/session.tsx';
 import { SignInPanel } from '../../src/components/auth-gate.tsx';
+import { BrandSignOff } from '../../src/components/BrandSignOff.tsx';
 import {
   AppText,
   Badge,
@@ -30,6 +33,7 @@ import {
   Sheet,
 } from '../../src/components/ui.tsx';
 import { Avatar, IconBubble, MenuRow } from '../../src/components/kit.tsx';
+import { captureSelfie, type PickedPhoto } from '../../src/lib/photo.ts';
 import { formatDateTime, statusLabel, statusTone } from '../../src/lib/format.ts';
 import { colors, font, radius, spacing } from '../../src/theme.ts';
 
@@ -98,6 +102,8 @@ function ProfileBody({
   const [name, setName] = useState(user.name ?? '');
   const [email, setEmail] = useState(user.email ?? '');
   const [locale, setLocale] = useState<'en-IN' | 'hi-IN'>(user.locale === 'hi-IN' ? 'hi-IN' : 'en-IN');
+  const [photo, setPhoto] = useState<PickedPhoto | null>(null);
+  const [capturing, setCapturing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [saved, setSaved] = useState(false);
@@ -117,22 +123,50 @@ function ProfileBody({
   const tripCount = trips.data?.items.length ?? 0;
   const version = Constants.expoConfig?.version ?? '0.1.0';
 
+  async function takeSelfie() {
+    setCapturing(true);
+    setError(null);
+    try {
+      const picked = await captureSelfie();
+      if (picked) setPhoto(picked);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setCapturing(false);
+    }
+  }
+
   async function save() {
     setBusy(true);
     setError(null);
     setSaved(false);
     try {
       const nextEmail = email.trim();
+      let avatarKey: string | undefined;
+      if (photo) {
+        const uploaded = await filesApi.upload('avatar', photo.uri, photo.contentType);
+        avatarKey = uploaded.object_key;
+      }
       await updateMe({
         ...(name.trim() ? { name: name.trim() } : {}),
         ...(nextEmail && nextEmail !== (user.email ?? '') ? { email: nextEmail } : {}),
         locale,
+        ...(avatarKey ? { avatar_key: avatarKey } : {}),
       });
       await refreshProfile();
       setSaved(true);
+      setPhoto(null);
       setDetailsOpen(false);
     } catch (err) {
       setError(err);
+      // The bytes are gone — the disk behind this deployment is not permanent, so a stored key can
+      // stop resolving. Repeating the same request would only repeat the refusal.
+      if (
+        err instanceof ApiError &&
+        (err.code === 'UPLOAD_EXPIRED' || (err.code === 'VALIDATION_FAILED' && err.details.field === 'avatar_key'))
+      ) {
+        setPhoto(null);
+      }
     } finally {
       setBusy(false);
     }
@@ -176,7 +210,7 @@ function ProfileBody({
   }
 
   return (
-    <Screen contentStyle={{ paddingBottom: 128 }}>
+    <Screen contentStyle={{ paddingBottom: 128 }} bleed={<BrandSignOff />}>
       {offline ? (
         <View style={{ marginBottom: spacing.md }}>
           <Banner
@@ -209,7 +243,7 @@ function ProfileBody({
         />
         <Row gap={spacing.md} style={{ alignItems: 'center' }}>
           <View style={{ borderWidth: 2, borderColor: 'rgba(255,255,255,0.35)', borderRadius: 34 }}>
-            <Avatar name={user.name} size={60} tone="navy" />
+            <Avatar name={user.name} size={60} tone="navy" uri={user.avatar_url ? resolveApiUrl(user.avatar_url) : null} />
           </View>
           <View style={{ flex: 1 }}>
             <AppText variant="heading" tone="white" numberOfLines={1}>
@@ -228,7 +262,12 @@ function ProfileBody({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Edit personal details"
-            onPress={() => setDetailsOpen(true)}
+            onPress={() => {
+              setSaved(false);
+              setError(null);
+              setPhoto(null);
+              setDetailsOpen(true);
+            }}
             style={{
               width: 36,
               height: 36,
@@ -319,6 +358,7 @@ function ProfileBody({
           onPress={() => {
             setSaved(false);
             setError(null);
+            setPhoto(null);
             setDetailsOpen(true);
           }}
         />
@@ -465,8 +505,6 @@ function ProfileBody({
 
       <AppText variant="micro" tone="muted" style={{ marginTop: spacing.lg, textAlign: 'center', fontFamily: font.regular }}>
         Parcel Yatra {version}
-        {'\n'}
-        {API_BASE.replace(/^https?:\/\//, '')}
       </AppText>
 
       {/* details sheet */}
@@ -474,6 +512,34 @@ function ProfileBody({
         <AppText variant="small" tone="muted" style={{ marginBottom: spacing.md }}>
           Only your name and email are shown to the other side. Never your phone number.
         </AppText>
+
+        <Row gap={spacing.md} style={{ alignItems: 'center', marginBottom: spacing.lg }}>
+          <Avatar name={name || user.name} size={64} tone="brand" uri={photo?.uri ?? (user.avatar_url ? resolveApiUrl(user.avatar_url) : null)} />
+          <View style={{ flex: 1 }}>
+            <AppText variant="subheading">Profile photo</AppText>
+            <AppText variant="small" tone="muted">
+              {photo
+                ? 'A new selfie, taken just now. Saved with the rest.'
+                : user.avatar_key
+                  ? 'Taken with the front camera, not chosen from a gallery.'
+                  : 'No photo yet. A selfie, taken now with the front camera.'}
+            </AppText>
+            <Row gap={spacing.sm} style={{ marginTop: spacing.sm }}>
+              <Button
+                label={photo || user.avatar_key ? 'Retake selfie' : 'Take a selfie'}
+                variant="secondary"
+                size="sm"
+                fullWidth={false}
+                loading={capturing}
+                onPress={takeSelfie}
+              />
+              {photo ? (
+                <Button label="Discard" variant="tertiary" size="sm" fullWidth={false} onPress={() => setPhoto(null)} />
+              ) : null}
+            </Row>
+          </View>
+        </Row>
+
         <Field
           label="Name"
           value={name}

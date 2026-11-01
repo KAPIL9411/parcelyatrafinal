@@ -45,6 +45,7 @@
           "resizeMode": "contain"
         }
       ],
+      "./plugins/withAndroidWindowBackground",
       "expo-router",
       "@react-native-community/datetimepicker",
       [

@@ -432,19 +432,7 @@ function ActionPanel({
         />
       ) : null}
 
-      {booking.status === 'confirmed' ? (
-        <Banner
-          tone="info"
-          title="Both sides are committed"
-          body={
-            role === 'sender'
-              ? 'Pickup opens when the window starts. The six-digit code appears here.'
-              : 'Pickup opens when the window starts. Ask the sender for the code at the door.'
-          }
-        />
-      ) : null}
-
-      {booking.status === 'pickup_ready' ? (
+      {booking.status === 'confirmed' || booking.status === 'pickup_ready' ? (
         role === 'sender' ? (
           <SenderCodePanel booking={booking} phase="pickup" />
         ) : (
@@ -1641,7 +1629,7 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function useTick(deadlines: Array<string | null>): number {
+function useTick(deadlines: (string | null)[]): number {
   const [now, setNow] = useState(() => Date.now());
   const key = deadlines.filter(Boolean).join('|');
 

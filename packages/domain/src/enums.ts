@@ -275,7 +275,7 @@ export type MatchReasonCode = (typeof MATCH_REASON_CODES)[number];
 
 export const MATCH_REASON_LABELS: Record<MatchReasonCode, string> = {
   ON_ROUTE: 'On your route',
-  ARRIVES_IN_WINDOW: 'Arrives inside your window',
+  ARRIVES_IN_WINDOW: 'Travels on your date',
   SMALL_DETOUR: 'Small detour for pickup',
   HIGH_RELIABILITY: 'Reliable traveller',
   CAPACITY_OK: 'Has room for your parcel',

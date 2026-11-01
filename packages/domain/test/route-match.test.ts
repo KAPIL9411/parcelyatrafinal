@@ -262,7 +262,7 @@ test('matching: the trip may be reversed relative to the parcel only in the wron
   assert.ok(res.no_match_reasons.includes('NO_TRIP_ON_ROUTE'));
 });
 
-test('matching: a delivery deadline that the parcel point cannot meet is refused', () => {
+test('matching: a same-day delivery window does not refuse a later clock time', () => {
   const res = rankMatches(
     matchInput({
       windowStart: new Date('2026-10-25T00:00:00Z'),
@@ -270,9 +270,10 @@ test('matching: a delivery deadline that the parcel point cannot meet is refused
     }),
     [trip()],
   );
-  assert.equal(res.matches.length, 0);
-  // Pickup at 01:30 is inside the window, but Ghaziabad is reached around 05:45, after it closes.
-  assert.equal(rejection(res), 'ARRIVES_TOO_LATE');
+  // Pickup at 01:30 and the Ghaziabad drop around 05:45 are both on 25 Oct IST. The window's clock
+  // hours no longer exclude the trip; only its date could.
+  assert.equal(res.matches.length, 1);
+  assert.equal(res.rejections.length, 0);
 });
 
 test('matching: insufficient capacity prevents a corridor match', () => {

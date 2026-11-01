@@ -1,5 +1,7 @@
 import type { BookingStatus, PayoutState, TransportMode, VerificationState } from '@py/domain';
 
+import { signObjectKey } from './storage.ts';
+
 export function toIso(value: unknown): string {
   if (value instanceof Date) return value.toISOString();
   if (typeof value === 'string') {
@@ -53,7 +55,18 @@ export interface UserRow {
    */
   phone_verified?: boolean;
   email_verified?: boolean;
+  /** The object key of the profile selfie, when the user has taken one. */
+  avatar_key?: string | null;
+  /** Set once the first-run setup screen has been finished or explicitly skipped. */
+  profile_setup_completed_at?: Date | string | null;
 }
+
+/**
+ * How long an avatar link stays valid. Longer than the staff review links: the client caches the
+ * profile it was given and reuses the picture across screens, and a stale link degrades to initials
+ * rather than to an error.
+ */
+const AVATAR_URL_TTL_SECONDS = 3600;
 
 export function userProfile(row: UserRow, roles: string[] = []) {
   return {
@@ -71,6 +84,15 @@ export function userProfile(row: UserRow, roles: string[] = []) {
     // The caller's own roles only. Additive to the contract: see docs/BUILD_NOTES.md DEFECT-011.
     // Without it every client has to probe a staff endpoint and eat a 403 to find out.
     roles,
+    // The key is what a client compares against ("has this account set up a photo yet?"); the URL is
+    // what it draws. A caller only ever receives its own, because `userProfile` is only used on the
+    // caller's own profile and on auth responses — other people's rows are serialised elsewhere and
+    // get neither field.
+    avatar_key: row.avatar_key ?? null,
+    avatar_url: row.avatar_key ? signObjectKey(row.avatar_key, AVATAR_URL_TTL_SECONDS).url : null,
+    // One-time first-run setup. `avatar_key` alone could not express "the user chose to skip the
+    // photo", so the screen used to reappear on every sign-in for those accounts.
+    profile_setup_done: Boolean(row.profile_setup_completed_at),
   };
 }
 

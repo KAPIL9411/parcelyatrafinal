@@ -363,7 +363,7 @@ async function main() {
   );
   check(
     'the refusal points at the booking and the engine gate that failed',
-    stranded.body?.error?.details?.booking_id === bookingId && stranded.body?.error?.details?.reason === 'DEPARTS_AFTER_WINDOW',
+    stranded.body?.error?.details?.booking_id === bookingId && stranded.body?.error?.details?.reason === 'TRIP_OUTSIDE_DATE',
     JSON.stringify(stranded.body?.error?.details),
   );
 

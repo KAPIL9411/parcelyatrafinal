@@ -45,6 +45,27 @@ export async function capturePhoto(): Promise<PickedPhoto | null> {
   return toPhoto(result);
 }
 
+/**
+ * One selfie, taken with the front camera on the spot. There is deliberately no library option: a
+ * profile photo is a person saying "this is my face", and a picture chosen from the album could be
+ * anybody's. The camera opens front-facing and nothing else is offered.
+ */
+export async function captureSelfie(): Promise<PickedPhoto | null> {
+  const permission = await ImagePicker.requestCameraPermissionsAsync();
+  if (!permission.granted) {
+    throw new Error('Camera access is off. Turn it on in Settings, then take the selfie again.');
+  }
+
+  const result = await ImagePicker.launchCameraAsync({
+    mediaTypes: ['images'],
+    cameraType: ImagePicker.CameraType.front,
+    quality: 0.7,
+    exif: false,
+  });
+
+  return toPhoto(result);
+}
+
 function toPhoto(result: ImagePicker.ImagePickerResult): PickedPhoto | null {
   if (result.canceled || !result.assets[0]) return null;
   const asset = result.assets[0];

@@ -12,6 +12,7 @@ import {
   Screen,
 } from '../src/components/ui.tsx';
 import { InfoNote, QuickTile, SectionHead } from '../src/components/kit.tsx';
+import { BrandSignOff } from '../src/components/BrandSignOff.tsx';
 import { colors, font, radius, spacing } from '../src/theme.ts';
 
 const FAQ = [
@@ -57,7 +58,7 @@ export default function HelpScreen() {
   const [open, setOpen] = useState<number | null>(0);
 
   return (
-    <Screen>
+    <Screen bleed={<BrandSignOff />}>
       {/* hero */}
       <View
         style={{

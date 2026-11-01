@@ -20,139 +20,121 @@ export interface ProductItem {
   bgColor: string;
 }
 
-// Signature soft ice-cyan pastel background matching Blinkit product cards exactly
-const CARD_BG = '#EBF5F8';
+// The renders in `assets/productsfinal` are cut out on transparency, so each tile is a light wash
+// that holds the object without fighting the shading already in the artwork.
+const TILE_BLUE = '#EEF3FF';
+const TILE_MIST = '#F2F6F9';
+const TILE_SAND = '#F8F4EE';
 
 const PRODUCTS: Record<string, ProductItem> = {
-  toor_dal: {
-    id: 'toor_dal',
-    image: require('../../assets/products/toor_dal.webp'),
-    bgColor: CARD_BG,
+  laptop: {
+    id: 'laptop',
+    image: require('../../assets/productsfinal/Floating Blue-Silver Laptop Hero Render.webp'),
+    bgColor: TILE_BLUE,
   },
-  broccoli: {
-    id: 'broccoli',
-    image: require('../../assets/products/broccoli.webp'),
-    bgColor: CARD_BG,
+  smartphone: {
+    id: 'smartphone',
+    image: require('../../assets/productsfinal/Floating Blue Smartphone Render.webp'),
+    bgColor: TILE_MIST,
   },
-  fortune_oil: {
-    id: 'fortune_oil',
-    image: require('../../assets/products/fortune_oil.webp'),
-    bgColor: CARD_BG,
+  charging_bundle: {
+    id: 'charging_bundle',
+    image: require('../../assets/productsfinal/Charging Essentials Product Bundle.webp'),
+    bgColor: TILE_BLUE,
   },
-  led_bulb: {
-    id: 'led_bulb',
-    image: require('../../assets/products/led_bulb.webp'),
-    bgColor: CARD_BG,
+  macbook_foam: {
+    id: 'macbook_foam',
+    image: require('../../assets/productsfinal/MacBook Packaged in Protective Foam.webp'),
+    bgColor: TILE_MIST,
   },
-  extension_cord: {
-    id: 'extension_cord',
-    image: require('../../assets/products/extension_cord.webp'),
-    bgColor: CARD_BG,
+  polo_stack: {
+    id: 'polo_stack',
+    image: require('../../assets/productsfinal/Floating Blue Polo Clothing Stack.webp'),
+    bgColor: TILE_BLUE,
   },
-  wooden_spoons: {
-    id: 'wooden_spoons',
-    image: require('../../assets/products/wooden_spoons.webp'),
-    bgColor: CARD_BG,
-  },
-  durex_box: {
-    id: 'durex_box',
-    image: require('../../assets/products/durex_box.webp'),
-    bgColor: CARD_BG,
-  },
-  pampers: {
-    id: 'pampers',
-    image: require('../../assets/products/pampers.webp'),
-    bgColor: CARD_BG,
-  },
-  electric_kettle: {
-    id: 'electric_kettle',
-    image: require('../../assets/products/electric_kettle.webp'),
-    bgColor: CARD_BG,
-  },
-  parcel_box: {
-    id: 'parcel_box',
-    image: require('../../assets/products/parcel_box.webp'),
-    bgColor: CARD_BG,
-  },
-  blue_suitcase: {
-    id: 'blue_suitcase',
-    image: require('../../assets/products/blue_suitcase.webp'),
-    bgColor: '#EAF2FA',
-  },
-  laptop_macbook: {
-    id: 'laptop_macbook',
-    image: require('../../assets/products/laptop_macbook.webp'),
-    bgColor: '#F0EFF9',
-  },
-  courier_envelope: {
-    id: 'courier_envelope',
-    image: require('../../assets/products/courier_envelope.webp'),
-    bgColor: CARD_BG,
-  },
-  travel_backpack: {
-    id: 'travel_backpack',
-    image: require('../../assets/products/travel_backpack.webp'),
-    bgColor: '#EAF2F9',
-  },
-  headphones: {
-    id: 'headphones',
-    image: require('../../assets/products/headphones.webp'),
-    bgColor: '#F8EFF2',
+  box_clothes: {
+    id: 'box_clothes',
+    image: require('../../assets/productsfinal/Open Cardboard Box with Folded Clothes.webp'),
+    bgColor: TILE_SAND,
   },
   sneakers: {
     id: 'sneakers',
-    image: require('../../assets/products/sneakers.webp'),
-    bgColor: CARD_BG,
+    image: require('../../assets/productsfinal/Floating White and Blue Sneakers.webp'),
+    bgColor: TILE_MIST,
   },
-  camera: {
-    id: 'camera',
-    image: require('../../assets/products/camera.webp'),
-    bgColor: '#F8F4EE',
+  backpack: {
+    id: 'backpack',
+    image: require('../../assets/productsfinal/Floating Navy Backpack Showcase.webp'),
+    bgColor: TILE_BLUE,
   },
-  box_logo: {
-    id: 'box_logo',
-    image: require('../../assets/products/box_logo.webp'),
-    bgColor: CARD_BG,
+  book_stack: {
+    id: 'book_stack',
+    image: require('../../assets/productsfinal/Floating Colorful Book Stack.webp'),
+    bgColor: TILE_MIST,
+  },
+  notebooks: {
+    id: 'notebooks',
+    image: require('../../assets/productsfinal/Stacked Books and Spiral Notebooks.webp'),
+    bgColor: TILE_SAND,
+  },
+  roses: {
+    id: 'roses',
+    image: require('../../assets/productsfinal/Elegant Red Rose Bouquet with Satin Bow.webp'),
+    bgColor: TILE_MIST,
+  },
+  tiffin: {
+    id: 'tiffin',
+    image: require('../../assets/productsfinal/Packed Stainless Steel Tiffin Set.webp'),
+    bgColor: TILE_SAND,
+  },
+  kraft_envelope: {
+    id: 'kraft_envelope',
+    image: require('../../assets/productsfinal/Kraft Envelope with Colorful Documents.webp'),
+    bgColor: TILE_SAND,
+  },
+  pharmacy: {
+    id: 'pharmacy',
+    image: require('../../assets/productsfinal/Floating Pharmaceutical Collection.webp'),
+    bgColor: TILE_MIST,
   },
 };
 
+// Fourteen renders across four rows of four: the first three rows carry twelve of them, the fourth
+// adds the remaining two and reuses two from other rows, so no loop shows the same object twice.
 const ROW_1: ProductItem[] = [
-  PRODUCTS.toor_dal,
-  PRODUCTS.broccoli,
-  PRODUCTS.parcel_box,
-  PRODUCTS.blue_suitcase,
-  PRODUCTS.fortune_oil,
+  PRODUCTS.laptop,
+  PRODUCTS.kraft_envelope,
+  PRODUCTS.book_stack,
+  PRODUCTS.sneakers,
 ];
 
 const ROW_2: ProductItem[] = [
-  PRODUCTS.led_bulb,
-  PRODUCTS.laptop_macbook,
-  PRODUCTS.extension_cord,
-  PRODUCTS.wooden_spoons,
-  PRODUCTS.travel_backpack,
+  PRODUCTS.smartphone,
+  PRODUCTS.polo_stack,
+  PRODUCTS.pharmacy,
+  PRODUCTS.macbook_foam,
 ];
 
 const ROW_3: ProductItem[] = [
-  PRODUCTS.durex_box,
-  PRODUCTS.sneakers,
-  PRODUCTS.pampers,
-  PRODUCTS.courier_envelope,
-  PRODUCTS.box_logo,
+  PRODUCTS.charging_bundle,
+  PRODUCTS.backpack,
+  PRODUCTS.box_clothes,
+  PRODUCTS.notebooks,
 ];
 
 const ROW_4: ProductItem[] = [
-  PRODUCTS.electric_kettle,
-  PRODUCTS.fortune_oil,
-  PRODUCTS.toor_dal,
-  PRODUCTS.headphones,
-  PRODUCTS.camera,
+  PRODUCTS.roses,
+  PRODUCTS.box_clothes,
+  PRODUCTS.tiffin,
+  PRODUCTS.book_stack,
 ];
 
 interface AnimatedRowProps {
   items: ProductItem[];
   direction: 'left' | 'right';
   durationMs: number;
-  cardSize: number;
+  cardWidth: number;
+  cardHeight: number;
   cardGap: number;
   reduceMotion: boolean;
 }
@@ -161,12 +143,13 @@ function AnimatedRow({
   items,
   direction,
   durationMs,
-  cardSize,
+  cardWidth,
+  cardHeight,
   cardGap,
   reduceMotion,
 }: AnimatedRowProps) {
   const [animatedValue] = React.useState(() => new Animated.Value(0));
-  const itemTotalWidth = cardSize + cardGap;
+  const itemTotalWidth = cardWidth + cardGap;
   const loopDistance = items.length * itemTotalWidth;
 
   const loopedItems = [...items, ...items, ...items];
@@ -218,10 +201,10 @@ function AnimatedRow({
             style={[
               styles.card,
               {
-                width: cardSize,
-                height: cardSize,
+                width: cardWidth,
+                height: cardHeight,
                 marginHorizontal: cardGap / 2,
-                borderRadius: Math.round(cardSize * 0.26),
+                borderRadius: Math.round(cardHeight * 0.26),
                 backgroundColor: item.bgColor,
               },
             ]}
@@ -261,8 +244,10 @@ export function AnimatedProductGallery({ galleryHeight }: { galleryHeight?: numb
   // Gallery occupies ~61% of screen height matching Blinkit reference
   const actualHeight = galleryHeight ?? Math.round(screenHeight * 0.61);
 
-  // Cards scale to ~23.5% of screen width (around 88-92dp on typical phones)
-  const cardSize = Math.max(76, Math.min(Math.round(screenWidth * 0.235), 96));
+  // The productsfinal renders are 3:2 cut-outs, so the tiles are landscape too — a square tile
+  // would shrink every object to half its own height and leave the rest of the card empty.
+  const cardWidth = Math.max(104, Math.min(Math.round(screenWidth * 0.32), 132));
+  const cardHeight = Math.round(cardWidth * (2 / 3));
   const cardGap = Math.max(12, Math.round(screenWidth * 0.035));
 
   return (
@@ -280,7 +265,8 @@ export function AnimatedProductGallery({ galleryHeight }: { galleryHeight?: numb
           items={ROW_1}
           direction="left"
           durationMs={22000}
-          cardSize={cardSize}
+          cardWidth={cardWidth}
+          cardHeight={cardHeight}
           cardGap={cardGap}
           reduceMotion={reduceMotion}
         />
@@ -288,7 +274,8 @@ export function AnimatedProductGallery({ galleryHeight }: { galleryHeight?: numb
           items={ROW_2}
           direction="right"
           durationMs={28000}
-          cardSize={cardSize}
+          cardWidth={cardWidth}
+          cardHeight={cardHeight}
           cardGap={cardGap}
           reduceMotion={reduceMotion}
         />
@@ -296,7 +283,8 @@ export function AnimatedProductGallery({ galleryHeight }: { galleryHeight?: numb
           items={ROW_3}
           direction="left"
           durationMs={20000}
-          cardSize={cardSize}
+          cardWidth={cardWidth}
+          cardHeight={cardHeight}
           cardGap={cardGap}
           reduceMotion={reduceMotion}
         />
@@ -304,7 +292,8 @@ export function AnimatedProductGallery({ galleryHeight }: { galleryHeight?: numb
           items={ROW_4}
           direction="right"
           durationMs={26000}
-          cardSize={cardSize}
+          cardWidth={cardWidth}
+          cardHeight={cardHeight}
           cardGap={cardGap}
           reduceMotion={reduceMotion}
         />

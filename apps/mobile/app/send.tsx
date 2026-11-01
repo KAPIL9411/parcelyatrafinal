@@ -31,10 +31,11 @@ import {
   Chip,
   IconBubble,
   InfoNote,
-  MapCanvas,
   RouteTimeline,
   StickyBar,
 } from '../src/components/kit.tsx';
+import { RouteMapCard } from '../src/components/RouteMapCard.tsx';
+import { useRoutePreview } from '../src/lib/use-route-preview.ts';
 import { useCities } from '../src/lib/cities.ts';
 import { capturePhoto } from '../src/lib/photo.ts';
 import { categoryLabel, formatDateTime, inr, kg, normalisePhone } from '../src/lib/format.ts';
@@ -211,8 +212,15 @@ function SendWizard() {
     staleTime: 10 * 60_000,
   });
 
-  const categories = config.data?.categories ?? [];
-  const maxWeight = config.data?.limits.max_weight_kg ?? 5;
+  // The map follows the two cities, and narrows to a verified hotspot when an area names one.
+  const routePreview = useRoutePreview({
+    originCityId: originId,
+    destCityId: destId,
+    originArea,
+    destArea,
+  });
+
+  const categories = config.data?.categories ?? [];  const maxWeight = config.data?.limits.max_weight_kg ?? 5;
   const maxValue = config.data?.limits.max_declared_value_paise ?? 500_000;
   const maxDim = config.data?.limits.max_dimension_cm ?? 45;
 
@@ -449,31 +457,15 @@ function SendWizard() {
 
       {step === 1 ? (
         <>
-          <MapCanvas
-            height={188}
-            originLabel={originArea || (originId ? cities.name(originId) : 'Pickup')}
-            destLabel={destArea || (destId ? cities.name(destId) : 'Drop')}
-          >
-            <View
-              style={{
-                position: 'absolute',
-                top: spacing.md,
-                left: spacing.md,
-                backgroundColor: 'rgba(255,255,255,0.94)',
-                borderRadius: radius.pill,
-                paddingHorizontal: 10,
-                paddingVertical: 5,
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 5,
-              }}
-            >
-              <Ionicons name="navigate" size={11} color={colors.brand} />
-              <AppText variant="micro" tone="brand">
-                Intercity · car
-              </AppText>
-            </View>
-          </MapCanvas>
+          <RouteMapCard
+            route={routePreview.route}
+            fetching={routePreview.fetching}
+            error={routePreview.error}
+            onRetry={routePreview.retry}
+            ready={routePreview.ready}
+            originLabel={originArea.trim() || (originId ? cities.name(originId) : 'Pickup')}
+            destLabel={destArea.trim() || (destId ? cities.name(destId) : 'Drop')}
+          />
 
           <View style={{ marginTop: spacing.lg }}>
             <AppText variant="heading">Where is it going?</AppText>

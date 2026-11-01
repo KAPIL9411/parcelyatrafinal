@@ -178,6 +178,7 @@ export function Screen({
   keyboard = false,
   contentStyle,
   footer,
+  bleed,
   background = colors.canvas,
 }: {
   children: ReactNode;
@@ -187,9 +188,12 @@ export function Screen({
   contentStyle?: StyleProp<ViewStyle>;
   /** A sticky bar below the scroll area — the price/action row on the send flow. */
   footer?: ReactNode;
+  /** Content that ignores the side padding, because it is a page-width panel rather than a card. */
+  bleed?: ReactNode;
   background?: string;
 }) {
   const insets = useSafeAreaInsets();
+  const wide = bleed ? <View style={{ marginHorizontal: -spacing.lg, marginTop: spacing.xxl }}>{bleed}</View> : null;
   const body = scroll ? (
     <ScrollView
       style={{ flex: 1 }}
@@ -199,10 +203,12 @@ export function Screen({
       showsVerticalScrollIndicator={false}
     >
       {children}
+      {wide}
     </ScrollView>
   ) : (
     <View style={[{ flex: 1, padding: spacing.lg, paddingBottom: insets.bottom + spacing.lg }, contentStyle]}>
       {children}
+      {wide}
     </View>
   );
 

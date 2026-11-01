@@ -616,8 +616,12 @@ export async function computeMatches(
      JOIN cities oc ON oc.id = t.origin_city_id
      JOIN users u ON u.id = t.traveller_id
      WHERE t.status IN ('published','partially_booked')
-       AND t.departure_at > now()
-       AND t.departure_at <= $1
+       -- Date-only, IST: the trip must run on a day the pickup window covers. Clock times are not a
+       -- constraint, so a traveller who leaves early is still a candidate. The +05:30 shift avoids a
+       -- timezone-table lookup (PGlite ships without one) and is exact because IST has no DST.
+       AND (t.departure_at AT TIME ZONE 'UTC' + interval '5 hours 30 minutes')::date
+           BETWEEN ($1::timestamptz AT TIME ZONE 'UTC' + interval '5 hours 30 minutes')::date
+               AND ($14::timestamptz AT TIME ZONE 'UTC' + interval '5 hours 30 minutes')::date
        AND t.capacity_kg_remaining >= $2
        AND (
          (t.origin_city_id = $3 AND t.dest_city_id = $4)
@@ -632,7 +636,7 @@ export async function computeMatches(
      ORDER BY t.departure_at
      LIMIT $13`,
     [
-      new Date(parcel.window_end),
+      new Date(parcel.window_start),
       requiredKg,
       parcel.origin_city_id,
       parcel.dest_city_id,
@@ -645,6 +649,7 @@ export async function computeMatches(
       destPoint.lng + pad.lng,
       destPoint.lng - pad.lng,
       config.MATCH_CANDIDATE_SCAN_LIMIT,
+      new Date(parcel.window_end),
     ],
   );
 

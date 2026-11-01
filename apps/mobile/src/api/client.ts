@@ -14,6 +14,7 @@
 import Constants from 'expo-constants';
 import * as Crypto from 'expo-crypto';
 import { File } from 'expo-file-system';
+import { Platform } from 'react-native';
 
 import { createHttp, ApiError } from './http.ts';
 import { deleteSecret, readSecret, writeSecret } from '../lib/secret-store.ts';
@@ -38,6 +39,7 @@ import type {
   Profile,
   PublicConfig,
   Quote,
+  RoutePreview,
   Trip,
   TripList,
   Verification,
@@ -52,6 +54,21 @@ export const API_BASE = (
 const REFRESH_KEY = 'py.refresh_token';
 const DEVICE_KEY = 'py.device_id';
 const NATIVE_HEADER = { 'x-py-client': 'native' };
+
+/**
+ * Re-anchors an absolute URL the server built onto the address this device actually reaches.
+ *
+ * File URLs (`upload_url`, `avatar_url`) are absolute because they are generated from
+ * `PUBLIC_API_URL`. That value is the server's idea of its own address: on a developer machine it
+ * is `http://127.0.0.1:3000/v1`, which an Android emulator cannot reach (its host is `10.0.2.2`).
+ * The path is what matters, so keep it and swap the origin and API prefix for ours.
+ */
+export function resolveApiUrl(url: string): string {
+  const marker = url.indexOf('/files/');
+  if (marker < 0) return url;
+  if (!/^https?:\/\//i.test(url)) return url;
+  return `${API_BASE}${url.slice(marker)}`;
+}
 
 let accessToken: string | null = null;
 let refreshToken: string | null = null;
@@ -252,6 +269,10 @@ export async function updateMe(body: {
   name?: string;
   email?: string;
   locale?: 'en-IN' | 'hi-IN';
+  /** The key returned by `filesApi.upload('avatar', …)`. `null` removes the photo. */
+  avatar_key?: string | null;
+  /** Marks the first-run setup screen answered, whether a photo was added or skipped. */
+  profile_setup_completed?: true;
 }): Promise<Profile> {
   return http.patch<Profile>('/me', body);
 }
@@ -279,6 +300,21 @@ export const senderApi = {
   cities: () => http.get<CityList>('/cities', { auth: false }),
   areas: (cityId: string) =>
     http.get<{ items: { id: string; name: string }[] }>(`/cities/${cityId}/areas`, { auth: false }),
+  /** Road geometry between two serviceable cities, for the send screen's map. */
+  routePreview: (query: {
+    origin_city_id: string;
+    dest_city_id: string;
+    origin_area?: string;
+    dest_area?: string;
+  }) => {
+    const params = new URLSearchParams({
+      origin_city_id: query.origin_city_id,
+      dest_city_id: query.dest_city_id,
+    });
+    if (query.origin_area) params.set('origin_area', query.origin_area);
+    if (query.dest_area) params.set('dest_area', query.dest_area);
+    return http.get<RoutePreview>(`/geo/route-preview?${params.toString()}`, { auth: false });
+  },
 
   createParcel: (body: Record<string, unknown>) => http.post<Parcel>('/parcels', body),
   myParcels: () => http.get<ParcelList>('/parcels?limit=50'),
@@ -387,26 +423,33 @@ export const filesApi = {
    * until the server has accepted it. Used for identity documents and handover photos alike.
    */
   upload: async (
-    purpose: 'kyc_id' | 'kyc_selfie' | 'parcel_sealed' | 'parcel_delivery' | 'dispute_evidence',
+    purpose: 'kyc_id' | 'kyc_selfie' | 'avatar' | 'parcel_sealed' | 'parcel_delivery' | 'dispute_evidence',
     localUri: string,
     contentType: 'image/jpeg' | 'image/png',
   ): Promise<{ object_key: string }> => {
-    const file = new File(localUri);
-    if (!file.size) throw new ApiError('UPLOAD_FAILED', 'That photo could not be read.', 0);
+    // `expo-file-system` is a native module and its `File` throws on the web target, so a browser
+    // reads the photo from the blob URL the picker produced. The native path is untouched.
+    let bytes: ArrayBuffer;
+    if (Platform.OS === 'web') {
+      bytes = await (await fetch(localUri)).arrayBuffer();
+    } else {
+      bytes = await new File(localUri).arrayBuffer();
+    }
+    if (!bytes.byteLength) throw new ApiError('UPLOAD_FAILED', 'That photo could not be read.', 0);
 
     const ticket = await http.post<{ object_key: string; upload_url: string }>('/files/upload-url', {
       purpose,
       content_type: contentType,
-      byte_size: file.size,
+      byte_size: bytes.byteLength,
     });
 
-    const res = await fetch(ticket.upload_url, {
+    const res = await fetch(resolveApiUrl(ticket.upload_url), {
       method: 'PUT',
       headers: {
         authorization: `Bearer ${accessToken ?? ''}`,
         'content-type': contentType,
       },
-      body: await file.arrayBuffer(),
+      body: bytes,
     });
     if (!res.ok) throw new ApiError('UPLOAD_FAILED', 'The photo could not be uploaded.', res.status);
     return { object_key: ticket.object_key };

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { AppError } from '../lib/errors.ts';
 import { requireAuth } from '../lib/auth.ts';
 import { userProfile } from '../lib/serialize.ts';
+import { getObject, isValidKey, keyBelongsTo } from '../lib/storage.ts';
 import { audit } from '../services/audit.ts';
 
 const patchSchema = z
@@ -11,6 +12,14 @@ const patchSchema = z
     name: z.string().min(1).max(80).optional(),
     email: z.string().max(254).optional(),
     locale: z.enum(['en-IN', 'hi-IN']).optional(),
+    /** The object key of a selfie this account just uploaded. `null` clears the photo. */
+    avatar_key: z.string().min(1).max(120).nullable().optional(),
+    /**
+     * Marks the first-run setup screen as answered. The client sends `true` whether it saved a photo
+     * or the user chose to add one later, because "asked and answered" is what the screen needs to
+     * know — not "has a photo".
+     */
+    profile_setup_completed: z.literal(true).optional(),
   })
   .strict();
 
@@ -46,11 +55,14 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       risk_tier: number;
       locale: string;
       created_at: Date;
+      avatar_key: string | null;
+      profile_setup_completed_at: Date | null;
       verification_state: string | null;
       phone_verified: boolean;
       email_verified: boolean;
     }>(
       `SELECT u.id, u.name, u.email, u.phone_last4, u.status, u.risk_tier, u.locale, u.created_at,
+              u.avatar_key, u.profile_setup_completed_at,
               u.phone_verified_at IS NOT NULL AS phone_verified,
               u.email_verified_at IS NOT NULL AS email_verified,
               (SELECT v.state FROM verifications v WHERE v.user_id = u.id ORDER BY v.created_at DESC LIMIT 1) AS verification_state
@@ -71,7 +83,8 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       email: string | null;
       locale: string;
       google_sub: string | null;
-    }>(`SELECT name, email, locale, google_sub FROM users WHERE id = $1`, [auth.userId]);
+      avatar_key: string | null;
+    }>(`SELECT name, email, locale, google_sub, avatar_key FROM users WHERE id = $1`, [auth.userId]);
     const account = before.rows[0];
     if (!account) throw new AppError('NOT_FOUND');
 
@@ -83,15 +96,41 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       throw new AppError('FORBIDDEN', { field: 'email' }, 'Your sign-in address is managed by your Google account.');
     }
 
+    // A selfie is a reference to an object, and the two ways that can go wrong are both worth
+    // refusing: somebody else's key (it would show their face here), and a key whose bytes never
+    // landed or were already wiped (it would show a broken image forever). Same rule the handover
+    // photos and the verification documents apply.
+    const avatarProvided = body.avatar_key !== undefined;
+    if (typeof body.avatar_key === 'string') {
+      if (!isValidKey(body.avatar_key) || !keyBelongsTo(body.avatar_key, auth.userId)) {
+        throw new AppError('VALIDATION_FAILED', { field: 'avatar_key' });
+      }
+      if (!(await getObject(body.avatar_key))) throw new AppError('UPLOAD_EXPIRED');
+    }
+
     await db.query(
       `UPDATE users SET
          name = COALESCE($2, name),
          email = COALESCE($3, email),
          locale = COALESCE($4, locale),
          email_verified_at = CASE WHEN $3 IS NULL THEN email_verified_at ELSE NULL END,
+         avatar_key = CASE WHEN $5::boolean THEN $6::text ELSE avatar_key END,
+         avatar_updated_at = CASE WHEN $5::boolean THEN now() ELSE avatar_updated_at END,
+         profile_setup_completed_at = CASE
+           WHEN $7::boolean AND profile_setup_completed_at IS NULL THEN now()
+           ELSE profile_setup_completed_at
+         END,
          updated_at = now()
        WHERE id = $1`,
-      [auth.userId, body.name ?? null, body.email ?? null, body.locale ?? null],
+      [
+        auth.userId,
+        body.name ?? null,
+        body.email ?? null,
+        body.locale ?? null,
+        avatarProvided,
+        body.avatar_key ?? null,
+        body.profile_setup_completed === true,
+      ],
     );
 
     // A self-declared address is not a verified one: rule E2 stops counting it the moment it changes.
@@ -101,8 +140,13 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       action: 'me.update',
       resource: 'user',
       resourceId: auth.userId,
-      before: { name: account.name, locale: account.locale },
-      after: { name: body.name, locale: body.locale, email_changed: emailChanged },
+      before: { name: account.name, locale: account.locale, avatar_key: account.avatar_key },
+      after: {
+        name: body.name,
+        locale: body.locale,
+        email_changed: emailChanged,
+        avatar_key: avatarProvided ? (body.avatar_key ?? null) : undefined,
+      },
     });
 
     const res = await db.query<{
@@ -114,11 +158,14 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       risk_tier: number;
       locale: string;
       created_at: Date;
+      avatar_key: string | null;
+      profile_setup_completed_at: Date | null;
       verification_state: string | null;
       phone_verified: boolean;
       email_verified: boolean;
     }>(
       `SELECT u.id, u.name, u.email, u.phone_last4, u.status, u.risk_tier, u.locale, u.created_at,
+              u.avatar_key, u.profile_setup_completed_at,
               u.phone_verified_at IS NOT NULL AS phone_verified,
               u.email_verified_at IS NOT NULL AS email_verified,
               (SELECT v.state FROM verifications v WHERE v.user_id = u.id ORDER BY v.created_at DESC LIMIT 1) AS verification_state

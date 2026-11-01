@@ -19,6 +19,7 @@ import {
   Screen,
 } from '../../src/components/ui.tsx';
 import { SignInPanel } from '../../src/components/auth-gate.tsx';
+import { BrandSignOff } from '../../src/components/BrandSignOff.tsx';
 import { IconBubble, RouteTimeline, Segmented, StatusTrack } from '../../src/components/kit.tsx';
 import { categoryLabel, formatDateTime, inr, kg, statusLabel, statusTone } from '../../src/lib/format.ts';
 import { colors, font, radius, spacing } from '../../src/theme.ts';
@@ -81,6 +82,7 @@ export default function BookingsScreen() {
     <Screen
       contentStyle={{ paddingBottom: 128 }}
       refreshControl={<Refresh refreshing={active.isRefetching} onRefresh={() => void active.refetch()} />}
+      bleed={<BrandSignOff />}
     >
       {/* summary */}
       <View

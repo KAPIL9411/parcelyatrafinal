@@ -1,5 +1,6 @@
-import { type ReactNode } from 'react';
+import { useState } from 'react';
 import {
+  Image,
   Pressable,
   StyleSheet,
   View,
@@ -15,16 +16,54 @@ type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
 // ---------------------------------------------------------------------------- avatars & icons
 
+type AvatarPalette = { bg: string; fg: string };
+
+/**
+ * The photo, with the initials still behind it. A signed avatar URL expires, and on a device that
+ * has been offline the bytes may never arrive; a face that fails to load must not leave a blank
+ * circle. Keying this component on the URL is what makes a freshly saved selfie retry.
+ */
+function AvatarPhoto({
+  uri,
+  size,
+  label,
+  palette,
+}: {
+  uri: string;
+  size: number;
+  label: string;
+  palette: AvatarPalette;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <AppText style={{ color: palette.fg, fontFamily: font.bold, fontSize: size * 0.36 }}>{label}</AppText>
+    );
+  }
+  return (
+    <Image
+      source={{ uri }}
+      style={StyleSheet.absoluteFill}
+      resizeMode="cover"
+      accessibilityLabel="Profile photo"
+      accessibilityIgnoresInvertColors
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 export function Avatar({
   name,
   size = 44,
   tone = 'brand',
+  uri,
 }: {
   name: string | null | undefined;
   size?: number;
   tone?: 'brand' | 'partner' | 'navy';
+  uri?: string | null;
 }) {
-  const palette = {
+  const palette: AvatarPalette = {
     brand: { bg: colors.brandSoft, fg: colors.brandDark },
     partner: { bg: colors.partnerSoft, fg: colors.partner },
     navy: { bg: colors.navy, fg: colors.white },
@@ -44,11 +83,16 @@ export function Avatar({
         backgroundColor: palette.bg,
         alignItems: 'center',
         justifyContent: 'center',
+        overflow: 'hidden',
       }}
     >
-      <AppText style={{ color: palette.fg, fontFamily: font.bold, fontSize: size * 0.36 }}>
-        {label || 'PY'}
-      </AppText>
+      {uri ? (
+        <AvatarPhoto key={uri} uri={uri} size={size} label={label || 'PY'} palette={palette} />
+      ) : (
+        <AppText style={{ color: palette.fg, fontFamily: font.bold, fontSize: size * 0.36 }}>
+          {label || 'PY'}
+        </AppText>
+      )}
     </View>
   );
 }
@@ -78,83 +122,6 @@ export function IconBubble({
       }}
     >
       <Ionicons name={name} size={iconSize ?? Math.round(size * 0.48)} color={color} />
-    </View>
-  );
-}
-
-// ---------------------------------------------------------------------------- map canvas
-
-/**
- * A hand-drawn city map. It is deliberately illustrative, not a live map: Parcel Yatra does not
- * track anyone's location, so painting a route with pins communicates the journey without implying
- * GPS. Built from plain Views so it works in Expo Go with no native map dependency.
- */
-export function MapCanvas({
-  height = 210,
-  originLabel,
-  destLabel,
-  children,
-  style,
-}: {
-  height?: number;
-  originLabel?: string;
-  destLabel?: string;
-  children?: ReactNode;
-  style?: StyleProp<ViewStyle>;
-}) {
-  return (
-    <View style={[styles.map, { height }, style]}>
-      {/* Water */}
-      <View style={[styles.water, { top: -20, right: -30, width: 120, height: height * 0.75 }]} />
-      {/* Parks */}
-      <View style={[styles.park, { top: 16, left: 18, width: 74, height: 52 }]} />
-      <View style={[styles.park, { bottom: 14, right: 26, width: 60, height: 44 }]} />
-      {/* City blocks */}
-      <View style={[styles.block, { top: 22, left: '36%', width: 52, height: 34 }]} />
-      <View style={[styles.block, { top: 66, left: '48%', width: 42, height: 30 }]} />
-      <View style={[styles.block, { bottom: 24, left: '10%', width: 46, height: 32 }]} />
-      <View style={[styles.block, { bottom: 18, left: '62%', width: 58, height: 36 }]} />
-      <View style={[styles.blockAlt, { top: 40, right: '8%', width: 40, height: 28 }]} />
-      {/* Roads */}
-      <View style={[styles.road, { top: '26%', left: '-8%', width: '118%', height: 9, transform: [{ rotate: '-4deg' }] }]} />
-      <View style={[styles.road, { top: '62%', left: '-8%', width: '118%', height: 12, transform: [{ rotate: '3deg' }] }]} />
-      <View style={[styles.road, { top: '-10%', left: '18%', width: 10, height: '125%', transform: [{ rotate: '6deg' }] }]} />
-      <View style={[styles.road, { top: '-10%', left: '58%', width: 7, height: '125%', transform: [{ rotate: '-8deg' }] }]} />
-      <View style={[styles.road, { top: '-10%', left: '82%', width: 5, height: '125%', transform: [{ rotate: '2deg' }] }]} />
-      {/* The journey: a three-segment path from pickup to drop */}
-      <View style={[styles.route, { left: '22%', bottom: '16%', width: 5, height: '30%', transform: [{ rotate: '6deg' }] }]} />
-      <View style={[styles.route, { left: '26%', bottom: '44%', width: '36%', height: 5, transform: [{ rotate: '-16deg' }] }]} />
-      <View style={[styles.route, { right: '14%', top: '34%', width: '26%', height: 5, transform: [{ rotate: '-6deg' }] }]} />
-      {/* Pickup pin */}
-      <View style={[styles.pinWrap, { left: '18%', bottom: '10%' }]}>
-        <View style={styles.pinHalo} />
-        <View style={styles.pickupPin}>
-          <View style={styles.pinCore} />
-        </View>
-      </View>
-      {/* Drop pin */}
-      <View style={[styles.pinWrap, { right: '8%', top: '22%' }]}>
-        <View style={styles.dropPin}>
-          <Ionicons name="flag" size={12} color={colors.white} />
-        </View>
-      </View>
-      {originLabel ? (
-        <View style={[styles.mapLabel, { left: '8%', bottom: '3%' }]}>
-          <View style={styles.pickupDot} />
-          <AppText variant="micro" numberOfLines={1} style={{ maxWidth: 120 }}>
-            {originLabel}
-          </AppText>
-        </View>
-      ) : null}
-      {destLabel ? (
-        <View style={[styles.mapLabel, { right: '3%', top: '8%' }]}>
-          <Ionicons name="flag" size={10} color={colors.navy} />
-          <AppText variant="micro" numberOfLines={1} style={{ maxWidth: 110 }}>
-            {destLabel}
-          </AppText>
-        </View>
-      ) : null}
-      {children}
     </View>
   );
 }
@@ -660,85 +627,6 @@ export const kitStyles = StyleSheet.create({
 });
 
 const styles = StyleSheet.create({
-  map: {
-    backgroundColor: colors.mapBg,
-    borderRadius: radius.xl,
-    overflow: 'hidden',
-  },
-  water: {
-    position: 'absolute',
-    backgroundColor: colors.mapWater,
-    borderRadius: 60,
-    transform: [{ rotate: '-12deg' }],
-  },
-  park: {
-    position: 'absolute',
-    backgroundColor: colors.mapPark,
-    borderRadius: 14,
-    transform: [{ rotate: '-6deg' }],
-  },
-  block: {
-    position: 'absolute',
-    backgroundColor: colors.mapBlock,
-    borderRadius: 6,
-    transform: [{ rotate: '-5deg' }],
-  },
-  blockAlt: {
-    position: 'absolute',
-    backgroundColor: colors.mapBlockAlt,
-    borderRadius: 6,
-    transform: [{ rotate: '7deg' }],
-  },
-  road: {
-    position: 'absolute',
-    backgroundColor: colors.mapRoad,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.mapRoadEdge,
-  },
-  route: {
-    position: 'absolute',
-    backgroundColor: colors.brand,
-    borderRadius: 4,
-  },
-  pinWrap: { position: 'absolute', alignItems: 'center', justifyContent: 'center' },
-  pinHalo: {
-    position: 'absolute',
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: 'rgba(10,87,255,0.16)',
-  },
-  pickupPin: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: colors.white,
-    borderWidth: 4,
-    borderColor: colors.brand,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  pinCore: { width: 4, height: 4, borderRadius: 2, backgroundColor: colors.brand },
-  dropPin: {
-    width: 26,
-    height: 26,
-    borderRadius: 8,
-    backgroundColor: colors.navy,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  mapLabel: {
-    position: 'absolute',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(255,255,255,0.94)',
-    borderRadius: radius.pill,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  pickupDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.brand },
   timelineLine: { position: 'absolute', left: 8, width: 2 },
   timelineRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
   timelineDot: {

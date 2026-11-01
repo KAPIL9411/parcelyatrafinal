@@ -333,9 +333,17 @@ export async function applyBookingTransition(
   else await db.transaction(write);
 
   // ---- side effects ----
-  if (result.to === 'pickup_ready') {
+  if (result.to === 'confirmed') {
+    // The code exists from the moment both sides commit, not only when the pickup window opens. A
+    // traveller who sets off early must be able to collect the parcel without waiting for a clock;
+    // the sender can read the same code out whenever the handover actually happens.
     await ensureHandoverOtp(app, booking.id, 'pickup');
     await queueNotification(db, { userId: booking.sender_id, bookingId: booking.id, templateId: 'pickup_code_ready' });
+  }
+  if (result.to === 'pickup_ready') {
+    // Usually a no-op: the code was issued at `confirmed` and is still valid. This keeps bookings
+    // that were already past `confirmed` before this change working.
+    await ensureHandoverOtp(app, booking.id, 'pickup');
   }
   if (result.to === 'arrived') {
     await ensureHandoverOtp(app, booking.id, 'delivery');
@@ -734,6 +742,16 @@ export async function bookingRoutes(app: FastifyInstance): Promise<void> {
       const { row, role } = await loadForViewer(app, req.params.bookingId, auth.userId);
       if (role !== 'sender') throw new AppError('NOT_FOUND');
 
+      // The sender may read a pickup code as soon as the booking is confirmed: the handover can
+      // happen earlier than the window, and asking for the code must not depend on a clock.
+      const pickupApplicable =
+        phase === 'pickup' && (row.status === 'confirmed' || row.status === 'pickup_ready');
+      const deliveryApplicable =
+        phase === 'delivery' && (row.status === 'arrived' || row.status === 'delivery_attempt_failed');
+      if (pickupApplicable || deliveryApplicable) {
+        await ensureHandoverOtp(app, row.id, phase);
+      }
+
       const found = await app.db.query<{ code_sealed: string | null; used_at: Date | null; expires_at: Date }>(
         `SELECT code_sealed, used_at, expires_at FROM handover_otps WHERE booking_id = $1 AND phase = $2`,
         [row.id, phase],
@@ -768,7 +786,7 @@ export async function bookingRoutes(app: FastifyInstance): Promise<void> {
       if (role !== 'sender') throw new AppError('FORBIDDEN', { reason: 'only_sender_may_reissue' });
 
       const applicable =
-        (body.phase === 'pickup' && row.status === 'pickup_ready') ||
+        (body.phase === 'pickup' && (row.status === 'confirmed' || row.status === 'pickup_ready')) ||
         // A receiver who was not there the first time often comes back the next day, by which point
         // the code has expired. The sender has to be able to issue a new one — with the attempt
         // budget carried over, that stays safe.
@@ -811,7 +829,9 @@ export async function bookingRoutes(app: FastifyInstance): Promise<void> {
 
       const { row, role } = await loadForViewer(app, req.params.bookingId, auth.userId);
       if (role !== 'traveller') throw new AppError('TRANSITION_NOT_PERMITTED');
-      if (row.status !== 'pickup_ready') throw new AppError('HANDOVER_NOT_ALLOWED_IN_STATE');
+      if (row.status !== 'pickup_ready' && row.status !== 'confirmed') {
+        throw new AppError('HANDOVER_NOT_ALLOWED_IN_STATE');
+      }
 
       // The handover photo must be the uploader's own object.
       if (!keyBelongsTo(body.photo_key, auth.userId)) {

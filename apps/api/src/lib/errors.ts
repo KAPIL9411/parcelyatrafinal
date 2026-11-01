@@ -76,6 +76,7 @@ export type ErrorCode =
   | 'PAYMENT_NOT_PAYABLE'
   | 'PAYMENT_PROVIDER_UNAVAILABLE'
   | 'ROUTING_UNAVAILABLE'
+  | 'WEATHER_UNAVAILABLE'
   | 'REFUND_EXCEEDS_CAPTURED_AMOUNT'
   | 'APPROVAL_REQUIRED'
   | 'SELF_APPROVAL_FORBIDDEN'
@@ -189,6 +190,10 @@ export const ERROR_TABLE: Record<ErrorCode, Spec> = {
   ROUTING_UNAVAILABLE: {
     status: 503,
     message: 'Road distances are not available right now. Nothing was priced.',
+  },
+  WEATHER_UNAVAILABLE: {
+    status: 503,
+    message: 'Weather is not available right now.',
   },
   REFUND_EXCEEDS_CAPTURED_AMOUNT: { status: 409, message: 'That refund is larger than the amount captured.' },
   APPROVAL_REQUIRED: { status: 409, message: 'This amount needs a second approver.' },

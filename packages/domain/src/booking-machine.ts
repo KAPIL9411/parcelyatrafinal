@@ -180,6 +180,20 @@ const RULES: readonly Rule[] = [
     guard: guard('TRANSITION_NOT_PERMITTED', 'Only trust & safety can block a booking.', (ctx) => ctx.supportRole === 'trust_safety'),
   },
   {
+    from: 'confirmed',
+    command: 'confirm_pickup',
+    // An early handover is allowed: the traveller may set off before the window opens, and the
+    // pickup code is already issued at `confirmed`. The proof requirements are unchanged.
+    to: 'picked_up',
+    actors: ['traveller'],
+    dataGuard: true,
+    guard: (ctx) => {
+      if (!ctx.otpValid) return { ok: false, code: 'OTP_INVALID', message: 'That pickup code is not correct.' };
+      if (!ctx.photoPresent) return { ok: false, code: 'HANDOVER_NOT_ALLOWED_IN_STATE', message: 'A photo of the sealed parcel is required.' };
+      return null;
+    },
+  },
+  {
     from: 'pickup_ready',
     command: 'confirm_pickup',
     to: 'picked_up',

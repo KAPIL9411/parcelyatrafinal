@@ -21,6 +21,7 @@ import { GoogleSignInButton } from '../src/components/GoogleSignInButton';
 import { colors, font, radius, spacing } from '../src/theme.ts';
 import { maskPhone, normalisePhone } from '../src/lib/format.ts';
 import { GOOGLE_PLATFORM_CLIENT_ID } from '../src/lib/google.ts';
+import { needsProfileSetup } from '../src/lib/profile-setup.ts';
 
 export default function SignInScreen() {
   const { next } = useLocalSearchParams<{ next?: string }>();
@@ -107,8 +108,15 @@ export default function SignInScreen() {
     setBusy('google');
     setError(null);
     try {
-      await googleSignIn(idToken);
-      finish();
+      const session = await googleSignIn(idToken);
+      // A first-time Google account has no photo, so it lands on the setup screen instead of a home
+      // page that has to pass initials off as a face. Once a selfie is saved this cannot re-fire,
+      // and no other sign-in path (phone OTP, staff) goes through the screen at all.
+      if (needsProfileSetup(session.user)) {
+        router.replace({ pathname: '/setup-profile', params: next ? { next } : {} });
+      } else {
+        finish();
+      }
     } catch (err) {
       setError(err);
     } finally {

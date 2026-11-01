@@ -25,14 +25,6 @@ export const colors = {
   warn: '#8a5a00',
   warnBg: '#fdf3dc',
   white: '#ffffff',
-  // Map illustration palette — deliberately muted so the route line is the loudest thing.
-  mapBg: '#eef3ec',
-  mapBlock: '#e2ebdf',
-  mapBlockAlt: '#e7edf6',
-  mapRoad: '#ffffff',
-  mapRoadEdge: '#dfe6dc',
-  mapWater: '#d9e9f4',
-  mapPark: '#dcebd7',
   // Partner (traveller) accent — a warm counterpoint to the sender blue.
   partner: '#0f7a5c',
   partnerSoft: '#e6f4ef',

@@ -106,9 +106,13 @@ function PillTabBar({ state, descriptors, navigateToTab, insets }: PillTabBarPro
     };
   }, []);
 
-  useEffect(() => {
+  // Re-read the keyboard on a tab change, because a screen can leave it hidden behind a modal.
+  // Adjusting during render (instead of in an effect) avoids a second render pass with a stale bar.
+  const [lastTabIndex, setLastTabIndex] = useState(tabIndex);
+  if (lastTabIndex !== tabIndex) {
+    setLastTabIndex(tabIndex);
     setKeyboardVisible(Keyboard.isVisible());
-  }, [tabIndex]);
+  }
 
   if (keyboardVisible) return null;
 

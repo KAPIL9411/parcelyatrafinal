@@ -1,9 +1,9 @@
 /**
  * The compact utility row that floats on the campaign hero.
  *
- * It carries the pickup city, inbox, bell and avatar — no wordmark and no badge: the sky behind the
- * hero is the only mark at the top-left, and a squeezed logo beside four controls reads as clutter.
- * The row belongs to the hero and leaves with it; past the fold there is no header at all.
+ * It carries the pickup city, inbox, bell and avatar — no wordmark and no badge: a squeezed logo
+ * beside four controls reads as clutter. The row belongs to the hero and leaves with it; past the
+ * fold there is no header at all.
  */
 import { Pressable, StyleSheet, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';

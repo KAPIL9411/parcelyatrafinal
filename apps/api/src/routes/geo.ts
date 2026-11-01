@@ -2,8 +2,10 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import { config } from '../config.ts';
+import type { Db } from '../db/client.ts';
 import { AppError } from '../lib/errors.ts';
 import { resolveCityDistance } from '../lib/routing.ts';
+import { getOsrmRoute } from '../services/osrm.ts';
 
 /**
  * Public geography and serviceability.
@@ -451,4 +453,147 @@ export async function geoRoutes(app: FastifyInstance): Promise<void> {
           : null,
     };
   });
+
+  /**
+   * Road geometry for the send screen's map, so the preview shows the route a traveller actually
+   * drives instead of a drawing of one.
+   *
+   * Coordinates come from the server's own network: a city centroid, or a verified hotspot when the
+   * area typed by the user names one. `precision` tells the client which of the two it got — an
+   * area the operator has not verified is a label, not a place, and pretending otherwise would put
+   * a pin on ground we never measured.
+   *
+   * Only a *routed* line is ever returned. The straight-line estimate exists to price a parcel
+   * when a provider is unreachable; drawing it on a map would claim a road nobody measured, so this
+   * answers `ROUTING_UNAVAILABLE` and the client says the route could not be drawn.
+   */
+  app.get('/geo/route-preview', async (req, reply) => {
+    const q = z
+      .object({
+        origin_city_id: uuid,
+        dest_city_id: uuid,
+        origin_area: z.string().trim().max(120).optional(),
+        dest_area: z.string().trim().max(120).optional(),
+      })
+      .strict()
+      .parse(req.query);
+
+    if (q.origin_city_id === q.dest_city_id) {
+      throw new AppError('CITY_NOT_SERVICED', { reason: 'same_city' });
+    }
+
+    const [origin, destination] = await Promise.all([
+      resolvePlace(db, q.origin_city_id, q.origin_area),
+      resolvePlace(db, q.dest_city_id, q.dest_area),
+    ]);
+
+    const shape = await loadRouteShape(origin, destination);
+
+    reply.header('cache-control', 'public, max-age=3600, stale-while-revalidate=86400');
+    return {
+      origin,
+      destination,
+      polyline: shape.polyline,
+      distance_km: shape.distanceKm,
+      duration_minutes: shape.durationMinutes,
+      source: 'routed',
+      measured_at: shape.measuredAt,
+    };
+  });
+}
+
+interface PreviewPlace {
+  city_id: string;
+  city_name: string;
+  area: string | null;
+  lat: number;
+  lng: number;
+  precision: 'hotspot' | 'city';
+}
+
+/**
+ * An area becomes a coordinate only through a verified hotspot that shares its name. Everything
+ * else anchors on the city, which is what the booking itself is priced against.
+ */
+async function resolvePlace(db: Db, cityId: string, area?: string): Promise<PreviewPlace> {
+  const city = await db.query<{ name: string; lat: number | string; lng: number | string }>(
+    `SELECT name, lat, lng FROM cities WHERE id = $1 AND status <> 'retired'`,
+    [cityId],
+  );
+  const row = city.rows[0];
+  if (!row) throw new AppError('NOT_FOUND');
+
+  const place: PreviewPlace = {
+    city_id: cityId,
+    city_name: row.name,
+    area: area && area.length > 0 ? area : null,
+    lat: Number(row.lat),
+    lng: Number(row.lng),
+    precision: 'city',
+  };
+  if (!place.area) return place;
+
+  const hotspot = await db.query<{ name: string; lat: number | string; lng: number | string }>(
+    `SELECT name, lat, lng FROM hotspots
+     WHERE city_id = $1 AND status = 'active' AND verification_status = 'verified'
+       AND lower(btrim(name)) = lower(btrim($2))
+     ORDER BY verified_at DESC NULLS LAST
+     LIMIT 1`,
+    [cityId, place.area],
+  );
+  const spot = hotspot.rows[0];
+  if (!spot) return place;
+
+  return { ...place, lat: Number(spot.lat), lng: Number(spot.lng), precision: 'hotspot' };
+}
+
+interface PreviewShape {
+  polyline: Array<[number, number]>;
+  distanceKm: number;
+  durationMinutes: number;
+  measuredAt: string;
+}
+
+const SHAPE_TTL_MS = 6 * 60 * 60_000;
+const SHAPE_LIMIT = 200;
+const shapes = new Map<string, { at: number; shape: PreviewShape }>();
+
+/**
+ * Road geometry, cached in process. A city pair does not move, so the router is asked once per
+ * `SHAPE_TTL_MS` rather than on every keystroke that changes an area.
+ */
+async function loadRouteShape(origin: PreviewPlace, destination: PreviewPlace): Promise<PreviewShape> {
+  const key =
+    `${origin.lat.toFixed(4)},${origin.lng.toFixed(4)}->${destination.lat.toFixed(4)},${destination.lng.toFixed(4)}`;
+  const hit = shapes.get(key);
+  const now = Date.now();
+  if (hit && now - hit.at < SHAPE_TTL_MS) return hit.shape;
+
+  const routed = await getOsrmRoute(origin.lat, origin.lng, destination.lat, destination.lng);
+  if (routed.source !== 'routed' || routed.polyline.length < 2) {
+    throw new AppError('ROUTING_UNAVAILABLE');
+  }
+
+  const shape: PreviewShape = {
+    polyline: samplePolyline(routed.polyline, 260),
+    distanceKm: Math.round(routed.distanceMeters / 10) / 100,
+    durationMinutes: Math.round(routed.durationSeconds / 60),
+    measuredAt: new Date(routed.fetchedAt).toISOString(),
+  };
+  shapes.set(key, { at: now, shape });
+  if (shapes.size > SHAPE_LIMIT) {
+    const oldest = shapes.keys().next();
+    if (!oldest.done) shapes.delete(oldest.value);
+  }
+  return shape;
+}
+
+/** Keeps the ends and an even stride between them: a full intercity geometry is thousands of points. */
+function samplePolyline(points: Array<[number, number]>, max: number): Array<[number, number]> {
+  if (points.length <= max) return points;
+  const stride = Math.ceil((points.length - 1) / (max - 1));
+  const sampled: Array<[number, number]> = [];
+  for (let i = 0; i < points.length - 1; i += stride) sampled.push(points[i]!);
+  sampled.push(points[points.length - 1]!);
+  return sampled;
 }

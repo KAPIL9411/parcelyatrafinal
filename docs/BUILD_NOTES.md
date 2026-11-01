@@ -1450,8 +1450,9 @@ rebuild to contain the JS bundle.
 
 - **No push notifications.** The bell polls `GET /notifications` every 60 s while the app is open;
   closed-app delivery needs a provider the API does not have.
-- **No maps, GPS or live tracking.** Routes are city plus an optional free-text area, matching the
-  API. No location permission is requested and no screen implies tracking.
+- **No GPS or live tracking.** Routes are city plus an optional free-text area, matching the API.
+  No location permission is requested and no screen implies tracking. The Send screen does draw the
+  road between the two chosen cities (§9), but it draws a planned route, not the parcel's position.
 - **No payment capture.** The booking screen requests an intent and then says plainly that the
   sandbox cannot charge; the server refuses live payments at boot.
 - **No payout, wallet or cash collection.** The API refuses these, so the UI does not offer them.
@@ -1521,3 +1522,456 @@ are simply no longer promoted by the landing page.
 screenshots, and the real download destination — the owner still has to supply the APK/EAS URL for
 `APP_DOWNLOAD_URL`. The wide-width visual check used a same-origin iframe at 1280 px inside the
 478 px browser pane, not a native desktop window. No file under `apps/mobile` was touched.
+
+
+
+## 8. Home-screen weather — built 2026-10-31, then removed from the app the same day
+
+**What was asked, first:** a realistic sky on the home hero in the style of Indian quick-commerce
+apps, driven by real conditions, with `.webp` assets, visible *above* whatever the admin publishes
+from the homepage CMS. **What was asked next:** "remove all weather related ui thing from app".
+
+**Removed from `apps/mobile`:** `src/homepage/components/WeatherBackdrop.tsx`,
+`src/homepage/components/WeatherChip.tsx`, `src/homepage/use-weather.ts`, `src/homepage/weather.ts`,
+`src/homepage/weather-assets.ts`, `src/homepage/components/../use-reduced-motion.ts` stayed (the
+clock sky and the map card still use it), the twelve `.webp` plates and `CREDITS.md` under
+`assets/weather/`, the plate build script `scripts/weather-plates.py`, the `api.weather()` call in
+`src/api/client.ts` and the `WeatherCondition` / `WeatherSnapshot` types in `src/api/types.ts`, plus
+their use in `app/(tabs)/index.tsx`. The home hero is now the clock-driven `SkyBackdrop` only: sun,
+sunset wash, crescent and stars from the device clock, no external call, no condition-driven layer,
+nothing covering a published campaign image.
+
+**Kept:** `GET /v1/weather` (`apps/api/src/routes/weather.ts` + `apps/api/src/lib/weather.ts`,
+Open-Meteo behind `WEATHER_ENABLED`, 600 s cache, `WEATHER_UNAVAILABLE`, `test/weather.test.ts`).
+That is server code, not UI, and deleting an endpoint the owner may still want is not reversible by
+reading a diff — it is one instruction away if they want it gone.
+
+**Record of the deleted assets**, because the licensing and the grade recipe are the expensive part
+to rediscover:
+
+- Twelve plates, 1024×1024 WebP at quality 80 (method 6), ~350 KB shipped in total. Each carried an
+  alpha ramp — opaque to 55–62 % of the height, cosine to fully transparent at the bottom edge — so
+  the photograph dissolved into the hero gradient instead of ending on a hard line. The night
+  variants of the overcast and rain plates were the same photographs graded dark and blue; the fog
+  plates were the overcast photograph blurred and lifted. Grades of real photos, not generated skies.
+- All sources are Wikimedia Commons under **CC0 1.0** (public domain dedication; attribution not
+  legally required, recorded anyway): `clear-day` "Blue Sky and beautiful white clouds" (Real Ammar);
+  `clear-night` "Stars Dark Blue Night (Unsplash)" (Paul Volkmer laup); `partly-day` "Cumulus
+  congestus over Gåseberg 2" and `partly-night` "Moon and clouds over Brofjorden 4" (W.carter);
+  `cloudy-day`, `cloudy-night`, `fog-day`, `fog-night` from "A sky look when it's raining" (Ceph001);
+  `rain-day`, `rain-night` from "Dense, dark rain clouds" (Tarun Suman); `storm-day` "Cumulus
+  congestus clouds" (HO JJ); `storm-night` "Thunderstorm (lightning)" (Thisik).
+- The build script took each 1920 px download, square-cropped a per-plate region, Lanczos-resized to
+  1024, applied per-plate contrast/saturation/brightness/channel-gain, then the alpha ramp.
+
+**What had been verified before the removal** (Expo web against a local API): the chip showed the
+live reading and followed the pickup city ("22° Partly cloudy · Baheri · feels 25°" → "Clear sky, 21
+degrees in Gurugram, feels like 24"), `GET /v1/weather?city_id=…` returned 200, and the plate element
+loaded the real asset (`img src="clear-night.webp"`, `naturalWidth: 1024`). The plate's *painted*
+result and any on-device render were never observed — the browser surface used is invisible, so
+`Animated.timing` never advanced past `opacity: 0`, and the installed APK predated this JS.
+
+
+## 9. Live road map on the Send screen (mobile) — 2026-10-31
+
+**What was asked:** replace the illustrated static map with a real, interactive, geographically
+accurate map that draws the actual road between the chosen cities, and never a straight line.
+
+**Decision taken instead of the suggested library.** The spec named the Google Maps SDK with
+`react-native-maps` and the Directions API, "or the existing compatible mapping solution". No
+`GOOGLE_MAPS_API_KEY` exists anywhere in the repo or in the env templates, that key is billed, and
+adding `react-native-maps` means a new native module — therefore a fresh APK build for every user.
+The brief's own escape hatch was used: the map is Leaflet 1.9.4 over CARTO `light_all` tiles inside a
+`react-native-webview` (native) / same-origin `iframe` (web), and the geometry comes from the
+`OSRM_ROUTER_URL` router the API already used for distance pricing. **Zero new npm dependencies.**
+
+**Built:**
+
+- `GET /v1/geo/route-preview` (`apps/api/src/routes/geo.ts`) — `origin_city_id`, `dest_city_id`,
+  optional `origin_area` / `dest_area`. It asks the router through the existing `services/osrm.ts`,
+  samples the shape to at most 260 points, and returns
+  `{distance_km, duration_minutes, polyline, source, origin, destination}`.
+  - **No straight line, by construction.** `getOsrmRoute()`'s `estimated` fallback (a great-circle
+    hop) is refused here: unless `source === 'routed'` with at least two points the route throws
+    `ROUTING_UNAVAILABLE` → 503. An unreachable router costs a map, never a wrong route.
+  - An area becomes a coordinate only when an *active and verified* hotspot carries that exact name;
+    otherwise the city centroid is used and `precision: 'city'` says so honestly on the wire.
+  - Shapes are cached in-process for 6 h (`SHAPE_TTL_MS`, cap `SHAPE_LIMIT` 200) and served with
+    `cache-control: public, max-age=3600, stale-while-revalidate=86400` — a city pair does not move.
+- `apps/mobile/src/components/route-map-html.ts` generates the map document: no zoom buttons, no
+  keyboard panning and no scroll-wheel hijack of the form (`zoomControl: false`, `keyboard: false`,
+  `scrollWheelZoom: false`) while dragging, double-tap zoom and pinch stay live; the route as two
+  stacked polylines (`#0a57ff`, weight 5, over a weight-13 glow at
+  0.15 opacity), teardrop SVG pickup/drop pins, and `fitBounds` with `[26, 44]` padding at
+  `maxZoom: 13`. The basemap credit the tile licence requires — "© OpenStreetMap contributors
+  © CARTO" — is drawn as a 9 px pill above the locality chips rather than hidden; the first version
+  set `attributionControl: false`, which was a licence bug, not a design choice.
+  It re-measures with `invalidateSize` at 0/120/500 ms and on every
+  `ResizeObserver`/`resize`, re-framing the current route if the box changed — without that, Leaflet
+  measured the frame while React Native was still sizing it, saw 0×0 and locked the camera to an
+  empty viewport.
+- `MapFrame.tsx` (WebView) and `MapFrame.web.tsx` (iframe) expose one `run(script)` handle; the
+  extensionless import in `RouteMapCard.tsx` is what makes Metro pick the right file per platform.
+- `RouteMapCard.tsx` keeps the card inside the design system — `radius.xl` (22 px) corners, the same
+  slot the illustration had — and puts everything that reads as Parcel Yatra (the "Intercity · Car"
+  pill, the `km · hr min` pill, the pickup/drop locality chips, the loading and failure states) in
+  React Native above the map, with `pointerEvents="none"` so gestures reach the map.
+- `use-route-preview.ts` debounces the typed areas by 450 ms, keys on
+  `[pair, origin_area, dest_area]`, holds `staleTime: 30 min` with `retry: 1` and `keepPreviousData`
+  — which is what makes a city change read as the map moving rather than blanking.
+- Deleted: `MapCanvas` from `kit.tsx` and the `mapBg / mapBlock / mapRoad / mapWater / mapPark`
+  illustration palette from `theme.ts`. Nothing decorative was left behind, and the rest of
+  `send.tsx` is untouched.
+
+**Verified:**
+
+- `apps/api/test/route-preview.test.ts` — 6 new tests against a stub router that returns a 321-point
+  winding geometry. They assert the shape is not a line (over 100 points off the straight segment),
+  that it ends at the destination, that distance and duration come from the router, that a repeat
+  call does not re-ask the router, that a router refusal becomes 503 instead of a drawn line, that
+  `cache-control` is public with a max-age, and the area/hotspot precision rules.
+- Live API: `Baheri → Gurugram` returned `distance_km 316.29` with 254 routed points, 252 of them off
+  the straight line.
+- **In the running app**, signed in as the sandbox sender, on `/send`:
+  - the card mounts as a real map — 366×206 px, 6 CARTO tiles loaded at zoom 8
+    (`…/light_all/8/183/106@2x.png`), route stroke `#0a57ff` weight 5 with the weight-13 glow, two
+    pins;
+  - the camera fits the road: route bounding box 29–338 px inside a 366 px frame, Bareilly's pin at
+    x=325 and Gurugram's at x=16 — correct east–west ordering, both on screen;
+  - `Bareilly → Gurugram` showed "303 km · 3 hr 45 min"; after the swap, "306 km · 3 hr 50 min";
+  - **failure**: with the router unreachable the card showed "The road between these cities could not
+    be fetched." with **Try again**, the polyline collapsed to `M0 0` and the pins were removed — a
+    stale route is never left on screen for the wrong pair;
+  - **loading**: the retry rendered "Finding the road…" with the brand spinner;
+  - **recovery**: once the router answered again, one **Try again** click restored pins, geometry and
+    the distance pill without leaving the screen;
+  - **debounce**: three keystrokes inside 270 ms produced exactly one request
+    (`…&origin_area=Civ` → 200), and the typed area is part of the cache key;
+  - **licence credit**: after adding it, the card renders
+    "© OpenStreetMap contributors © CARTO" — a 179×16 px control at 9 px font, sitting 33 px above
+    the bottom edge so the pickup/drop chips keep their row.
+- `npx tsx --test --test-concurrency=1 test/*.test.ts` for the API: 145 tests, 0 failures. Booking,
+  validation and navigation were not touched — the form fields, date picker and Continue behaved as
+  before in the same run, and `apps/mobile` typecheck plus its 25 tests pass.
+
+**Not verified / caveats:**
+
+- The on-device (APK) render. `react-native-webview` has no web implementation, which is why the
+  `.web.tsx` split exists; the native path was checked by typecheck and by reading the code, not by a
+  screen on the phone. The installed APK predates this JS.
+- Pan and pinch. Gestures cannot be driven from this harness, so interactivity is argued from the map
+  being a live Leaflet instance with its default handlers, not observed.
+- The "choose both cities" hint (`ready === false`). **Since verified** — see §10: a later run opened
+  `/send` with no cities chosen and the card rendered that copy, then fetched the road once both were
+  picked.
+- The area → verified-hotspot precision path in the UI: this development database has no
+  active-and-verified hotspot for any city checked (`/v1/geo/cities/<id>/hotspots` returns
+  `hotspots: []` for Baheri, Bareilly, Delhi, Lucknow, Ghaziabad, Haldwani, Pilibhit, Rudrapur,
+  Gurugram and Noida; the candidates are all withheld: 4, 6, 5, 6 …), so only the API test covers it.
+- Licensing before launch: the public OSRM demo (`router.project-osrm.org`) has no SLA and its data is
+  licensed for non-commercial use, and CARTO basemaps are free-tier/CC-BY. `.env.example` records the
+  first; the tile URL lives in `route-map-html.ts` and needs a commercial basemap contract (or
+  Mapbox/Google with a key) before a paid launch. The required credit is on the card now, but a
+  licence is still the owner's task. No key is read today, so nothing here can leak one.
+  **Superseded the same day** — CARTO now requires a key and one is read; see §11.
+- Gurugram and Noida exist in the owner's development database but are **not** in the 8-city network
+  that migrations seed (Baheri, Bareilly, Delhi, Ghaziabad, Haldwani, Lucknow, Pilibhit, Rudrapur), so
+  the exact acceptance pair works locally and not yet on a fresh deploy until those cities are added.
+
+
+## 10. Weather UI removed + sign-in gallery on `productsfinal` — 2026-10-31, later the same day
+
+**Asked:** take every weather element out of the app, and put the renders in
+`apps/mobile/assets/productsfinal/` on the sign-in screen.
+
+**Weather removal** — §8 keeps the full record, including the CC0 sources of the deleted plates. In
+`app/(tabs)/index.tsx` the `useWeather` call, the `WeatherBackdrop` and the `WeatherChip` are gone, so
+the hero is the clock-driven `SkyBackdrop` alone (that sky went the same evening too — see §11);
+`api.weather()` left `src/api/client.ts` and
+`WeatherCondition` / `WeatherSnapshot` left `src/api/types.ts`; the stale weather sentences in the
+`SkyBackdrop.tsx` and `time-of-day.ts` headers were rewritten. `use-reduced-motion.ts` stayed because
+the clock sky and the map card both use it. The server's `GET /v1/weather` was **not** deleted — that
+is not UI, and removing an endpoint is not something to do as a side effect.
+
+**Gallery** — `src/components/AnimatedProductGallery.tsx` now requires all fourteen renders in
+`assets/productsfinal/` (the folder grew to fourteen while this was being written; two of them —
+the rose bouquet and the tiffin set — arrived after the first twelve). The tiles changed from square
+to landscape because the artwork is 1536×1024 cut out on transparency: a square tile with
+`resizeMode="contain"` would have drawn every object at half its own height. Rows 1–3 carry twelve
+renders, row 4 adds the two new ones and reuses two from other rows, so no row repeats an object
+inside its own loop. The marquee, the entrance animation, the reduce-motion branch and the bottom
+fade are unchanged.
+
+**Verified:**
+
+- `npx tsc --noEmit` clean for `apps/mobile`; its 25 tests pass.
+- The built web bundle contains no `WeatherBackdrop`, `useWeather`, `weatherLook` or plate filename,
+  and no `assets/products/*` reference; 42 references to `productsfinal/`.
+- `/sign-in` in the running app: 48 tiles, 14 distinct files, every asset request `200 image/webp`
+  with the file's own byte count, decoded `naturalWidth: 1536`, card 104×69 px with `radius 18px` and
+  the tile wash `#EEF3FF`, and no horizontal overflow (`scrollWidth == clientWidth == 310`).
+- Home, after signing in as the sandbox sender `9000000001` against a fresh local dev API: greeting
+  rendered, zero images whose `src` matches a plate name, no temperature or condition text anywhere
+  in the copy, and the console holds only the React DevTools notice.
+- `/send` still works after the client edits, on a database seeded only by migrations: with no cities
+  chosen the card shows "Choose a pickup city and a drop city to see the road between them."; after
+  Baheri → Delhi it fetched a road, showed "290 km · 3 hr 32 min", 4 pin/road paths with **0**
+  collapsed `M0 0`, a 30-vertex road polyline and the "© OpenStreetMap contributors © CARTO" credit.
+
+**Not verified:** the on-device render — the same APK caveat as §8 and §9, and it now also covers the
+new tiles, since Metro's asset URL for a filename containing spaces was only observed on web. The old
+`assets/products/` set is still on disk, unreferenced by any code; deleting it is one instruction.
+
+
+## 11. The clock sky is gone too, and CARTO tiles now need a key — 2026-10-31, same day
+
+**Asked:** "weather images are removed but weather related things are still visible in left top corner
+remove those", plus where the owner's CARTO basemap key belongs.
+
+**What was in that corner.** Measured in the running app before the change, not guessed: a 58×58 px
+disc with `border-radius: 29px` at `(-5, 15)`, its pale-blue halo at the same centre, and — because
+the clock read evening — a 44 px cool wash and eleven 1.5–2.4 px white dots. That is
+`src/homepage/components/SkyBackdrop.tsx`: the sun/moon disc, light rays and star field, driven by the
+device clock rather than any provider, but unmistakably a sky. §10 left it in because it is not the
+weather feature; the owner has now asked for the corner to go, so it goes.
+
+**Removed:** `SkyBackdrop.tsx`, `src/homepage/time-of-day.ts` and `test/time-of-day.test.ts`, the
+import and the `<SkyBackdrop>` instance in `app/(tabs)/index.tsx`, and the header comment in
+`HomeHeader.tsx` that described the sky as the top-left mark. `use-reduced-motion.ts` stays (the map
+card uses it). Nothing else consumed `time-of-day.ts`. The hero is now the campaign gradient and
+nothing drawn on top of it; the greeting still re-reads the clock on focus, because `clock` feeds
+`greetingFor`, which is copy and not a sky.
+
+**CARTO.** The claim in §9 that no key is read is now false, and the reason is a policy change, not a
+refactor: since 25 September 2026 CARTO does not serve raster basemaps to unkeyed requests. Measured
+with `curl` — six different tiles across `light_all` and `voyager`, `z=5` and `z=10`, all returned
+`200` at exactly **2049 bytes** with 16 distinct colours and a flat `rgb(250,250,248)` everywhere,
+which is the "API KEY REQUIRED" placeholder, not a map. So the Send-screen map has been drawing a
+watermarked void, and §9's "6 CARTO tiles loaded" only proved the requests happened.
+
+`route-map-html.ts` now builds the documented keyed URL from `EXPO_PUBLIC_CARTO_API_KEY`
+(`https://{s}.basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}{r}.png?key=…`). When the
+variable is absent the tile layer is not added at all — a plain background with the route on it is
+honest, CARTO's warning inside the app is not — and the credit line becomes "Route data © OpenStreetMap
+contributors".
+
+**Where the key goes** (`.env.example` documents this section): `apps/mobile/.env`, which
+`git check-ignore` confirms is ignored, or exported before `npm run start -w @py/mobile`, and for
+store/EAS builds an **EAS secret** rather than a literal in the committed `eas.json` env blocks. The
+two live-tracking maps (`apps/web/src/components/LiveTrackingMap.tsx`,
+`src/components/LiveTrackingView.tsx`) request `tile.openstreetmap.org` directly and need no key.
+
+**Verified:**
+
+- `npx tsc --noEmit` clean; the mobile suite is 21 tests, 21 pass (three went with the deleted scene).
+- Home after signing in as the sandbox sender `9000000001`: **0** circular elements in the top-left
+  quadrant, **0** 1–3 px white dots, **0** sub-200 px gradient boxes above y=260 — the enumeration that
+  found all of them before the change. Console holds only the React DevTools notice.
+- Send screen, both cities picked: tiles come from the new `rastertiles/…?key=` path, every one of them
+  keyed, `naturalWidth: 512` and the fetched body **11728 bytes** against the 2049-byte placeholder —
+  real streets. The route still draws: "290 km · 3 hr 32 min", two road paths of 31 commands each, none
+  collapsed to `M0 0`, credit visible.
+- The keyless branch, which cannot be observed while the local `.env` holds a key, was checked by
+  generating the document both ways in Node with a dummy value: each variant's script block parses, the
+  unkeyed one contains no `L.tileLayer` and does contain the fallback credit, the keyed one inlines only
+  the dummy.
+
+**Not verified:** on-device again (§96) — and a native build without `EXPO_PUBLIC_CARTO_API_KEY`
+configured will now show a basemap-less map, so the key must be an EAS secret before the next APK, not
+only a local `.env`.
+
+**Owner's task, unchanged:** the free CARTO tier is licensed for non-commercial use. A key removes the
+watermark; it does not buy a commercial right.
+
+## 12. The closing branding block on home — 2026-10-31, same day
+
+**Asked:** redesign the bottom promotional section of the app after a screenshot of an editorial
+branding footer, with a written brief (full-width, very light blue/white ground, one oversized bold
+headline "India's smarter way to send parcels" with a small heart, a thin divider under it, the
+wordmark low and faint at the left, generous whitespace, no cards/gradients/illustration) and an
+explicit instruction not to copy the reference's branding, logo, colours or text.
+
+**What was there before** was not a section: the feed ended in one `variant="micro"` line, "Parcel
+Yatra · intercity parcels carried by people, not trucks" (`app/(tabs)/index.tsx`, the ~6 px block at
+old lines 590–601). So "preserve the original section's height and proportions" had nothing to
+preserve; the proportions came from the reference instead, and the old sentence's second half survives
+as the caption under the wordmark. That copy is not unique to this block — the same idea in other words
+lives in `apps/web/src/components/Layout.tsx:272` and `packages/domain/src/homepage.ts:1016`.
+
+**New file:** `apps/mobile/src/components/BrandSignOff.tsx` — first written under
+`src/homepage/components/`, then moved out once it became app chrome instead of a home-only piece —
+rendered as the last child of the feed, given `width` and `viewportHeight` from the `useWindowDimensions`
+call that the screen already makes (`index.tsx:138`, now destructuring `height` too). It is four nodes:
+headline, rule, wordmark, caption. No new dependency, no image, no gradient. §13 undoes the prop
+passing again, for the reason given there.
+
+**Four decisions worth their reason.**
+
+- **Heart is blue, not red.** The brief allowed either; red is the reference's colour, so it is the one
+  option the "do not copy their colours" clause rules out. `colors.brand` (#0a57ff) at 21 px, set as an
+  `<Ionicons name="heart">` nested inside the `<Text>` so it rides the baseline instead of being laid
+  out beside it.
+- **Wordmark is type, not the PNG.** The only wordmark asset is `assets/brand-wordmark-white.png`
+  (1024×170, white on transparent) — useless on a light ground unless tinted, and `tintColor` on an
+  `Image` is something I can only prove on web, not for Android from here. TitilliumWeb bold at
+  0.22 alpha is crisp at every density, selectable, and reads to a screen reader as the words it is.
+- **Ground is `canvasAlt` (#eef2f8), not `brandTint`.** First try was `brandTint` (#f4f8ff); measured
+  against the page canvas it is a 4-point difference, i.e. no panel at all. `canvasAlt` is what the rest
+  of the app already uses for a slightly deeper field, so the section separates without a border.
+- **Ink is one hue at three strengths** — `withAlpha(colors.navy, …)` at 0.52 / 0.22 / 0.72 — rather
+  than three grey tokens, so headline, signature and caption are visibly the same colour family.
+
+**Size is derived, not fixed:** gutter `max(16, 4.6 % of width)`, headline `clamp(36, 11.8 % of width,
+56)`, wordmark `clamp(18, 5.6 % of width, 27)`, vertical rhythm and `minHeight` in fractions of the
+viewport height. That is what makes the same file behave on a 320 dp phone and a tablet.
+
+**Verified in the running app** at a 315×570 viewport, after Fast Refresh:
+
+- `npx tsc --noEmit` clean; `npm run test -w @py/mobile` 21/21.
+- Section full-bleed: `x: 0, width: 315, height: 263`, background `rgb(238, 242, 248)`, 29 px padding
+  top and bottom. No horizontal overflow (`scrollWidth == clientWidth == 315`).
+- Headline 37 px / 40 line, TitilliumWeb_700Bold, letter-spacing −0.6, three wrapped lines, composited
+  ink **#778090 = 3.54:1** — over the 3:1 bar for display text. The first value, 0.16 alpha, measured
+  **1.4:1**: effectively invisible, and it was the contrast meter that said so.
+- Rule 0.8 px (`StyleSheet.hairlineWidth`) in `#e4e7ec`, 283 px wide, 17 px under the headline.
+- Wordmark "Parcel Yatra" 18 px / 23, **#bcc2cc (1.59:1)** — faint on purpose; it is a signature, not
+  information, and nothing in the block depends on reading it.
+- Caption 13 px, **#4a5468 = 6.77:1**. It shipped at `ink500`, which measured 4.43:1 and failed AA for
+  small text by 0.07 — the reason the caption is nearly full ink while the wordmark is not.
+- Heart: 21 px glyph, `rgb(10, 87, 255)`, on the last headline line, width 20.
+- Wrap measured with the real loaded face on an offscreen canvas at 320 / 390 / 430 → 3 lines
+  ("India's smarter" / "way to send" / "parcels ♥"); at 768 → 2 lines.
+
+**Not verified:** the on-device render, same caveat as §8–§11 and now including this block. Two things
+to look at on a phone: whether the inline heart sits on the baseline the way it does on web (Android
+can shift icon fonts), and whether the 37→56 px headline still feels composed at the widths people
+actually carry. Both are visible in ten seconds and cannot be settled from a browser.
+
+**Left alone:** the owner's brief named hexes (#0B3BFF, #F2B33D, #FFF6E5) that are not the tokens in
+`src/theme.ts` (brand #0a57ff, accent #e8b33c, brandTint #f4f8ff). I used the app's own values — the
+brief's own instruction was to adapt to Parcel Yatra's existing identity, and silently retokening the
+brand across the app to match three pasted numbers is a bigger change than a section.
+
+## 13. The sign-off spreads, and the profile stops printing the API origin — 2026-10-31, same day
+
+**Asked:** remove the `127.0.0.1:3001/v1` text from the profile page, and make the new promotional
+section visible on the other pages where it belongs.
+
+**The origin was on screen.** `app/(tabs)/profile.tsx:469` rendered
+`{API_BASE.replace(/^https?:\/\//, '')}` on a second line under the version, so the build footer printed
+the deployment origin in production and a loopback address in development. Both lines are gone: the
+footer is now `Parcel Yatra {version}` alone, and the `API_BASE` import went with it. `API_BASE` itself
+stays in `src/api/client.ts` — it is what `http.ts` prefixes requests with, and the four remaining
+references (`LiveTrackingView.tsx`, `src/homepage/api.ts`, `DriverTrackingClient.ts`) build request and
+socket URLs rather than rendering anything. Nothing about the base URL, its scheme or its port is
+user-facing now.
+
+**One component, six surfaces.** Moving the block out of home-only meant fixing three things about it
+rather than copying it around:
+
+- It **measures the window itself** (`useWindowDimensions` inside) instead of taking `width` /
+  `viewportHeight` props, and **reveals itself** (`Reveal delay={140}` now wraps its own root). Home lost
+  its wrapper and its extra destructure; every other page just renders `<BrandSignOff />`.
+- It **moved to `src/components/`**, because `src/homepage/` is the CMS home module and a footer that six
+  screens share is app chrome, not home content.
+- `Screen` gained a **`bleed` slot**: content that cancels the container's `spacing.lg` side padding with
+  `marginHorizontal: -spacing.lg`, so a page-width panel is actually page-width. Without it the block
+  would have sat as a 283 px inset card inside a 315 px screen, which is not a full-bleed footer.
+
+**Where it goes:** the four tab lists — bookings, trips, inbox, profile — and help. **Where it does not,
+on purpose:** `send.tsx` (a sticky price/action bar already owns the bottom of that screen, and a brand
+panel under a form competes with the primary button), `notifications.tsx` and the booking/trip detail
+screens (task surfaces the user leaves as soon as they arrive), `info/[topic]` (legal and policy copy,
+where a marketing signature reads wrong), and `sign-in.tsx` (already closes with the product gallery).
+
+**Verified** at 315×570, one pass per route through the running app:
+
+- `npx tsc --noEmit` clean; `npx eslint` clean over the seven touched files (the flat config lives at
+  `apps/mobile/eslint.config.js`, so it has to be run from that directory); `@py/mobile` 21/21.
+- Home, bookings, trips, inbox, profile and help each render the block at **`x: 0, width: 315`** —
+  genuinely full-bleed on the padded screens too — height 263, headline 37 px
+  TitilliumWeb_700Bold, caption text intact, `documentElement.scrollWidth == clientWidth == 315` on
+  every one of them.
+- Reveal settles on each page: computed `opacity: 1`, `transform: matrix(1,0,0,1,0,0)` — the block is not
+  left invisible below the fold.
+- Profile body text after the change contains **no** `127.0.0.1`, `:3001` or `onrender`, and still shows
+  "Parcel Yatra 0.1.0". No error overlay on any route.
+
+**Not verified:** on-device, as with §8–§12. The new thing a phone has to confirm is the negative-margin
+bleed inside a `ScrollView` on Android/iOS — it is ordinary RN layout, but it is also the kind of thing
+that shows up as a one-pixel side gap rather than as an error.
+
+## 14. First Google sign-in now sets up the profile — 2026-10-31, same day
+
+**Asked:** the first time a user signs in with Google, open a setup screen that takes a selfie from the
+camera (explicitly not the gallery) plus a name, and go home after saving. Every later launch goes
+straight to home.
+
+**The gate is a fact about the data, not a flag.** `src/lib/profile-setup.ts` answers one question —
+does this profile have an `avatar_key` — and `app/sign-in.tsx:115` sends the Google response to
+`/setup-profile` when the answer is yes. Saving sets the key, so the screen cannot come back, and the
+condition is only ever evaluated on the Google handoff: phone-OTP accounts, staff accounts and every
+profile that predates this screen are never routed through it. The API test asserts the same response
+both ways (`loadProfile` returns `avatar_key: null` for a fresh identity and the key afterwards), which
+is what makes the rule testable at all — `Profile` carried no photo field before this.
+
+**Server (`apps/api`).** Migration `0014_profile_avatar.sql` adds `users.avatar_key` and
+`avatar_updated_at`, both nullable: an account without a photo is not a broken account. `files.ts`
+gains the `avatar` purpose, so keys look like `avatar/<userId>/<uuid>.<ext>` and the existing
+`keyBelongsTo` rule — the one that already guards ID documents and handover photos — is what decides
+whose face may be written or read. `PATCH /v1/me` takes `avatar_key` (or `null` to clear) and refuses
+before writing anything: a key under another user's id is `VALIDATION_FAILED{field: avatar_key}`, a key
+whose bytes are not in the object store is `UPLOAD_EXPIRED`, and the `CASE WHEN $5::boolean` form means
+a patch that does not mention the photo never clears it. `serialize.ts:89-90` stores only the key and
+hands out `avatar_url` as a signed token with a one-hour TTL (`AVATAR_URL_TTL_SECONDS = 3600`); there is
+no permanent public URL for a face anywhere in the contract, and `userProfile` is only ever used for the
+caller's own profile and for auth responses, so nobody else's payload gains one.
+
+**App (`apps/mobile`).** `captureSelfie()` in `src/lib/photo.ts:61` calls `launchCameraAsync` with
+`cameraType: front` — there is no library call in this flow at all. `app/setup-profile.tsx` is new and
+registered with `headerShown: false`; the selfie preview is the real captured image, `Save and go to home`
+stays inert until a photo and a name exist, and saving is `filesApi.upload('avatar')` → `PATCH /me` →
+`refreshProfile()` → `router.replace()` (honouring a deep-link `next`). `Avatar` gained a `uri` prop that
+renders the photo and falls back to the existing initials if the bytes do not load, keyed on the URL so a
+freshly saved selfie retries rather than staying failed. The Personal details sheet on the profile tab now
+carries a "Profile photo" row (take / retake / discard), which is what makes the screen's
+"Add the photo later" link a way back rather than a dead end.
+
+**A defect the browser run exposed.** `filesApi.upload` read the photo with `new File(uri)` from
+`expo-file-system`, which is a native module: on the web target every upload — KYC documents, sealed
+parcel, delivery proof, dispute evidence, and now the avatar — died with
+`this.validatePath is not a function` before a request was even issued. `client.ts:416` now reads the
+bytes with `fetch(uri).arrayBuffer()` when `Platform.OS === 'web'` and keeps the native `File` path
+untouched.
+
+**Verified:**
+- `@py/api` **150/150** (`test/profile-update.test.ts` is 8 tests: the five avatar cases plus the three
+  pre-existing email ones); `@py/mobile` **24/24**; `tsc --noEmit` clean for both; `eslint` clean over
+  every touched file.
+- Against the running server (migration 0014 applied on boot): `otp/verify` for a fresh account returns
+  `avatar_key: null` → ticket `purpose=avatar` `201` → `PUT` bytes `201` → `PATCH /me` `200` →
+  `GET /me` exposes the key and `GET` of the signed URL returns `200 image/png, 70 bytes` → a foreign key
+  and a never-uploaded key both `400`, and the profile is unchanged after those refusals.
+- In the app at 315×570: the phone sign-in goes straight to `/` (**not** forced into setup); on
+  `/setup-profile` the heading, both hints and the empty state render, `Save` with nothing filled does
+  nothing, the camera action creates a file input with `capture="user"` — the front-camera directive —
+  and the preview is the actual `blob:` image; after `Save and go to home` the path is `/`, the home
+  greeting reads `Good evening, Selfie 👋`, and the profile card renders the photo as a `60×60` image
+  inside a `border-radius: 30px` / `overflow: hidden` circle. Re-opening setup shows "Your saved photo.
+  Tap to replace it with a new one." with the name prefilled; retaking from the details sheet wrote a new
+  key (`…/318f…` → `…/552c…`). Console stayed free of app errors.
+- The fallback is measured, not assumed: with the saved object renamed out of the store, the profile's
+  signed URL answered `404 NOT_FOUND`, the avatar rendered **zero** `<img>` elements and the initials
+  `ST` in their place — no broken-image glyph — and renaming the file back brought the photo back as a
+  loaded `60px` image on the next mount.
+
+**Not verified, and why.** The Google button was never pressed: it needs a real Google credential, and
+inventing one is not an option — so the handoff itself rests on the unit tests plus the API assertion
+above, not on a live sign-in. On a phone the same `captureSelfie` opens the camera app rather than a file
+input, and only a device run can confirm the front lens and the absence of any album fallback; that joins
+the pending on-device list with §11–§13. And the bytes are only as durable as the object store: with
+`STORAGE_PROVIDER=local` on Render the selfie disappears at the next redeploy, the profile degrades to the
+initials fallback measured above, and a later `PATCH` of the stale key answers `UPLOAD_EXPIRED` — handled
+in both screens.
+Cloudinary is still the owner's decision (§4 storage note), and this feature is the first user-visible
+thing that will look obviously broken without it.

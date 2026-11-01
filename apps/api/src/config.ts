@@ -179,6 +179,16 @@ const schema = z.object({
   ROUTING_TIMEOUT_MS: int(8000, 1_000, 30_000),
   /** Elements per computeRouteMatrix call. Google caps a request at 625; 100 keeps cost and latency flat. */
   ROUTING_MAX_ELEMENTS_PER_CALL: int(100, 1, 625),
+
+  /**
+   * Home-screen weather. Open-Meteo is keyless, and its free tier is for non-commercial use: before
+   * the app is sold commercially either the paid plan or another provider has to be configured.
+   * `WEATHER_ENABLED=false` makes the app fall back to its clock-driven sky with no error shown.
+   */
+  WEATHER_ENABLED: bool(true),
+  OPEN_METEO_BASE_URL: z.string().url().default('https://api.open-meteo.com/v1/forecast'),
+  WEATHER_TIMEOUT_MS: int(4000, 500, 15_000),
+  WEATHER_CACHE_SECONDS: int(600, 60, 3600),
   /**
    * When true, a quote is refused unless the city pair has an *operational* route edge. Off at
    * launch so the site stays bookable while the matrix is being filled; turning it on is a policy

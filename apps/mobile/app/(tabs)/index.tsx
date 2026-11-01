@@ -70,11 +70,11 @@ import { homePalette, withAlpha } from '../../src/homepage/theme.ts';
 import { lightsAvailable, resolveLights } from '../../src/homepage/lights-state.ts';
 import { readLightsPreference, writeLightsPreference } from '../../src/homepage/lights-preference.ts';
 import { HERO_SEAM, HeroCarousel, heroHeight } from '../../src/homepage/components/HeroCarousel.tsx';
+import { BrandSignOff } from '../../src/components/BrandSignOff.tsx';
 import { HomeHeader } from '../../src/homepage/components/HomeHeader.tsx';
 import { Reveal } from '../../src/homepage/components/Reveal.tsx';
 import { SearchCard } from '../../src/homepage/components/SearchCard.tsx';
 import { SectionRenderer } from '../../src/homepage/components/Sections.tsx';
-import { SkyBackdrop } from '../../src/homepage/components/SkyBackdrop.tsx';
 
 const CLOSED_STATUSES = new Set([
   'delivered',
@@ -369,16 +369,6 @@ export default function HomeScreen() {
             lightsProgress={lightsProgress}
             onToggleLights={toggleLights}
           />
-          {/* The sky is a page surface, not a badge: one instance over the whole hero, scrolling with
-              it, and only when the campaign is a gradient rather than artwork. */}
-          {heroes.every((hero) => !hero.image_url) ? (
-            <SkyBackdrop
-              now={new Date(clock)}
-              width={width}
-              topInset={insets.top}
-              height={heroHeight(width, insets.top)}
-            />
-          ) : null}
         </View>
 
         {/* The search card is the primary action, so it sits on the seam between hero and page. */}
@@ -598,18 +588,7 @@ export default function HomeScreen() {
           </View>
         )}
 
-        <AppText
-          variant="micro"
-          tone="muted"
-          style={{
-            textAlign: 'center',
-            marginTop: spacing.xxl,
-            paddingHorizontal: spacing.lg,
-            fontFamily: font.regular,
-          }}
-        >
-          Parcel Yatra · intercity parcels carried by people, not trucks
-        </AppText>
+        <BrandSignOff />
       </ScrollView>
 
       {/* One header only, and it belongs to the hero: fade it out and nothing replaces it. */}

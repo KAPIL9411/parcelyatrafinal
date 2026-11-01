@@ -11,36 +11,41 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { ApiError } from '../src/api/http.ts';
 import { SessionProvider, useSession } from '../src/session.tsx';
+import { SPLASH_BLUE, SPLASH_IMAGE_WIDTH_DP, SPLASH_WORDMARK_HEIGHT_DP } from '../src/splash.ts';
 import { SyncBridge } from '../src/sync.tsx';
 import { colors, font, radius } from '../src/theme.ts';
 
 void SplashScreen.preventAutoHideAsync();
 SplashScreen.setOptions({ duration: 250, fade: true });
 
-/** The brand blue sampled from the supplied artwork; also set as the native splash colour. */
-const SPLASH_BLUE = '#005DFD';
-const WORDMARK_RATIO = 170 / 1024;
+let nativeSplashDismissed = false;
+
 /**
- * The native splash draws the wordmark in a 288 dp canvas that Android masks to a 192 dp circle, so
- * the safe width is 180 dp. This splash uses the same width, which makes the hand-off from the OS
- * splash to JS look like one continuous screen instead of a resize.
+ * Drops the OS splash only once the JS splash has been laid out, so the fade always reveals a
+ * painted, identical frame. Hiding on mount instead lets slower devices show the empty window
+ * behind the root view for a moment.
  */
-const WORDMARK_WIDTH = 180;
+function dismissNativeSplash() {
+  if (nativeSplashDismissed) return;
+  nativeSplashDismissed = true;
+  void SplashScreen.hideAsync();
+}
 
 /**
  * The branded launch screen, used while fonts and the session are loading.
  *
- * The native splash already shows the wordmark on the same blue; this is the JS half of that one
- * screen, so the fade-out of the OS splash reveals an identical frame rather than a second splash.
+ * The native splash already shows this wordmark on the same blue at the same width; this is the JS
+ * half of that one screen, so the crossfade from the OS splash is a no-op rather than a resize.
  */
 function BrandSplash() {
   return (
-    <View style={styles.splash}>
+    <View style={styles.splash} onLayout={dismissNativeSplash}>
       <StatusBar style="light" />
       <Image
         source={require('../assets/brand-wordmark-white.png')}
-        style={{ width: WORDMARK_WIDTH, height: WORDMARK_WIDTH * WORDMARK_RATIO }}
+        style={{ width: SPLASH_IMAGE_WIDTH_DP, height: SPLASH_WORDMARK_HEIGHT_DP }}
         resizeMode="contain"
+        fadeDuration={0}
       />
       <ActivityIndicator color="rgba(255,255,255,0.85)" style={styles.splashSpinner} />
     </View>
@@ -79,10 +84,20 @@ export default function RootLayout() {
     TitilliumWeb_700Bold,
   });
 
-  // The JS splash below is the branded one, so the OS splash is dropped as soon as it is mounted.
-  // Keeping it any longer would show a second, empty blue screen behind the wordmark.
+  // The JS splash below is the branded one, so the OS splash is dropped once that splash has
+  // painted (see BrandSplash). This covers the case where fonts are ready on the first commit and
+  // nothing else would trigger the layout callback: by now the first screen (or the identical
+  // BrandSplash) is committed, so the fade reveals a painted frame either way.
   useEffect(() => {
-    void SplashScreen.hideAsync();
+    if (!fontsLoaded && !fontError) return;
+    const frame = requestAnimationFrame(dismissNativeSplash);
+    return () => cancelAnimationFrame(frame);
+  }, [fontsLoaded, fontError]);
+
+  // Last resort so a boot that never settles cannot leave the OS splash covering the app forever.
+  useEffect(() => {
+    const timer = setTimeout(dismissNativeSplash, 8000);
+    return () => clearTimeout(timer);
   }, []);
 
   if (!fontsLoaded && !fontError) return <BrandSplash />;
@@ -135,6 +150,9 @@ function Shell() {
         {/* Not a modal: when signed out this is the first screen in the stack, and a modal
             presentation there makes the navigator warn and start with a card underneath. */}
         <Stack.Screen name="sign-in" options={{ headerShown: false }} />
+        {/* Own chrome, not a titled card: it is the continuation of signing in, and the first thing
+            a new Google account sees. */}
+        <Stack.Screen name="setup-profile" options={{ headerShown: false }} />
         <Stack.Screen name="send" options={{ title: 'Send a parcel' }} />
         <Stack.Screen name="parcels/[id]" options={{ title: 'Parcel' }} />
         <Stack.Screen name="bookings/[id]" options={{ title: 'Booking' }} />
@@ -156,6 +174,11 @@ function Shell() {
  * what broke and stays retryable.
  */
 export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  // A crash before the splash was laid out would otherwise leave the OS splash covering the error.
+  useEffect(() => {
+    dismissNativeSplash();
+  }, []);
+
   return (
     <View
       style={{

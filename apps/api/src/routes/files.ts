@@ -26,6 +26,10 @@ import { audit } from '../services/audit.ts';
 const ALLOWED: Record<string, string[]> = {
   kyc_id: ['image/jpeg', 'image/png'],
   kyc_selfie: ['image/jpeg', 'image/png'],
+  // The profile photo. Different from `kyc_selfie`: that one is a private document read only by a
+  // reviewer, this one is a face the app displays. It is keyed under the owner's user id, so the
+  // existing `keyBelongsTo` rule already decides who may write and who may read it.
+  avatar: ['image/jpeg', 'image/png'],
   parcel_sealed: ['image/jpeg', 'image/png'],
   parcel_delivery: ['image/jpeg', 'image/png'],
   dispute_evidence: ['image/jpeg', 'image/png'],
@@ -41,6 +45,7 @@ const requestSchema = z
     purpose: z.enum([
       'kyc_id',
       'kyc_selfie',
+      'avatar',
       'parcel_sealed',
       'parcel_delivery',
       'dispute_evidence',

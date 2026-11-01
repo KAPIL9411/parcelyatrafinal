@@ -13,6 +13,12 @@ export interface Profile {
   email_verified?: boolean;
   created_at: string;
   roles?: string[];
+  /** The object key of the profile selfie, or null while the account has never saved one. */
+  avatar_key?: string | null;
+  /** A short-lived signed URL for those bytes. Null when there is no photo. */
+  avatar_url?: string | null;
+  /** True once the first-run setup screen has been finished or explicitly skipped. */
+  profile_setup_done?: boolean;
 }
 
 export interface AuthResponse {
@@ -348,6 +354,30 @@ export interface City {
 
 export interface CityList {
   items: City[];
+}
+
+/** One end of a route preview: a city, narrowed to a verified hotspot when the area names one. */
+export interface RoutePreviewPlace {
+  city_id: string;
+  city_name: string;
+  area: string | null;
+  lat: number;
+  lng: number;
+  precision: 'hotspot' | 'city';
+}
+
+/**
+ * The road a traveller would actually drive, as `GET /v1/geo/route-preview` returns it. The
+ * geometry is only ever routed — the API refuses to answer rather than hand back a straight line.
+ */
+export interface RoutePreview {
+  origin: RoutePreviewPlace;
+  destination: RoutePreviewPlace;
+  polyline: [number, number][];
+  distance_km: number;
+  duration_minutes: number;
+  source: 'routed';
+  measured_at: string;
 }
 
 export interface Area {

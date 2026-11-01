@@ -484,8 +484,11 @@ export async function loadProfile(app: FastifyInstance, userId: string) {
     verification_state: string | null;
     phone_verified: boolean;
     email_verified: boolean;
+    avatar_key: string | null;
+    profile_setup_completed_at: Date | null;
   }>(
     `SELECT u.id, u.name, u.email, u.phone_last4, u.status, u.risk_tier, u.locale, u.created_at,
+            u.avatar_key, u.profile_setup_completed_at,
             u.phone_verified_at IS NOT NULL AS phone_verified,
             u.email_verified_at IS NOT NULL AS email_verified,
             (SELECT v.state FROM verifications v WHERE v.user_id = u.id ORDER BY v.created_at DESC LIMIT 1) AS verification_state

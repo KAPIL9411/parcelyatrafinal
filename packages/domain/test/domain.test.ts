@@ -338,7 +338,7 @@ test('matching: an eligible trip is ranked, explained, and its points add up to 
   const res = rankMatches(matchInput(), [trip()]);
   assert.equal(res.matches.length, 1);
   const m = res.matches[0]!;
-  // time 30 + departure 20 + detour 20 + reliability 15 + capacity 10 + preference 5×0.8 = 99.
+  // time 25 + departure 15 + detour 15 + alignment 15 + reliability 15 + capacity 10 + preference 5×0.8 = 99.
   assert.equal(m.score, 99);
   assert.equal(m.band, 'excellent');
   assert.equal(m.reliability_band, 'highly_reliable');
@@ -364,20 +364,21 @@ test('matching: a failed hard constraint is never outscored', () => {
   assert.equal(res.low_confidence, false);
 });
 
-test('matching: route, timing, trust and handling constraints each reject on their own', () => {
+test('matching: route, date, trust and handling constraints each reject on their own', () => {
   const cases: Array<[{ category?: MatchInput['category'] } & Partial<TripCandidate>, string]> = [
     [{ destCityId: 'lucknow' }, 'ROUTE_NOT_EVALUABLE'],
     [{ originCityId: 'meerut', originDetourKm: 40 }, 'ROUTE_NOT_EVALUABLE'],
     [{ originCityId: 'meerut', originDetourKm: Number.NaN }, 'ROUTE_NOT_EVALUABLE'],
     [{ mode: 'bike' }, 'MODE_DISABLED'],
     [{ status: 'full' }, 'TRIP_NOT_ACTIVE'],
-    [{ departureAt: new Date('2026-10-24T09:00:00Z') }, 'TRIP_DEPARTED'],
+    [{ departureAt: new Date('2026-10-23T09:00:00Z') }, 'TRIP_DEPARTED'],
     [{ travellerId: 'u1' }, 'SELF_TRIP'],
     [{ verificationState: 'pending' }, 'TRAVELLER_NOT_VERIFIED'],
     [{ completedTrips: 6, travellerCancellations: 8 }, 'TRAVELLER_RELIABILITY_REVIEW'],
     [{ category: 'spare_parts_dry' }, 'CATEGORY_NOT_ACCEPTED'],
-    [{ departureAt: new Date('2026-10-25T13:00:00Z') }, 'DEPARTS_AFTER_WINDOW'],
-    [{ arrivalEstimateAt: new Date('2026-10-25T14:30:00Z') }, 'ARRIVES_TOO_LATE'],
+    // A trip on another calendar day is the only timing rejection left. 26 Oct 13:00Z is the 26th in
+    // IST, and the parcel's window covers the 25th only.
+    [{ departureAt: new Date('2026-10-26T13:00:00Z') }, 'TRIP_OUTSIDE_DATE'],
   ];
   for (const [over, expected] of cases) {
     const { category, ...tripOver } = over as { category?: MatchInput['category'] } & Partial<TripCandidate>;
@@ -385,6 +386,18 @@ test('matching: route, timing, trust and handling constraints each reject on the
     assert.equal(res.matches.length, 0, `${expected} must exclude the candidate`);
     assert.equal(rejectionOf(res), expected);
   }
+});
+
+test('matching: clock times do not reject a same-day trip', () => {
+  // The parcel window is 05:30–17:30 IST on the 25th. A trip that left at 18:30 IST the same day and
+  // arrives hours later is still offered: only the date decides compatibility.
+  const late = trip({
+    departureAt: new Date('2026-10-25T13:00:00Z'),
+    arrivalEstimateAt: new Date('2026-10-25T20:00:00Z'),
+  });
+  const res = rankMatches(matchInput(), [late]);
+  assert.equal(res.matches.length, 1);
+  assert.equal(res.rejections.length, 0);
 });
 
 test('matching: a parcel whose delivery is mid-route is allowed, and geometry is required to say so', () => {
@@ -439,12 +452,17 @@ test('matching: a thin record is not punished twice, a bad one is', () => {
 });
 
 test('matching: low-confidence fallback shows at most three weak trips, honestly labelled', () => {
+  // With date-only matching every same-day trip gets full time and departure marks, so "weak" has
+  // to mean trust and fit: these travellers have no history and no spare capacity.
+  const policy = matchingPolicy({
+    weights: { time: 0, departure: 0, detour: 15, alignment: 15, reliability: 40, capacity: 20, preference: 10 },
+  });
   const weak = (id: string, travellerId: string): TripCandidate =>
     trip({
       id,
       travellerId,
       capacityKgRemaining: 5.6,
-      departureAt: new Date('2026-10-24T10:01:00Z'),
+      departureAt: new Date('2026-11-01T10:01:00Z'),
       arrivalEstimateAt: new Date('2026-11-01T13:54:00Z'),
       originDetourKm: 9.9,
       completedTrips: 0,
@@ -452,6 +470,7 @@ test('matching: low-confidence fallback shows at most three weak trips, honestly
   const res = rankMatches(
     matchInput({
       weightKg: 5,
+      policy,
       windowStart: new Date('2026-11-01T00:00:00Z'),
       windowEnd: new Date('2026-11-01T12:00:00Z'),
     }),
@@ -504,11 +523,14 @@ test('matching: weights are configurable and validated', () => {
   assert.throws(() => matchingPolicy({ minScoreToShow: 140 }), /must be within/);
 });
 
-test('matching: grace hours and the detour limit are policy, not constants', () => {
-  const tight = rankMatches(matchInput({ policy: matchingPolicy({ arrivalGraceHours: 0 }) }), [
+test('matching: grace hours are gone, so a same-day late arrival is offered', () => {
+  // The old rule refused this because the drop ETA passed `windowEnd + arrivalGraceHours`. Timing is
+  // date-only now: 25 Oct 12:30Z is still the 25th in IST, the same day the window covers.
+  const late = rankMatches(matchInput({ policy: matchingPolicy({ arrivalGraceHours: 0 }) }), [
     trip({ arrivalEstimateAt: new Date('2026-10-25T12:30:00Z') }),
   ]);
-  assert.equal(rejectionOf(tight), 'ARRIVES_TOO_LATE');
+  assert.equal(late.matches.length, 1);
+  assert.equal(late.rejections.length, 0);
 
   const route = bareillyDelhiRoute();
   // The pickup is ~4.4 km off the road; out and back costs ~8.8 km of detour.

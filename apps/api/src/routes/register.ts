@@ -22,6 +22,7 @@ import { adminRoutes } from './admin.ts';
 import { adminGeoRoutes } from './admin-geo.ts';
 import { adminHomepageRoutes } from './admin-homepage.ts';
 import { homepageRoutes } from './homepage.ts';
+import { weatherRoutes } from './weather.ts';
 import { geoRoutes } from './geo.ts';
 import { googleAuthRoutes } from './google-auth.ts';
 import { webhookRoutes } from './webhooks.ts';
@@ -63,6 +64,8 @@ export async function registerRoutes(
   // The homepage and its artwork are public and cacheable: an app opening on a cold start must not
   // need a session to draw its first screen.
   await app.register(homepageRoutes, { prefix: '/v1' });
+  // Current weather for the home hero: public, because the first screen is drawn before sign-in.
+  await app.register(weatherRoutes, { prefix: '/v1' });
   // Signed file reads carry their own credential in the path, so they sit outside the auth hook.
   await app.register(filePublicRoutes, { prefix: '/v1' });
 
