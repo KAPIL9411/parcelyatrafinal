@@ -144,20 +144,23 @@ function Shell() {
 
     setInitialNavigationDone(true);
 
-    // Check current route
+    // Check if current route is public (accessible without login)
     const isPublicRoute = 
       pathname === '/sign-in' || 
-      pathname.startsWith('/info') || 
+      pathname.startsWith('/info/') || 
       pathname === '/help';
 
-    if (status === 'signed_out' && !isPublicRoute) {
-      // User is signed out and trying to access protected route - redirect to sign-in
-      router.replace('/sign-in');
-    } else if (status === 'signed_in' && pathname === '/sign-in') {
-      // User is signed in but on sign-in page - redirect to home
-      router.replace('/(tabs)');
+    if (status === 'signed_out') {
+      // User is signed out - always redirect to sign-in unless already there
+      if (!isPublicRoute) {
+        router.replace('/sign-in');
+      }
+    } else if (status === 'signed_in') {
+      // User is signed in - if on sign-in page, redirect to home
+      if (pathname === '/sign-in') {
+        router.replace('/(tabs)');
+      }
     }
-    // Otherwise, stay on current route (handles deep links, etc.)
   }, [status, pathname, initialNavigationDone, router]);
 
   // Only block rendering while booting
