@@ -14,7 +14,7 @@
  * would re-render the whole page and restart image loads for no reason.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Image } from 'react-native';
 import {
   defaultHomepageDocument,
   isStaleCampaign,
@@ -100,6 +100,21 @@ export function useHomepage(): HomepageState {
         return;
       }
       if (!result.document) return;
+
+      // Prefetch all images immediately for instant loading
+      const imageUrls: string[] = [];
+      result.document.hero.forEach(hero => {
+        if (hero.image_url) imageUrls.push(hero.image_url);
+      });
+      result.document.sections.forEach(section => {
+        if (section.type === 'product_grid' || section.type === 'banner_grid') {
+          section.items?.forEach(item => {
+            if (item.image_url) imageUrls.push(item.image_url);
+          });
+        }
+      });
+      // Prefetch in background - don't block UI
+      imageUrls.forEach(url => void Image.prefetch(url));
 
       apply(result.document, 'network', result.etag);
       setError(null);

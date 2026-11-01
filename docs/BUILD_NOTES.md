@@ -1975,3 +1975,86 @@ initials fallback measured above, and a later `PATCH` of the stale key answers `
 in both screens.
 Cloudinary is still the owner's decision (§4 storage note), and this feature is the first user-visible
 thing that will look obviously broken without it.
+
+## 15. The launch screen now opens into home with an iris — 2026-11-01
+
+**Asked:** the Duolingo hand-off — keep the splash, settle the logo toward the centre, grow a solid
+brand-blue circle from the exact centre until it covers the screen, and finish on the home screen that
+was already there. Nothing about the splash, the wordmark, the branding or home itself may change; only
+the transition is new. 250–300 ms, easeInOut, native-driver, 60 fps, no extra loading screen, no
+flicker, and it plays on the splash→home hand-off only — never on a later re-render of home.
+
+**The circle is drawn over the splash, not instead of it (`app/_layout.tsx`).** `SplashReveal` is one
+absolute overlay rendered as a *sibling after* `<Stack>`, so the navigator mounts home underneath it
+while the animation runs and nothing is ever waiting. It reuses `BrandSplash` unchanged inside two
+animated wrappers — one fading the whole launcher field, one scaling the wordmark — and adds a single
+disc. The disc is `Math.hypot(width, height)` on a side, square, `borderRadius` half of that, centred by
+`left/top`, so scale 1 is the frame where it reaches all four corners and `1.45` puts its edge outside
+the screen while it dissolves. Only `opacity` and `transform` animate (`Animated.timing`, 290 ms,
+`Easing.inOut(Easing.ease)`, `useNativeDriver: true`); the geometry is static, which is what makes the
+native driver applicable at all. No new dependency: the repo has neither Reanimated nor react-native-svg,
+and a scaled round View clips the same way a mask would without adding either.
+
+**The order of the beats is the whole design, and it is arithmetic.** The numbers live in `src/splash.ts`
+next to the splash geometry that `test/splash.test.ts` already guards: the logo settles 1 → 0.92 by
+progress 0.36 (a settle, not a zoom), the disc starts at 0.3 and reaches `REVEAL_DISC_END_SCALE` at 1, the
+launcher field drops at 0.86 and the disc dissolves from there to 1. `revealCoverageProgress()` returns
+where the growing disc has actually covered the screen — 0.783 — and the new test asserts it lands
+*before* 0.86, so the splash is still painted when the circle becomes the top layer. Invert those two
+and home would be briefly uncovered by an in-flight circle: the white flash the ask specifically rules
+out. Coverage at 0.783 and dropout at 0.86 leave ~22 ms of visible overlap, which is exactly what the
+browser measurement below found.
+
+**The gate is a one-shot state machine decided in render.** `waiting → playing` only for the commit whose
+first settled screen is a signed-in `/`; `waiting → done` for any other first screen — the sign-in screen,
+a deep-linked booking — and `playing → done` when the timing finishes. An interim version latched a plain
+boolean whenever the app was signed-in-at-`/`, which replayed the launch screen over a mid-session
+sign-in; closing the window on *any* other first settled screen is what makes it one hand-off per launch.
+Deciding it during render (a guarded `setState`, which React restarts immediately) is deliberate: the
+alternative is a ref read in render or a `setState` in an effect, and this repo's React-Compiler-era
+`react-hooks` config rejects both (`react-hooks/refs`, `react-hooks/set-state-in-effect`, and
+`react-hooks/globals` for the module-level latch I tried first). The render-phase form also fixes a real
+defect — an effect sets the flag *after* the commit, so home would paint for one frame and then get
+covered. `zIndex: 100` plus Android `elevation: 60` is what keeps the overlay above the navigator's own
+surfaces, and because `BrandSplash` keeps its `<StatusBar style="light">` while mounted, the status bar
+reverts to `dark` with the launcher field instead of flashing mid-handoff.
+
+**Verified:**
+- `@py/mobile` **27/27** (two new tests in `test/splash.test.ts` pin the beat order and the
+  250–300 ms settle), `tsc --noEmit` clean, `eslint` clean over `_layout.tsx`, `splash.ts` and the test.
+  `@py/api` was untouched.
+- Frame-by-frame in the browser at 300×570 (diagonal 644 px), one armed run of the real component:
+  t=4 ms the first painted frame is the unchanged splash (wordmark scale 1, disc scale 0, field opacity 1)
+  with the disc centre at exactly (150, 285) — the centre of the screen, no white or black frame; t=84 ms
+  the wordmark has settled to 0.92 and the disc is still 0; t=168 ms the disc is mid-expansion and
+  hit-testing shows the circle at the centre and left edge while the top/bottom edges are still splash —
+  the iris, not a fade; t=220 ms the disc measures 669 px, wider than the 644 px diagonal, and every
+  sample point hits it; t=245 ms the launcher field reaches opacity 0, i.e. **25 ms after** full
+  coverage; t=295 ms the last frame is a disc at scale 1.444 dissolving to opacity 0.001, still covering
+  every point; t=303 ms the overlay is unmounted and the same points resolve to home. Sampled frame gaps
+  were 8–9 ms throughout with none larger, and home stayed mounted in the DOM for every one of the ~63
+  frames — nothing was added to or removed from the screen behind the circle.
+- Colours measured as painted: disc `rgb(10, 87, 255)` and launcher field `rgb(0, 93, 253)`.
+- The hand-off plays once: a fresh boot that lands on sign-in inserted **zero** overlay nodes across 3 s,
+  and a full phone-OTP sign-in that ends on home (sandbox code read off the OTP screen, verified through
+  the real API) also inserted **zero** — the settled gate stays `done`, so mid-session navigation to home
+  is not a launch. Console stayed clean, with no React "update during render" warning.
+
+**One deliberate deviation.** The ask named `#0B3BFF`, which is not a colour this app has: mobile's primary
+token is `colors.brand` `#0a57ff` and the splash is `#005DFD`, so `#0B3BFF` would have been a third blue
+inside a screen the ask also says not to restyle. The disc therefore uses `colors.brand`, which every
+other surface already treats as the brand blue; switching to the literal value is a one-word change in
+`revealStyles.disc` if the owner wants that exact hex instead.
+
+**Not verified, and why.** Measuring those frames needed the component to be re-armed on the first signed-in
+screen, so the capture ran against a temporary version of `Shell` that exposed a `window` event to set
+`handoff` back to `playing` and put `testID`s on the four animated nodes; both are gone from the shipped
+file (verified empty for `TEMP`/`testID`/`window.`) and the measurements above are of the same
+interpolations, styles and ordering that remain. The page also has to be signed in for home to be the
+screen underneath, and on web the session lives in an in-memory store — it is deliberately not
+`localStorage` — so a reload is always a signed-out boot and the real cold-boot signed-in commit cannot be
+produced in a browser at all. That specific path, plus the three things only a device can show (the native
+splash → JS splash → iris chain with `expo-splash-screen`'s own 250 ms fade, Android's elevation ordering
+against the navigator, and whether the native driver holds 60 fps on a low-end phone), stays on the
+pending on-device list with §11–§13.
+

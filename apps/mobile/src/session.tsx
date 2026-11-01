@@ -65,27 +65,50 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     mounted.current = true;
+    
+    // Set a maximum timeout to prevent infinite splash screen
+    const maxBootTimeout = setTimeout(() => {
+      if (mounted.current && status === 'booting') {
+        console.warn('[Session] Boot timeout - forcing signed_out state');
+        setStatus('signed_out');
+      }
+    }, 3000); // 3 second max boot time
+    
     void (async () => {
-      const result = await bootstrapSession();
-      if (!mounted.current) return;
+      try {
+        const result = await bootstrapSession();
+        if (!mounted.current) return;
 
-      if (result === 'signed_in') {
-        try {
-          const profile = await me();
-          if (!mounted.current) return;
-          setUser(profile);
-          setOffline(false);
-          setStatus('signed_in');
-          await cacheProfile(profile);
-          return;
-        } catch (err) {
-          // A rejected token ends the session. A transport failure keeps the last known profile so
-          // the app opens usable instead of flashing the sign-in screen on a bad connection.
-          if (err instanceof ApiError && err.status === 401) {
-            await cacheProfile(null);
-            setStatus('signed_out');
+        if (result === 'signed_in') {
+          try {
+            const profile = await me();
+            if (!mounted.current) return;
+            setUser(profile);
+            setOffline(false);
+            setStatus('signed_in');
+            await cacheProfile(profile);
+            return;
+          } catch (err) {
+            // A rejected token ends the session. A transport failure keeps the last known profile so
+            // the app opens usable instead of flashing the sign-in screen on a bad connection.
+            if (err instanceof ApiError && err.status === 401) {
+              await cacheProfile(null);
+              setStatus('signed_out');
+              return;
+            }
+            const cached = await readCachedProfile();
+            if (cached) {
+              setUser(cached);
+              setOffline(true);
+              setStatus('signed_in');
+            } else {
+              setStatus('signed_out');
+            }
             return;
           }
+        }
+
+        if (result === 'offline') {
           const cached = await readCachedProfile();
           if (cached) {
             setUser(cached);
@@ -96,25 +119,20 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           }
           return;
         }
-      }
 
-      if (result === 'offline') {
-        const cached = await readCachedProfile();
-        if (cached) {
-          setUser(cached);
-          setOffline(true);
-          setStatus('signed_in');
-        } else {
+        setStatus('signed_out');
+      } catch (error) {
+        // If bootstrap completely fails, don't leave user stuck on splash
+        console.error('[Session] Bootstrap error:', error);
+        if (mounted.current) {
           setStatus('signed_out');
         }
-        return;
       }
-
-      setStatus('signed_out');
     })();
 
     return () => {
       mounted.current = false;
+      clearTimeout(maxBootTimeout);
     };
   }, []);
 

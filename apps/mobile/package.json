@@ -10,7 +10,11 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
     "export:android": "expo export --platform android --output-dir dist-android",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "build:android:debug": "expo run:android --variant debug --apk",
+    "build:android:release": "expo run:android --variant release --apk",
+    "analyze:bundle": "npx expo export --platform android --dump-sourcemap && npx source-map-explorer dist/android-index.android.bundle --html",
+    "clean": "rm -rf dist-* android/build android/.gradle node_modules/.cache"
   },
   "dependencies": {
     "@expo-google-fonts/titillium-web": "^0.4.1",
@@ -42,6 +46,7 @@
     "react-native": "0.88.0",
     "react-native-safe-area-context": "~5.10.1",
     "react-native-screens": "~4.30.0",
+    "react-native-svg": "15.16.0",
     "react-native-web": "^0.21.4",
     "react-native-webview": "^14.0.1",
     "socket.io-client": "^4.8.4"
@@ -50,6 +55,7 @@
     "@types/react": "~19.3.0",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~58.0.4",
+    "react-native-svg-transformer": "^1.5.3",
     "tsx": "^4.23.15",
     "typescript": "~6.0.3"
   }

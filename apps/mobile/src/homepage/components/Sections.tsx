@@ -29,6 +29,7 @@ import { sectionSurface, withAlpha, type HomePalette } from '../theme.ts';
 import { CategoryGrid } from './CategoryGrid.tsx';
 import { CategoryStrip } from './CategoryStrip.tsx';
 import { FauxGradient, Scrim } from './Decorations.tsx';
+import { FastImage } from './FastImage.tsx';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -354,7 +355,7 @@ function PromoCards({ section, palette, originCity }: SectionProps) {
             >
               {item.image_url ? (
                 <>
-                  <Image source={{ uri: item.image_url }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+                  <FastImage uri={item.image_url} style={StyleSheet.absoluteFill} resizeMode="cover" priority="normal" />
                   <Scrim strength={0.7} heightRatio={1} />
                 </>
               ) : (
@@ -613,7 +614,7 @@ function CampaignBanner({ section, palette, originCity }: SectionProps) {
         >
           {section.image_url ? (
             <>
-              <Image source={{ uri: section.image_url }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+              <FastImage uri={section.image_url} style={StyleSheet.absoluteFill} resizeMode="cover" priority="normal" />
               <Scrim strength={0.68} heightRatio={1} />
             </>
           ) : (

@@ -13,3 +13,23 @@ export const SPLASH_IMAGE_WIDTH_DP = 180;
 /** assets/brand-wordmark-white.png is 1024x170, so the drawn height follows the width. */
 export const SPLASH_WORDMARK_ASPECT = 170 / 1024;
 export const SPLASH_WORDMARK_HEIGHT_DP = SPLASH_IMAGE_WIDTH_DP * SPLASH_WORDMARK_ASPECT;
+
+/**
+ * The splash-to-home handoff, as fractions of one `Animated.Value` running 0 → 1.
+ *
+ * Professional timing like Zomato/Blinkit - smooth and polished.
+ */
+export const REVEAL_DURATION_MS = 600; // Smooth professional animation
+export const REVEAL_LOGO_EASED_TO = 0.35;
+export const REVEAL_LOGO_SCALE = 0.95;
+export const REVEAL_DISC_STARTS_AT = 0.2;
+export const REVEAL_DISC_END_SCALE = 1.6;
+export const REVEAL_SPLASH_GONE_AT = 0.8;
+
+export function revealCoverageProgress(
+  discStartsAt = REVEAL_DISC_STARTS_AT,
+  discEndScale = REVEAL_DISC_END_SCALE,
+): number {
+  return discStartsAt + (1 - discStartsAt) / discEndScale;
+}
+

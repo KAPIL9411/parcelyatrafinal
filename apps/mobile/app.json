@@ -14,6 +14,7 @@
     "android": {
       "package": "in.parcelyatra.app",
       "versionCode": 1,
+      "enableHermes": true,
       "adaptiveIcon": {
         "backgroundColor": "#005DFD",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -42,7 +43,8 @@
           "backgroundColor": "#005DFD",
           "image": "./assets/brand-wordmark-white.png",
           "imageWidth": 180,
-          "resizeMode": "contain"
+          "resizeMode": "contain",
+          "androidSplashScreenAndroid12DarkMode": false
         }
       ],
       "./plugins/withAndroidWindowBackground",
@@ -70,6 +72,7 @@
       "apiBase": "https://parcelyatrafinal.onrender.com/v1",
       "googleWebClientId": "130100214583-b8jp20gsi8teqgoqk116o6pnlb1tqlnm.apps.googleusercontent.com",
       "googleAndroidClientId": "130100214583-klk76hu3g39912dsp5e1tldobslqp7l7.apps.googleusercontent.com",
+      "cartoApiKey": "cb1_4z6v_1_038d21ce14247adac08bb56e",
       "router": {
         "asyncRoutes": {
           "web": true

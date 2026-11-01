@@ -45,7 +45,7 @@ export function homepagePlatform(): HomepagePlatform {
   return 'android';
 }
 
-const TIMEOUT_MS = 8_000;
+const TIMEOUT_MS = 3_000; // 3 seconds - faster fallback to cache for instant feel
 
 export async function fetchHomepage(options: {
   etag?: string | null;

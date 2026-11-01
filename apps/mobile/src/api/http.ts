@@ -84,7 +84,7 @@ export interface HttpClient {
   delete<T>(path: string, options?: Omit<RequestOptions, 'method' | 'body'>): Promise<T>;
 }
 
-const DEFAULT_TIMEOUT_MS = 20_000;
+const DEFAULT_TIMEOUT_MS = 30_000; // 30 seconds for cold starts
 
 function fallbackIdempotencyKey(): string {
   // Not cryptographic: the key only has to be unique per submission.
@@ -136,6 +136,13 @@ export function createHttp(options: HttpOptions): HttpClient {
     } catch (err) {
       if (opts.signal?.aborted) throw err;
       if (controller.signal.aborted) {
+        // Retry once for cold start on auth endpoints if this is the first attempt
+        if (!retried && (path.includes('/auth/') || path.includes('/otp/'))) {
+          console.log(`[API] Cold start detected on ${path}, retrying with extended timeout...`);
+          clearTimeout(timer);
+          opts.signal?.removeEventListener('abort', onAbort);
+          return send<T>(path, { ...opts, timeoutMs: 45_000 }, true); // 45s retry
+        }
         throw new ApiError('TIMEOUT', 'The request took too long.', 0);
       }
       throw new ApiError('NETWORK', 'The server could not be reached.', 0);

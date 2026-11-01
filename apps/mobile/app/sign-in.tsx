@@ -38,6 +38,7 @@ export default function SignInScreen() {
   const [busy, setBusy] = useState<'send' | 'verify' | 'google' | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [resendIn, setResendIn] = useState(0);
+  const [coldStartRetry, setColdStartRetry] = useState(false);
 
   const [logoAnim] = useState(() => new Animated.Value(0));
 
@@ -72,6 +73,7 @@ export default function SignInScreen() {
     }
     setBusy('send');
     setError(null);
+    setColdStartRetry(false);
     try {
       const result = await sendOtp(normalized);
       setChallengeId(result.challenge_id);
@@ -79,8 +81,17 @@ export default function SignInScreen() {
       setResendIn(result.resend_after_seconds ?? 30);
       setCode('');
       setDevCode(await peekDevOtp(result.challenge_id));
-    } catch (err) {
-      setError(err);
+      setColdStartRetry(false);
+    } catch (err: any) {
+      // Show cold start message if this looks like a timeout
+      if (err?.code === 'TIMEOUT' && !coldStartRetry) {
+        setColdStartRetry(true);
+        setError(new Error('Server is warming up, retrying...'));
+        // Auto-retry is handled in http.ts
+      } else {
+        setError(err);
+        setColdStartRetry(false);
+      }
     } finally {
       setBusy(null);
     }
@@ -93,6 +104,7 @@ export default function SignInScreen() {
     }
     setBusy('verify');
     setError(null);
+    setColdStartRetry(false);
     try {
       await verifyOtp(challengeId, code);
       finish();
@@ -107,6 +119,7 @@ export default function SignInScreen() {
   async function google(idToken: string) {
     setBusy('google');
     setError(null);
+    setColdStartRetry(false);
     try {
       const session = await googleSignIn(idToken);
       // A first-time Google account has no photo, so it lands on the setup screen instead of a home
@@ -117,8 +130,16 @@ export default function SignInScreen() {
       } else {
         finish();
       }
-    } catch (err) {
-      setError(err);
+    } catch (err: any) {
+      // Show cold start message if this looks like a timeout
+      if (err?.code === 'TIMEOUT' && !coldStartRetry) {
+        setColdStartRetry(true);
+        setError(new Error('Server is warming up, retrying...'));
+        // Auto-retry is handled in http.ts
+      } else {
+        setError(err);
+        setColdStartRetry(false);
+      }
     } finally {
       setBusy(null);
     }
@@ -269,6 +290,14 @@ export default function SignInScreen() {
                 {error ? (
                   <View style={{ marginTop: spacing.sm }}>
                     <ErrorNotice error={error} />
+                    {coldStartRetry && (
+                      <View style={styles.coldStartNotice}>
+                        <Ionicons name="time-outline" size={16} color={colors.brand} />
+                        <AppText variant="small" style={{ color: colors.brand, marginLeft: 6 }}>
+                          Please wait, retrying with extended timeout...
+                        </AppText>
+                      </View>
+                    )}
                   </View>
                 ) : null}
 
@@ -320,6 +349,14 @@ export default function SignInScreen() {
                   {error ? (
                     <View style={{ marginTop: spacing.sm, width: '100%' }}>
                       <ErrorNotice error={error} />
+                      {coldStartRetry && (
+                        <View style={styles.coldStartNotice}>
+                          <Ionicons name="time-outline" size={16} color={colors.brand} />
+                          <AppText variant="small" style={{ color: colors.brand, marginLeft: 6 }}>
+                            Server warming up, please wait...
+                          </AppText>
+                        </View>
+                      )}
                     </View>
                   ) : null}
 
@@ -517,5 +554,13 @@ const styles = StyleSheet.create({
     backgroundColor: colors.canvas,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  coldStartNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.brandSoft,
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    marginTop: spacing.sm,
   },
 });

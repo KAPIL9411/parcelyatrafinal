@@ -30,6 +30,7 @@ import { AppText } from '../../components/ui.tsx';
 import { font, radius, spacing } from '../../theme.ts';
 import { Decoration } from './Decorations.tsx';
 import { Lights } from './Lights.tsx';
+import { FastImage } from './FastImage.tsx';
 import type { HomePalette } from '../theme.ts';
 
 const ROTATE_MS = 6_500;
@@ -213,7 +214,12 @@ function HeroSlide({
     <View style={{ width, height }}>
       {hero.image_url ? (
         <>
-          <Image source={{ uri: hero.image_url }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+          <FastImage 
+            uri={hero.image_url} 
+            style={StyleSheet.absoluteFill} 
+            resizeMode="cover"
+            priority="high"
+          />
           <LinearGradient
             colors={['rgba(11,18,38,0.72)', 'rgba(11,18,38,0.18)', 'rgba(8,18,38,0.86)']}
             locations={[0, 0.42, 1]}

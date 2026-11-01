@@ -1,6 +1,17 @@
-import { useEffect } from 'react';
-import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Stack, useRouter, useSegments, type ErrorBoundaryProps } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Animated,
+  Easing,
+  Image,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+  AppState,
+} from 'react-native';
+import { Stack, usePathname, useRouter, useSegments, type ErrorBoundaryProps } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
@@ -11,59 +22,19 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { ApiError } from '../src/api/http.ts';
 import { SessionProvider, useSession } from '../src/session.tsx';
-import { SPLASH_BLUE, SPLASH_IMAGE_WIDTH_DP, SPLASH_WORDMARK_HEIGHT_DP } from '../src/splash.ts';
+import { startKeepAlive, stopKeepAlive, warmupServer } from '../src/lib/keep-alive.ts';
+
 import { SyncBridge } from '../src/sync.tsx';
 import { colors, font, radius } from '../src/theme.ts';
 
+// Keep native splash visible until app is ready
 void SplashScreen.preventAutoHideAsync();
-SplashScreen.setOptions({ duration: 250, fade: true });
-
-let nativeSplashDismissed = false;
-
-/**
- * Drops the OS splash only once the JS splash has been laid out, so the fade always reveals a
- * painted, identical frame. Hiding on mount instead lets slower devices show the empty window
- * behind the root view for a moment.
- */
-function dismissNativeSplash() {
-  if (nativeSplashDismissed) return;
-  nativeSplashDismissed = true;
-  void SplashScreen.hideAsync();
-}
-
-/**
- * The branded launch screen, used while fonts and the session are loading.
- *
- * The native splash already shows this wordmark on the same blue at the same width; this is the JS
- * half of that one screen, so the crossfade from the OS splash is a no-op rather than a resize.
- */
-function BrandSplash() {
-  return (
-    <View style={styles.splash} onLayout={dismissNativeSplash}>
-      <StatusBar style="light" />
-      <Image
-        source={require('../assets/brand-wordmark-white.png')}
-        style={{ width: SPLASH_IMAGE_WIDTH_DP, height: SPLASH_WORDMARK_HEIGHT_DP }}
-        resizeMode="contain"
-        fadeDuration={0}
-      />
-      <ActivityIndicator color="rgba(255,255,255,0.85)" style={styles.splashSpinner} />
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  splash: {
-    flex: 1,
-    backgroundColor: SPLASH_BLUE,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  splashSpinner: {
-    position: 'absolute',
-    bottom: '16%',
-  },
+SplashScreen.setOptions({ 
+  duration: 300, 
+  fade: true 
 });
+
+
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -78,29 +49,77 @@ const queryClient = new QueryClient({
 });
 
 export default function RootLayout() {
+  const [appReady, setAppReady] = useState(false);
   const [fontsLoaded, fontError] = useFonts({
     TitilliumWeb_400Regular,
     TitilliumWeb_600SemiBold,
     TitilliumWeb_700Bold,
   });
 
-  // The JS splash below is the branded one, so the OS splash is dropped once that splash has
-  // painted (see BrandSplash). This covers the case where fonts are ready on the first commit and
-  // nothing else would trigger the layout callback: by now the first screen (or the identical
-  // BrandSplash) is committed, so the fade reveals a painted frame either way.
   useEffect(() => {
-    if (!fontsLoaded && !fontError) return;
-    const frame = requestAnimationFrame(dismissNativeSplash);
-    return () => cancelAnimationFrame(frame);
+    async function prepare() {
+      try {
+        // Wait for fonts to load
+        if (!fontsLoaded && !fontError) return;
+        
+        // Warm up the server in parallel with app initialization
+        void warmupServer();
+        
+        // Minimal delay to ensure UI is ready
+        await new Promise(resolve => setTimeout(resolve, 50));
+        
+        setAppReady(true);
+      } catch (e) {
+        console.warn('Splash preparation error:', e);
+        setAppReady(true);
+      }
+    }
+
+    void prepare();
   }, [fontsLoaded, fontError]);
 
-  // Last resort so a boot that never settles cannot leave the OS splash covering the app forever.
+  // Hide native splash once app is ready
   useEffect(() => {
-    const timer = setTimeout(dismissNativeSplash, 8000);
+    if (appReady) {
+      void SplashScreen.hideAsync();
+    }
+  }, [appReady]);
+
+  // Emergency timeout
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      console.warn('[Splash] Emergency dismiss after 3s');
+      setAppReady(true);
+      void SplashScreen.hideAsync();
+    }, 3000);
     return () => clearTimeout(timer);
   }, []);
 
-  if (!fontsLoaded && !fontError) return <BrandSplash />;
+  // Keep-alive: Start when app is active, stop when backgrounded
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active') {
+        startKeepAlive();
+      } else if (nextAppState === 'background' || nextAppState === 'inactive') {
+        stopKeepAlive();
+      }
+    });
+
+    // Start immediately if app is currently active
+    if (AppState.currentState === 'active') {
+      startKeepAlive();
+    }
+
+    return () => {
+      subscription.remove();
+      stopKeepAlive();
+    };
+  }, []);
+
+  // Show nothing until app is ready - native splash stays visible
+  if (!appReady) {
+    return null;
+  }
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -116,25 +135,45 @@ function Shell() {
   const { status } = useSession();
   const segments = useSegments();
   const router = useRouter();
+  const [hasRedirected, setHasRedirected] = useState(false);
 
-  // Signed-out visitors start on sign-in instead of a home screen they cannot act on. Legal pages
-  // and help stay reachable, otherwise the terms/privacy links on the sign-in screen bounce back.
+  // Signed-out visitors start on sign-in instead of a home screen they cannot act on
   const openWithoutSession = segments[0] === 'sign-in' || segments[0] === 'info' || segments[0] === 'help';
+  const needsRedirect = status === 'signed_out' && !openWithoutSession;
 
-  // Runs after the first commit, so the navigator this layout renders is already mounted.
   useEffect(() => {
     if (status === 'booting') return;
-    if (status === 'signed_out' && !openWithoutSession) router.replace('/sign-in');
-  }, [status, openWithoutSession, router]);
+    
+    if (needsRedirect && !hasRedirected) {
+      setHasRedirected(true);
+      // Use requestAnimationFrame to ensure redirect happens before any render
+      requestAnimationFrame(() => {
+        router.replace('/sign-in');
+      });
+    } else if (!needsRedirect && hasRedirected) {
+      // Reset redirect flag when no longer needed
+      setHasRedirected(false);
+    }
+  }, [status, needsRedirect, hasRedirected, router]);
 
-  // While the redirect above is in flight, keep the splash up. Rendering the tab navigator first
-  // would flash a home screen the visitor cannot use and then replace it.
-  if (status === 'booting' || (status === 'signed_out' && !openWithoutSession)) {
-    return <BrandSplash />;
+  // Critical: Block rendering during all transition states
+  // 1. Still booting
+  if (status === 'booting') {
+    return null;
+  }
+
+  // 2. Need to redirect (signed out and trying to access protected route)
+  if (needsRedirect) {
+    return null;
+  }
+
+  // 3. Currently redirecting (transition period)
+  if (hasRedirected) {
+    return null;
   }
 
   return (
-    <>
+    <View style={{ flex: 1 }}>
       <StatusBar style="dark" />
       <Stack
         screenOptions={{
@@ -147,11 +186,7 @@ function Shell() {
         }}
       >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        {/* Not a modal: when signed out this is the first screen in the stack, and a modal
-            presentation there makes the navigator warn and start with a card underneath. */}
         <Stack.Screen name="sign-in" options={{ headerShown: false }} />
-        {/* Own chrome, not a titled card: it is the continuation of signing in, and the first thing
-            a new Google account sees. */}
         <Stack.Screen name="setup-profile" options={{ headerShown: false }} />
         <Stack.Screen name="send" options={{ title: 'Send a parcel' }} />
         <Stack.Screen name="parcels/[id]" options={{ title: 'Parcel' }} />
@@ -164,7 +199,7 @@ function Shell() {
         <Stack.Screen name="info/[topic]" options={{ title: 'Information' }} />
         <Stack.Screen name="+not-found" options={{ title: 'Not found' }} />
       </Stack>
-    </>
+    </View>
   );
 }
 
@@ -174,9 +209,9 @@ function Shell() {
  * what broke and stays retryable.
  */
 export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
-  // A crash before the splash was laid out would otherwise leave the OS splash covering the error.
+  // Dismiss splash if app crashes
   useEffect(() => {
-    dismissNativeSplash();
+    void SplashScreen.hideAsync();
   }, []);
 
   return (
