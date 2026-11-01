@@ -11,7 +11,7 @@ import {
   useWindowDimensions,
   AppState,
 } from 'react-native';
-import { Stack, usePathname, useRouter, useSegments, type ErrorBoundaryProps } from 'expo-router';
+import { Stack, usePathname, useRouter, type ErrorBoundaryProps } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
@@ -133,42 +133,40 @@ export default function RootLayout() {
 
 function Shell() {
   const { status } = useSession();
-  const segments = useSegments();
   const router = useRouter();
-  const [hasRedirected, setHasRedirected] = useState(false);
+  const pathname = usePathname();
+  const [initialNavigationDone, setInitialNavigationDone] = useState(false);
 
-  // Signed-out visitors start on sign-in instead of a home screen they cannot act on
-  const openWithoutSession = segments[0] === 'sign-in' || segments[0] === 'info' || segments[0] === 'help';
-  const needsRedirect = status === 'signed_out' && !openWithoutSession;
-
+  // Perform initial navigation once when session is ready
   useEffect(() => {
     if (status === 'booting') return;
-    
-    if (needsRedirect && !hasRedirected) {
-      setHasRedirected(true);
-      // Use requestAnimationFrame to ensure redirect happens before any render
-      requestAnimationFrame(() => {
-        router.replace('/sign-in');
-      });
-    } else if (!needsRedirect && hasRedirected) {
-      // Reset redirect flag when no longer needed
-      setHasRedirected(false);
-    }
-  }, [status, needsRedirect, hasRedirected, router]);
+    if (initialNavigationDone) return;
 
-  // Critical: Block rendering during all transition states
-  // 1. Still booting
+    setInitialNavigationDone(true);
+
+    // Check current route
+    const isPublicRoute = 
+      pathname === '/sign-in' || 
+      pathname.startsWith('/info') || 
+      pathname === '/help';
+
+    if (status === 'signed_out' && !isPublicRoute) {
+      // User is signed out and trying to access protected route - redirect to sign-in
+      router.replace('/sign-in');
+    } else if (status === 'signed_in' && pathname === '/sign-in') {
+      // User is signed in but on sign-in page - redirect to home
+      router.replace('/(tabs)');
+    }
+    // Otherwise, stay on current route (handles deep links, etc.)
+  }, [status, pathname, initialNavigationDone, router]);
+
+  // Only block rendering while booting
   if (status === 'booting') {
     return null;
   }
 
-  // 2. Need to redirect (signed out and trying to access protected route)
-  if (needsRedirect) {
-    return null;
-  }
-
-  // 3. Currently redirecting (transition period)
-  if (hasRedirected) {
+  // Block one frame after boot to prevent flash
+  if (!initialNavigationDone) {
     return null;
   }
 
