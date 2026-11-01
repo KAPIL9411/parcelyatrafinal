@@ -36,6 +36,10 @@ export function GoogleSignInButton({ busy, onToken, onError }: GoogleSignInButto
 
   async function prompt() {
     try {
+      // Add delay for iOS Safari to ensure button press is registered
+      if (Platform.OS === 'web') {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
       await promptAsync();
     } catch (err) {
       onError(
@@ -48,5 +52,5 @@ export function GoogleSignInButton({ busy, onToken, onError }: GoogleSignInButto
     }
   }
 
-  return <GoogleButtonShell busy={busy} disabled={!request} onPress={() => void prompt()} />;
+  return <GoogleButtonShell busy={busy} disabled={!request || busy} onPress={() => void prompt()} />;
 }

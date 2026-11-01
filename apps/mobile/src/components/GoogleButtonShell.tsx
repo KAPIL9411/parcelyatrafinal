@@ -26,7 +26,8 @@ export function GoogleButtonShell({
         {
           opacity: blocked ? 0.6 : pressed ? 0.88 : 1,
           transform: [{ scale: pressed ? 0.99 : 1 }],
-        },
+          cursor: blocked ? 'not-allowed' : 'pointer',
+        } as any,
       ]}
     >
       {busy ? (
@@ -47,6 +48,7 @@ const styles = StyleSheet.create({
   googleButton: {
     width: '100%',
     height: 52,
+    minHeight: 52,
     borderRadius: 14,
     backgroundColor: '#FFFFFF',
     borderWidth: 1.5,
@@ -61,6 +63,10 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 3 },
     elevation: 3,
     paddingHorizontal: spacing.lg,
+    // Web-specific improvements for iOS Safari
+    userSelect: 'none' as any,
+    touchAction: 'manipulation' as any,
+    WebkitTapHighlightColor: 'transparent' as any,
   },
   googleIcon: {
     width: 22,
