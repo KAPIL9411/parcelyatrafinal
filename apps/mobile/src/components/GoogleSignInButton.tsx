@@ -14,7 +14,8 @@ export interface GoogleSignInButtonProps {
 
 /**
  * Web flow: authorization code + PKCE via backend /auth/google/authorize endpoint.
- * This ensures the session cookie is set correctly on the backend.
+ * Backend builds the Google auth URL with correct redirect_uri (/auth-callback),
+ * Google redirects there, auth-callback page POSTs code to backend to establish session.
  *
  * Native flow: ID token directly to /auth/google/token (mobile clients obtain their own token).
  */
@@ -39,12 +40,14 @@ export function GoogleSignInButton({ busy, onToken, onError }: GoogleSignInButto
 
   async function prompt() {
     try {
-      // Web: Use backend OAuth flow for proper session establishment
+      // Small delay for iOS Safari to ensure button press is registered
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
       if (Platform.OS === 'web') {
+        // Web: Use backend OAuth flow for proper session establishment
         await webOAuthFlow();
       } else {
         // Native: Use expo-auth-session to get ID token
-        await new Promise(resolve => setTimeout(resolve, 100));
         await promptAsync();
       }
     } catch (err) {
@@ -61,58 +64,77 @@ export function GoogleSignInButton({ busy, onToken, onError }: GoogleSignInButto
   /**
    * Web-only OAuth flow using backend authorization endpoint.
    * This establishes a session cookie properly across same-origin requests.
+   *
+   * Flow:
+   * 1. GET /v1/auth/google/authorize -> backend returns Google auth URL with correct redirect_uri
+   * 2. Open popup to that URL
+   * 3. User authorizes on Google
+   * 4. Google redirects to /auth-callback with authorization code
+   * 5. /auth-callback page POSTs code to /v1/auth/google/callback
+   * 6. Backend sets session cookie
+   * 7. App boots and shows home screen
    */
   async function webOAuthFlow() {
     try {
-      // Step 1: Get authorization URL from backend
-      const authorizeRes = await fetch('/v1/auth/google/authorize', { credentials: 'include' });
-      if (!authorizeRes.ok) throw new Error('Failed to get authorization URL');
-      const { authorization_url, state, handshake_binding } = (await authorizeRes.json()) as {
+      // Step 1: Get authorization URL from backend (with correct redirect_uri)
+      const authorizeRes = await fetch('/v1/auth/google/authorize', { 
+        credentials: 'include',
+        method: 'GET',
+      });
+      if (!authorizeRes.ok) {
+        const error = await authorizeRes.text();
+        throw new Error(`Failed to get authorization URL: ${error}`);
+      }
+      
+      const authData = (await authorizeRes.json()) as {
         authorization_url: string;
         state: string;
         handshake_binding: string;
       };
 
       // Step 2: Open Google authorization in popup
-      const popup = window.open(authorization_url, 'google_signin', 'width=500,height=600');
-      if (!popup) throw new Error('Failed to open authorization window');
+      const popup = window.open(authData.authorization_url, 'google_signin', 'width=500,height=600');
+      if (!popup) throw new Error('Failed to open authorization popup. Please check if popups are blocked.');
 
-      // Step 3: Wait for redirect back to /auth/google/callback with code
-      // The callback will POST to /auth/google/callback with the code
-      // For now, we'll store state in sessionStorage for the callback handler
-      sessionStorage.setItem('py_oauth_state', state);
-      sessionStorage.setItem('py_oauth_binding', handshake_binding);
+      // Step 3: Store binding for the callback page to use
+      sessionStorage.setItem('py_oauth_binding', authData.handshake_binding);
 
-      // Step 4: Wait for popup to close or message
+      // Step 4: Wait for popup to close or redirect to happen
+      // The redirect goes to /auth-callback, which will POST the code to backend
+      // and the session will be established
       const checkPopup = setInterval(() => {
         if (popup.closed) {
           clearInterval(checkPopup);
-          // Check if session was established (try fetching user data)
-          verifySession();
+          // Give app a moment to restore session after /auth-callback completes
+          setTimeout(() => {
+            // Check if session was established by trying to fetch user data
+            fetch('/v1/auth/whoami', { credentials: 'include' })
+              .then(res => {
+                if (res.ok) {
+                  // Session established! Reload to update app state
+                  window.location.reload();
+                } else {
+                  // Session not established
+                  onError(new ApiError('GOOGLE_AUTH_FAILED', 'Session was not established', 401));
+                }
+              })
+              .catch(() => {
+                onError(new ApiError('GOOGLE_AUTH_FAILED', 'Failed to verify session', 400));
+              });
+          }, 500);
         }
       }, 500);
 
       // Timeout after 5 minutes
-      setTimeout(() => clearInterval(checkPopup), 5 * 60 * 1000);
+      setTimeout(() => {
+        clearInterval(checkPopup);
+        if (!popup.closed) {
+          popup.close();
+          onError(new ApiError('GOOGLE_AUTH_FAILED', 'Sign-in took too long', 408));
+        }
+      }, 5 * 60 * 1000);
     } catch (err) {
       throw err;
-    }
-  }
-
-  /**
-   * Verify session was established after OAuth redirect
-   */
-  async function verifySession() {
-    try {
-      const res = await fetch('/v1/auth/whoami', { credentials: 'include' });
-      if (res.ok) {
-        // Session established! User is now signed in
-        // Trigger a refresh to update app state
-        window.location.reload();
-      }
-    } catch (err) {
-      // Session not established
-      onError(new ApiError('GOOGLE_AUTH_FAILED', 'Failed to establish session', 400));
     }
   }
 
