@@ -26,7 +26,8 @@ const CONTENT_SECURITY_POLICY =
 
 const SECURITY_HEADERS: ReadonlyArray<readonly [string, string]> = [
   ['content-security-policy', CONTENT_SECURITY_POLICY],
-  ['cross-origin-opener-policy', 'same-origin'],
+  // Allow OAuth popups (Google Sign-In) while maintaining isolation from untrusted origins
+  ['cross-origin-opener-policy', 'same-origin-allow-popups'],
   // Images are fetched by the web origin with an <img> tag, which CORS does not gate. Access is
   // controlled by the signed token, not by the browser's origin.
   ['cross-origin-resource-policy', 'cross-origin'],

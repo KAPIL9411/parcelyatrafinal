@@ -4,7 +4,13 @@
   "outputDirectory": "dist",
   "framework": null,
 
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
+  "rewrites": [
+    { 
+      "source": "/v1/:path*", 
+      "destination": "https://parcel-yatra-api.parcelyatra.workers.dev/v1/:path*" 
+    },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ],
 
   "headers": [
     {
