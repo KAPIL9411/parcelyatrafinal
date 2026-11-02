@@ -120,7 +120,7 @@ const FAQ = [
 ];
 
 export function Landing() {
-  useDocumentTitle("Parcels carried by travellers between cities");
+  useDocumentTitle("Parcel Yatra — Send a parcel on someone's journey");
 
   return (
     <div>
