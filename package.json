@@ -1,0 +1,40 @@
+{
+  "name": "parcel-yatra",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Parcel Yatra — inter-city parcel marketplace (pilot build, sandbox payments only)",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm run dev -w @py/api",
+    "dev:web": "npm run dev -w @py/web",
+    "build": "npm run build -w @py/api && npm run build -w @py/web",
+    "typecheck": "npm run typecheck -w @py/domain && npm run typecheck -w @py/api && npm run typecheck -w @py/web && npm run typecheck -w @py/mobile",
+    "test": "npm run test -w @py/domain && npm run test -w @py/api && npm run test -w @py/web && npm run test -w @py/mobile",
+    "test:domain": "npm run test -w @py/domain",
+    "test:api": "npm run test -w @py/api",
+    "test:web": "npm run test -w @py/web",
+    "test:smoke": "node scripts/smoke.mjs",
+    "test:discovery": "node scripts/discovery.mjs",
+    "test:trips": "node scripts/trips.mjs",
+    "test:ratelimit": "node scripts/ratelimit.mjs",
+    "test:messaging": "node scripts/messaging.mjs",
+    "test:journeys": "node scripts/journeys.mjs",
+    "test:concurrency": "node scripts/concurrency.mjs",
+    "test:google": "node scripts/test-google-auth.js",
+    "db:migrate": "npm run db:migrate -w @py/api",
+    "db:seed": "npm run db:seed -w @py/api",
+    "db:reset": "npm run db:reset -w @py/api",
+    "test:mobile": "npm run test -w @py/mobile"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "$comment": [
+    "Parcel Yatra iPhone PWA — presentation and install metadata for the web export.",
+    "",
+    "This is not an Expo app config. The Expo project, its screens and its routes stay in",
+    "apps/mobile/app.json and are exported for web by scripts/build.mjs; nothing here is read by",
+    "Expo. What lives here is the part a browser needs that React Native has no word for: the",
+    "manifest, the icons, the iOS status-bar and viewport metadata, and the install guidance copy.",
+    "Edit this file, re-run `npm run build -w @py/ios-pwa`, and dist/ reflects it."
+  ],
+
+  "name": "Parcel Yatra",
+  "shortName": "Parcel Yatra",
+  "description": "Send a parcel across the country on a traveller's already-planned journey.",
+
+  "themeColor": "#005DFD",
+  "backgroundColor": "#005DFD",
+  "display": "standalone",
+  "orientation": "portrait",
+  "startUrl": "/",
+  "scope": "/",
+  "lang": "en-IN",
+  "categories": ["shopping", "travel", "business"],
+
+  "iconSource": "../apps/mobile/assets/icon.png",
+  "logoSource": "../apps/mobile/assets/parcel-yatra-logo.png",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "appleTouchIcon": "/icons/icon-180.png",
+  "favicon": "/icons/icon-192.png",
+
+  "ios": {
+    "statusBarStyle": "black-translucent",
+    "webAppCapable": true,
+    "title": "Parcel Yatra",
+    "splashImage": "../apps/mobile/assets/brand-wordmark-white.png",
+    "splashBackgroundColor": "#005DFD"
+  },
+
+  "serviceWorker": {
+    "scope": "/",
+    "cachePrefix": "parcel-yatra",
+    "precacheMaxBytes": 4194304,
+    "neverCache": ["/v1/", "/socket.io/"],
+    "$comment": "Only the hashed bundles, the images and the shell are precached. See service-worker.js for the rules and ios/PARITY.md for why API traffic is excluded."
+  },
+
+  "installGuide": {
+    "title": "Add Parcel Yatra to your Home Screen",
+    "body": "Install it like an app: full screen, its own icon, no Safari bar.",
+    "steps": [
+      "Tap the Share icon in Safari's bottom bar.",
+      "Scroll up and choose Add to Home Screen.",
+      "Tap Add to confirm."
+    ],
+    "dismissLabel": "Maybe later",
+    "storageKey": "py.install-guide-dismissed"
+  },
+
+  "updateBanner": {
+    "title": "A new version of Parcel Yatra is ready",
+    "actionLabel": "Reload now"
+  },
+
+  "api": {
+    "$comment": [
+      "EXPO_PUBLIC_API_BASE_URL decides which backend the exported bundle talks to, and it is read",
+      "at build time, so it is baked into dist/. Set it in the hosting environment, not here; this",
+      "value is only the fallback for a plain local build.",
+      "A value starting with '/' is same-origin: recommended, because the HttpOnly session cookie is",
+      "then first-party and survives iOS Safari's tracking prevention. See README.md section 5."
+    ],
+    "defaultBaseUrl": "https://parcelyatrafinal.onrender.com/v1"
+  }
+}

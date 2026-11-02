@@ -1,0 +1,252 @@
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+
+import { AppError } from '../lib/errors.ts';
+import { requireAuth } from '../lib/auth.ts';
+import { userProfile } from '../lib/serialize.ts';
+import { getObject, isValidKey, keyBelongsTo } from '../lib/storage.ts';
+import { audit } from '../services/audit.ts';
+
+const patchSchema = z
+  .object({
+    name: z.string().min(1).max(80).optional(),
+    email: z.string().max(254).optional(),
+    locale: z.enum(['en-IN', 'hi-IN']).optional(),
+    /** The object key of a selfie this account just uploaded. `null` clears the photo. */
+    avatar_key: z.string().min(1).max(120).nullable().optional(),
+    /**
+     * Marks the first-run setup screen as answered. The client sends `true` whether it saved a photo
+     * or the user chose to add one later, because "asked and answered" is what the screen needs to
+     * know — not "has a photo".
+     */
+    profile_setup_completed: z.literal(true).optional(),
+  })
+  .strict();
+
+const deletionSchema = z
+  .object({
+    confirm: z.literal(true),
+    reason: z.string().max(500).optional(),
+  })
+  .strict();
+
+export async function meRoutes(app: FastifyInstance): Promise<void> {
+  const db = app.db;
+
+  /**
+   * The caller's own roles. `role` is a Postgres enum, so cast to text before it reaches JSON.
+   */
+  async function rolesFor(userId: string): Promise<string[]> {
+    const res = await db.query<{ role: string }>(
+      `SELECT role::text AS role FROM user_roles WHERE user_id = $1 ORDER BY role::text ASC`,
+      [userId],
+    );
+    return res.rows.map((r) => r.role);
+  }
+
+  app.get('/me', async (req) => {
+    const auth = requireAuth(req);
+    const res = await db.query<{
+      id: string;
+      name: string | null;
+      email: string | null;
+      phone_last4: string | null;
+      status: 'active' | 'suspended' | 'deleted';
+      risk_tier: number;
+      locale: string;
+      created_at: Date;
+      avatar_key: string | null;
+      profile_setup_completed_at: Date | null;
+      verification_state: string | null;
+      phone_verified: boolean;
+      email_verified: boolean;
+    }>(
+      `SELECT u.id, u.name, u.email, u.phone_last4, u.status, u.risk_tier, u.locale, u.created_at,
+              u.avatar_key, u.profile_setup_completed_at,
+              u.phone_verified_at IS NOT NULL AS phone_verified,
+              u.email_verified_at IS NOT NULL AS email_verified,
+              (SELECT v.state FROM verifications v WHERE v.user_id = u.id ORDER BY v.created_at DESC LIMIT 1) AS verification_state
+       FROM users u WHERE u.id = $1`,
+      [auth.userId],
+    );
+    const row = res.rows[0];
+    if (!row) throw new AppError('NOT_FOUND');
+    return userProfile(row as never, await rolesFor(auth.userId));
+  });
+
+  app.patch('/me', async (req) => {
+    const auth = requireAuth(req);
+    const body = patchSchema.parse(req.body);
+
+    const before = await db.query<{
+      name: string | null;
+      email: string | null;
+      locale: string;
+      google_sub: string | null;
+      avatar_key: string | null;
+    }>(`SELECT name, email, locale, google_sub, avatar_key FROM users WHERE id = $1`, [auth.userId]);
+    const account = before.rows[0];
+    if (!account) throw new AppError('NOT_FOUND');
+
+    // Clients echo the values they were given back to us, so only a real change counts.
+    const emailChanged = body.email !== undefined && body.email !== null && body.email !== account.email;
+    // The address is the Google identity for an OAuth account, and it is what the staff policy and
+    // rule E2 trust. It is set by the provider at sign-in, never here.
+    if (emailChanged && account.google_sub) {
+      throw new AppError('FORBIDDEN', { field: 'email' }, 'Your sign-in address is managed by your Google account.');
+    }
+
+    // A selfie is a reference to an object, and the two ways that can go wrong are both worth
+    // refusing: somebody else's key (it would show their face here), and a key whose bytes never
+    // landed or were already wiped (it would show a broken image forever). Same rule the handover
+    // photos and the verification documents apply.
+    const avatarProvided = body.avatar_key !== undefined;
+    if (typeof body.avatar_key === 'string') {
+      if (!isValidKey(body.avatar_key) || !keyBelongsTo(body.avatar_key, auth.userId)) {
+        throw new AppError('VALIDATION_FAILED', { field: 'avatar_key' });
+      }
+      if (!(await getObject(body.avatar_key))) throw new AppError('UPLOAD_EXPIRED');
+    }
+
+    await db.query(
+      `UPDATE users SET
+         name = COALESCE($2, name),
+         email = COALESCE($3, email),
+         locale = COALESCE($4, locale),
+         email_verified_at = CASE WHEN $3 IS NULL THEN email_verified_at ELSE NULL END,
+         avatar_key = CASE WHEN $5::boolean THEN $6::text ELSE avatar_key END,
+         avatar_updated_at = CASE WHEN $5::boolean THEN now() ELSE avatar_updated_at END,
+         profile_setup_completed_at = CASE
+           WHEN $7::boolean AND profile_setup_completed_at IS NULL THEN now()
+           ELSE profile_setup_completed_at
+         END,
+         updated_at = now()
+       WHERE id = $1`,
+      [
+        auth.userId,
+        body.name ?? null,
+        body.email ?? null,
+        body.locale ?? null,
+        avatarProvided,
+        body.avatar_key ?? null,
+        body.profile_setup_completed === true,
+      ],
+    );
+
+    // A self-declared address is not a verified one: rule E2 stops counting it the moment it changes.
+    await audit(db, {
+      actorId: auth.userId,
+      actorKind: 'user',
+      action: 'me.update',
+      resource: 'user',
+      resourceId: auth.userId,
+      before: { name: account.name, locale: account.locale, avatar_key: account.avatar_key },
+      after: {
+        name: body.name,
+        locale: body.locale,
+        email_changed: emailChanged,
+        avatar_key: avatarProvided ? (body.avatar_key ?? null) : undefined,
+      },
+    });
+
+    const res = await db.query<{
+      id: string;
+      name: string | null;
+      email: string | null;
+      phone_last4: string | null;
+      status: 'active' | 'suspended' | 'deleted';
+      risk_tier: number;
+      locale: string;
+      created_at: Date;
+      avatar_key: string | null;
+      profile_setup_completed_at: Date | null;
+      verification_state: string | null;
+      phone_verified: boolean;
+      email_verified: boolean;
+    }>(
+      `SELECT u.id, u.name, u.email, u.phone_last4, u.status, u.risk_tier, u.locale, u.created_at,
+              u.avatar_key, u.profile_setup_completed_at,
+              u.phone_verified_at IS NOT NULL AS phone_verified,
+              u.email_verified_at IS NOT NULL AS email_verified,
+              (SELECT v.state FROM verifications v WHERE v.user_id = u.id ORDER BY v.created_at DESC LIMIT 1) AS verification_state
+       FROM users u WHERE u.id = $1`,
+      [auth.userId],
+    );
+    return userProfile(res.rows[0] as never, await rolesFor(auth.userId));
+  });
+
+  app.post('/me/export', async (req, reply) => {
+    const auth = requireAuth(req);
+    // The pilot runs no background worker. Enqueueing the job here would produce a
+    // `202 queued` response for work nothing ever does — a fake success message. Refuse
+    // honestly and point the user at a support path.
+    await audit(db, {
+      actorId: auth.userId,
+      actorKind: 'user',
+      action: 'me.export_requested',
+      resource: 'user',
+      resourceId: auth.userId,
+    });
+    throw new AppError(
+      'BACKGROUND_WORKER_UNAVAILABLE',
+      { reason: 'data_export' },
+      'Your data export needs a background worker that is not deployed here. Contact support and we will produce it manually.',
+    );
+  });
+
+  app.post('/me/deletion-request', async (req, reply) => {
+    const auth = requireAuth(req);
+    deletionSchema.parse(req.body);
+
+    const open = await db.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM bookings
+       WHERE (sender_id = $1 OR traveller_id = $1)
+         AND status NOT IN ('paid_out','refunded','expired','cancelled_by_sender',
+                            'cancelled_by_traveller','cancelled_ineligible','cancelled_safety')`,
+      [auth.userId],
+    );
+    if (Number(open.rows[0]?.count ?? 0) > 0) {
+      throw new AppError('CONFLICT', { reason: 'open_booking' }, 'Finish or cancel your open bookings first.');
+    }
+
+    const hardDeleteAfter = new Date(Date.now() + 30 * 24 * 3_600_000);
+    await db.transaction(async (tx) => {
+      // The row becomes a tombstone: the account is gone, but payment and booking records still
+      // point at it. Its login identifiers are freed in the same statement. Leaving `google_sub`
+      // or the real `phone_hash` on a deleted row made the person unable to sign up again — the
+      // Google callback died on `users_google_sub_idx` with a 500, and the phone hash could never
+      // be re-registered — while keeping an identifier that the deletion was meant to remove.
+      await tx.query(
+        `UPDATE users
+            SET status = 'deleted', deleted_at = now(), google_sub = NULL,
+                phone_hash = 'deleted:' || id::text, updated_at = now()
+          WHERE id = $1`,
+        [auth.userId],
+      );
+      // The pack's deletion flow starts by revoking sessions, and the signed-in devices must lose
+      // access at once rather than keep rotating tokens for an account that every route now rejects.
+      await tx.query(`UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, [
+        auth.userId,
+      ]);
+    });
+    await audit(db, {
+      actorId: auth.userId,
+      actorKind: 'user',
+      action: 'me.deletion_requested',
+      resource: 'user',
+      resourceId: auth.userId,
+    });
+
+    return reply.code(200).send({
+      deleted_at: new Date().toISOString(),
+      hard_delete_after: hardDeleteAfter.toISOString(),
+      hard_delete_worker: false,
+      note: 'Your account is soft-deleted and no longer visible to you or to other users. The row-level purge after the retention window is a deploy-time job in this build: no background worker executes it here, so the timestamp above is a target, not a scheduled event.',
+      retained_categories: [
+        'payment and refund records (statutory retention)',
+        'booking and dispute records tied to a financial event',
+        'audit log entries',
+      ],
+    });
+  });
+}
