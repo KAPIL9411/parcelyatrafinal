@@ -62,10 +62,14 @@
     // assertSafetyRails refuses to boot in production with the `mock`/`log` defaults.
     "PAYMENT_PROVIDER": "sandbox_provider",
     "SMS_PROVIDER": "fast2sms",
-    // Google sign-in, read back from Render's own /v1/auth/google/authorize response.
+    // Google sign-in - supports Web, Admin, and iOS PWA
     "GOOGLE_OAUTH_ENABLED": "true",
     "GOOGLE_CLIENT_ID": "130100214583-b8jp20gsi8teqgoqk116o6pnlb1tqlnm.apps.googleusercontent.com",
-    "GOOGLE_REDIRECT_URI": "https://parcelyatra.vercel.app/auth/google/callback"
+    "GOOGLE_REDIRECT_URI": "https://parcelyatra.vercel.app/auth/google/callback",
+    // Additional audiences for Android and native clients
+    "GOOGLE_EXTRA_AUDIENCES": "130100214583-klk76hu3g39912dsp5e1tldobslqp7l7.apps.googleusercontent.com",
+    // CORS allowed origins - includes Web, Admin, and iOS PWA
+    "WEB_ORIGINS": "https://parcelyatra.vercel.app,https://admin-parcelyatra.vercel.app,https://parcelyatrafinal-ios.vercel.app"
   },
   // Hyperdrive pools the connections Neon sees and keeps them warm at the edge. Without it, a Worker
   // must open a fresh TLS connection per request (sockets cannot be reused across requests) and every
