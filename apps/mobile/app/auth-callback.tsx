@@ -45,8 +45,9 @@ export default function AuthCallbackScreen() {
 
       try {
         // POST the code to backend /auth/google/callback
-        // The binding comes from our oauth cookie if set, or we can extract from state
-        const response = await fetch('/v1/auth/google/callback', {
+        // Note: Must use full URL since it's cross-origin
+        const apiBase = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://parcel-yatra-api.parcelyatra.workers.dev/v1';
+        const response = await fetch(`${apiBase}/auth/google/callback`, {
           method: 'POST',
           credentials: 'include', // Send/receive cookies
           headers: { 'Content-Type': 'application/json' },

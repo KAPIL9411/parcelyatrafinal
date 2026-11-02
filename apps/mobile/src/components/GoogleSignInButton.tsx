@@ -77,7 +77,10 @@ export function GoogleSignInButton({ busy, onToken, onError }: GoogleSignInButto
   async function webOAuthFlow() {
     try {
       // Step 1: Get authorization URL from backend (with correct redirect_uri)
-      const authorizeRes = await fetch('/v1/auth/google/authorize', { 
+      const apiUrl = 'https://parcel-yatra-api.parcelyatra.workers.dev/v1';
+      console.log('[OAuth] Getting authorization URL from:', `${apiUrl}/auth/google/authorize`);
+      
+      const authorizeRes = await fetch(`${apiUrl}/auth/google/authorize`, { 
         credentials: 'include',
         method: 'GET',
       });
@@ -108,20 +111,34 @@ export function GoogleSignInButton({ busy, onToken, onError }: GoogleSignInButto
           // Give app a moment to restore session after /auth-callback completes
           setTimeout(() => {
             // Check if session was established by trying to fetch user data
-            fetch('/v1/auth/whoami', { credentials: 'include' })
+            // Use full URL since we're using cross-origin API
+            const apiUrl = 'https://parcel-yatra-api.parcelyatra.workers.dev/v1';
+            console.log('[OAuth] Checking session at:', `${apiUrl}/auth/whoami`);
+            
+            fetch(`${apiUrl}/auth/whoami`, { credentials: 'include' })
               .then(res => {
+                console.log('[OAuth] Session check response:', res.status, res.statusText);
                 if (res.ok) {
+                  console.log('[OAuth] Session established! Reloading...');
                   // Session established! Reload to update app state
                   window.location.reload();
                 } else {
-                  // Session not established
-                  onError(new ApiError('GOOGLE_AUTH_FAILED', 'Session was not established', 401));
+                  console.log('[OAuth] Session not established (status:', res.status, ')');
+                  // Try to redirect to auth-callback page if it didn't load
+                  const binding = sessionStorage.getItem('py_oauth_binding');
+                  if (binding) {
+                    console.log('[OAuth] Redirecting to /auth-callback with binding...');
+                    window.location.href = '/auth-callback';
+                  } else {
+                    onError(new ApiError('GOOGLE_AUTH_FAILED', 'Session was not established', 401));
+                  }
                 }
               })
-              .catch(() => {
+              .catch((err) => {
+                console.error('[OAuth] Session check failed:', err);
                 onError(new ApiError('GOOGLE_AUTH_FAILED', 'Failed to verify session', 400));
               });
-          }, 500);
+          }, 2000); // Longer wait for /auth-callback to complete
         }
       }, 500);
 
