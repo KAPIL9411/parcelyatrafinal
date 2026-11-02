@@ -17,47 +17,51 @@
  */
 @theme {
   --font-sans:
-    "Titillium Web", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
     sans-serif;
 
-  --color-ink-900: #151c28;
-  --color-ink-700: #2c3444;
-  --color-ink-500: #5a6478;
-  --color-ink-300: #949494;
+  /* Borzo-inspired professional delivery service colors */
+  --color-ink-900: #0D1117;
+  --color-ink-700: #24292F;
+  --color-ink-500: #57606A;
+  --color-ink-300: #8C959F;
 
-  --color-line: #e3e7ee;
-  --color-line-strong: #cfd6e3;
-  --color-surface: #ffffff;
-  --color-canvas: #f6f7fa;
+  --color-line: #D0D7DE;
+  --color-line-strong: #BABBBC;
+  --color-surface: #FFFFFF;
+  --color-canvas: #F6F8FB;
 
-  --color-brand-50: #f0f3ff;
-  --color-brand-100: #eef2ff;
-  --color-brand-200: #d6e0ff;
-  --color-brand-500: #2962ff;
-  --color-brand-600: #0a57ff;
-  --color-brand-700: #0039b8;
-  --color-brand-900: #0a1730;
+  /* Professional deep blue - delivery trust */
+  --color-brand-50: #F0F5FF;
+  --color-brand-100: #DDE9FF;
+  --color-brand-200: #BFD7FF;
+  --color-brand-500: #0969DA;
+  --color-brand-600: #0860CA;
+  --color-brand-700: #033D8B;
+  --color-brand-900: #0A1930;
 
-  --color-accent-500: #e8b33c;
-  --color-accent-600: #a9761a;
-  --color-violet-500: #8a59f2;
+  /* Warm orange accent for CTAs - Borzo style */
+  --color-accent-500: #FB8500;
+  --color-accent-600: #E07C00;
+  --color-violet-500: #8957E5;
 
-  --color-success-600: #1b7a4b;
-  --color-success-50: #eaf6ef;
-  --color-warn-600: #a86400;
-  --color-warn-50: #fff5e2;
-  --color-danger-600: #b3261e;
-  --color-danger-50: #fdeceb;
-  --color-info-600: #1b5e8a;
-  --color-info-50: #eaf3f9;
+  /* Delivery status colors */
+  --color-success-600: #2DA44E;
+  --color-success-50: #DAFBE1;
+  --color-warn-600: #D29922;
+  --color-warn-50: #FFF8C5;
+  --color-danger-600: #DA3633;
+  --color-danger-50: #FFEBE6;
+  --color-info-600: #0969DA;
+  --color-info-50: #DDF4FF;
 
-  --radius-input: 8px;
-  --radius-card: 12px;
-  --radius-sheet: 16px;
+  --radius-input: 6px;
+  --radius-card: 10px;
+  --radius-sheet: 14px;
 
-  --shadow-card: 0 1px 2px rgb(21 28 40 / 0.04);
-  --shadow-bar: 0 -2px 12px rgb(21 28 40 / 0.08);
-  --shadow-float: 0 24px 50px -24px rgb(4 12 28 / 0.45);
+  --shadow-card: 0 1px 3px rgba(13, 17, 23, 0.08);
+  --shadow-bar: 0 -4px 16px rgba(13, 17, 23, 0.12);
+  --shadow-float: 0 20px 48px rgba(13, 17, 23, 0.25);
 }
 
 @layer base {
@@ -108,23 +112,23 @@
   }
 
   /*
-   * The landing hero. Soft brand glows on a near-white canvas let the phone preview carry the
-   * colour; nothing here is a photograph, so there is no image to pop in late.
+   * The landing hero. Professional gradient background inspired by Borzo's delivery service
+   * aesthetic. Subtle brand colors with trust-building visual hierarchy.
    */
   .site-hero {
     background-color: var(--color-surface);
     background-image:
       radial-gradient(
-        52rem 28rem at 88% -8%,
-        var(--color-brand-100) 0%,
-        transparent 62%
-      ),
-      radial-gradient(
-        38rem 26rem at 4% 108%,
-        color-mix(in srgb, var(--color-accent-500) 14%, transparent) 0%,
+        48rem 32rem at 92% -10%,
+        var(--color-brand-50) 0%,
         transparent 58%
       ),
-      linear-gradient(180deg, #ffffff 0%, #f5f7ff 100%);
+      radial-gradient(
+        32rem 24rem at 2% 112%,
+        color-mix(in srgb, var(--color-accent-500) 10%, transparent) 0%,
+        transparent 62%
+      ),
+      linear-gradient(180deg, #ffffff 0%, #f8fafb 100%);
   }
 
   .text-balance {

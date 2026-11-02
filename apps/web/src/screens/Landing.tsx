@@ -91,7 +91,7 @@ const INCLUDED = [
 const FAQ = [
   {
     q: "Where does Parcel Yatra run?",
-    a: "At launch, parcels move on the Bareilly ⇄ Delhi NCR and Bareilly ⇄ Lucknow corridors. More routes open as travellers publish trips.",
+    a: "At launch, parcels move on the Bareilly ↔ Delhi NCR and Bareilly ↔ Lucknow corridors. More routes open as travellers publish trips.",
   },
   {
     q: "What can I send?",
@@ -211,11 +211,11 @@ export function Landing() {
           </span>
           <span className="flex items-center gap-1.5">
             <RouteIcon size={14} className="text-brand-700" />
-            Bareilly ⇄ Delhi NCR
+            Bareilly ↔ Delhi NCR
           </span>
           <span className="flex items-center gap-1.5">
             <RouteIcon size={14} className="text-brand-700" />
-            Bareilly ⇄ Lucknow
+            Bareilly ↔ Lucknow
           </span>
           <span className="flex items-center gap-1.5">
             <CoinsIcon size={14} className="text-brand-700" />
@@ -374,7 +374,7 @@ export function Landing() {
 
           <Card>
             <h2 className="text-lg font-semibold text-ink-900">
-              What we don’t carry
+              What we don't carry
             </h2>
             <p className="mt-2 text-sm leading-relaxed text-ink-500">
               No cash, jewellery, medicines, electronics or passports. The list
@@ -412,7 +412,7 @@ export function Landing() {
                 </h2>
                 <p className="mt-1 max-w-xl text-sm leading-relaxed text-ink-500">
                   Route, weight, category and platform fee — each its own line,
-                  with GST shown separately. No hidden “convenience” charge
+                  with GST shown separately. No hidden "convenience" charge
                   appears at payment.
                 </p>
               </div>
