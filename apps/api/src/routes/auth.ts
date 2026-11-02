@@ -362,7 +362,12 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const body = (req.body ?? {}) as { refresh_token?: unknown };
     const fromBody = native && typeof body.refresh_token === 'string' ? body.refresh_token : null;
     const presented = readRefreshCookie(req) ?? fromBody;
-    if (!presented) throw new AppError('AUTH_REFRESH_INVALID');
+    
+    // No refresh cookie/token: user is not logged in. Return 200 with empty response rather than 401.
+    // A 401 should only be thrown when a credential exists but is invalid/expired, not when there's no credential at all.
+    if (!presented) {
+      return reply.code(200).send({ access_token: null });
+    }
     const hash = sha256(presented);
 
     const found = await db.query<{

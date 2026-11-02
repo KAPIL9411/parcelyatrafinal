@@ -79,6 +79,9 @@ let refreshInFlight: Promise<boolean> | null = null;
 /**
  * Exchange the HttpOnly refresh cookie for a fresh access token. The browser attaches the cookie;
  * nothing here ever sees it.
+ *
+ * Returns true if we got a valid access token, false if the user is not logged in (no cookie).
+ * Any other error is thrown.
  */
 async function refreshSession(): Promise<boolean> {
   const res = await fetch(`${API_BASE}/auth/refresh`, {
@@ -94,6 +97,11 @@ async function refreshSession(): Promise<boolean> {
   }
 
   const next = (await res.json()) as Partial<SessionTokens>;
+  // access_token can be null (user not logged in), undefined (malformed response), or a string (success)
+  if (next.access_token === null || next.access_token === undefined) {
+    accessToken = null;
+    return false;
+  }
   if (typeof next.access_token !== 'string') {
     accessToken = null;
     return false;
