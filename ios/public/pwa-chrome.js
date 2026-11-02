@@ -170,11 +170,18 @@
     close.textContent = '×';
 
     const steps = (guide.steps || []).map((text) => `<li></li>`).join('');
+    const isIOSSafari = isIOS() && !deferredPrompt;
+    
+    // For iOS: initially hide steps, show button to expand
     el.innerHTML = [
       '<h2></h2><p></p>',
-      steps ? `<ol>${steps}</ol>` : '',
+      steps ? `<ol style="${isIOSSafari ? 'display:none;' : ''}">${steps}</ol>` : '',
       '<div class="py-chrome-actions">',
-      deferredPrompt ? '<button class="ghost" type="button" data-act="later"></button><button class="primary" type="button" data-act="install"></button>' : '<button class="ghost" type="button" data-act="later" style="flex:1"></button>',
+      deferredPrompt 
+        ? '<button class="ghost" type="button" data-act="later"></button><button class="primary" type="button" data-act="install"></button>' 
+        : isIOSSafari
+          ? '<button class="ghost" type="button" data-act="later"></button><button class="primary" type="button" data-act="show-steps"></button>'
+          : '<button class="ghost" type="button" data-act="later" style="flex:1"></button>',
       '</div>',
     ].join('');
 
@@ -194,6 +201,21 @@
       });
     }
 
+    // iOS: Show steps button
+    const showSteps = el.querySelector('[data-act="show-steps"]');
+    if (showSteps) {
+      showSteps.textContent = 'Show me how to install';
+      showSteps.addEventListener('click', () => {
+        const stepsList = el.querySelector('ol');
+        if (stepsList) {
+          stepsList.style.display = 'block';
+          stepsList.style.animation = 'py-chrome-in .28s ease-out';
+        }
+        showSteps.style.display = 'none';
+      });
+    }
+
+    // Android/Chrome: Direct install button
     const install = el.querySelector('[data-act="install"]');
     if (install) {
       install.textContent = 'Install';
