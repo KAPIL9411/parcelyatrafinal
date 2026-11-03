@@ -93,6 +93,18 @@ check('the document does not flash white before the app paints', () => {
   assert(new RegExp(`background-color:${config.backgroundColor}`).test(html), 'no brand background on html/body/#root');
 });
 
+check('the launch screen shows the wordmark before React mounts', () => {
+  const splash = /<div id="py-splash"[^>]*>\s*<img src="data:image\/png;base64,([A-Za-z0-9+/=]+)"/.exec(html);
+  assert(splash, 'no inlined #py-splash wordmark — the PWA shows a blank blue screen until React mounts');
+  const png = Buffer.from(splash[1], 'base64');
+  assert(png.subarray(1, 4).toString('ascii') === 'PNG', 'the launch wordmark is not a PNG');
+  const handoff = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+    .map((m) => m[1])
+    .find((s) => s.includes('py-splash'));
+  assert(handoff && handoff.includes('MutationObserver'), 'nothing removes the splash when the app mounts');
+  return `${Math.round(png.length / 1024)} KB wordmark inlined`;
+});
+
 // ---------------------------------------------------------------------------
 // Manifest and icons
 // ---------------------------------------------------------------------------

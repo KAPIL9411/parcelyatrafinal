@@ -154,6 +154,29 @@ async function buildIcons() {
 const iconFiles = await buildIcons();
 
 // ---------------------------------------------------------------------------
+// 4b. The wordmark on the launch screen
+// ---------------------------------------------------------------------------
+// expo-splash-screen is native-only, so an exported document used to show a plain blue rectangle
+// until the fonts and session had settled. Inlining the wordmark means it paints with the first
+// byte of HTML - no extra request, no 404, and it still appears when the worker serves the shell
+// offline. It is downscaled to 3x the 180 dp it is drawn at, not shipped at its 1024 px source size.
+const SPLASH_WORDMARK_WIDTH_PX = 540;
+
+async function buildSplashWordmark() {
+  step('inlining the launch wordmark');
+  const sharp = require('sharp');
+  const sourcePath = path.resolve(IOS_DIR, config.ios.splashImage);
+  if (!fs.existsSync(sourcePath)) fail(`splash wordmark not found at ${sourcePath}`);
+  const png = await sharp(sourcePath)
+    .resize({ width: SPLASH_WORDMARK_WIDTH_PX, withoutEnlargement: true })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+  return `data:image/png;base64,${png.toString('base64')}`;
+}
+
+const splashWordmark = await buildSplashWordmark();
+
+// ---------------------------------------------------------------------------
 // 5. Web app manifest
 // ---------------------------------------------------------------------------
 function writeManifest() {
@@ -284,6 +307,13 @@ function injectHead() {
     // The bridge from the browser's blue splash to the app's own blue splash, so a cold start in
     // standalone mode does not flash white first.
     `<style>html,body,#root{background-color:${config.backgroundColor}}</style>`,
+    // The launch screen itself. It covers #root until React mounts its first element, then fades.
+    `<style>
+      #py-splash{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;background-color:${config.backgroundColor};transition:opacity .3s ease-out}
+      #py-splash img{display:block;width:180px;height:auto}
+      #py-splash[data-hidden="true"]{opacity:0;pointer-events:none}
+      @media (prefers-reduced-motion: reduce){#py-splash{transition:none}}
+    </style>`,
   ].join('\n    ');
 
   if (!html.includes('</head>')) fail('the exported index.html has no </head> to inject into.');
@@ -297,7 +327,35 @@ function injectHead() {
     installGuide: config.installGuide,
     updateBanner: config.updateBanner,
   };
+  const splash = [
+    `<div id="py-splash" aria-hidden="true"><img src="${splashWordmark}" alt="" width="180" height="30" /></div>`,
+    // Without JS there is nothing to mount, so the splash must not cover the <noscript> message.
+    '<noscript><style>#py-splash{display:none}</style></noscript>',
+  ].join('\n  ');
+  if (!/<body[^>]*>/.test(html)) fail('the exported index.html has no <body> to inject into.');
+  html = html.replace(/<body([^>]*)>/, `<body$1>\n  ${splash}`);
+
+  // The deferred bundles run only after the document is parsed, so this handler is already observing
+  // #root before React's first element appears. It also gives up after 8 s, in case boot fails.
+  const splashHandoff = [
+    '<script>',
+    '(function(){',
+    "var splash=document.getElementById('py-splash');",
+    'if(!splash)return;',
+    'var done=false;',
+    'function hide(){if(done)return;done=true;splash.setAttribute("data-hidden","true");setTimeout(function(){splash.remove()},350);}',
+    "var root=document.getElementById('root');",
+    'if(!root){hide();return;}',
+    'var observer=new MutationObserver(function(){if(root.childElementCount){observer.disconnect();hide();}});',
+    'observer.observe(root,{childList:true});',
+    'if(root.childElementCount){observer.disconnect();hide();}',
+    'setTimeout(function(){observer.disconnect();hide();},8000);',
+    '})();',
+    '</script>',
+  ].join('\n  ');
+
   const injected = [
+    splashHandoff,
     `<script>window.__PY_PWA__ = ${JSON.stringify(boot).replace(/</g, '\\u003c')};</script>`,
     '<script src="/pwa-chrome.js" defer></script>',
   ].join('\n  ');
