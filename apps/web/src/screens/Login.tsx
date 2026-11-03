@@ -119,15 +119,14 @@ export function Login() {
   const copy = error ? errorCopy(error) : null;
 
   return (
-    <div className="mx-auto grid max-w-4xl gap-6 py-4 lg:grid-cols-[0.9fr_1.1fr]">
+    <div className="mx-auto grid max-w-5xl gap-6 py-6 lg:grid-cols-[0.9fr_1.1fr] lg:py-12">
       <div>
-        <div className="flex h-full flex-col rounded-sheet bg-brand-900 p-7 text-white">
-          <p className="text-xs font-medium tracking-wide text-white/55 uppercase">Google or a code</p>
-          <h1 className="mt-2 text-2xl font-bold tracking-tight">Google, or a phone number and a code.</h1>
+        <div className="relative flex h-full flex-col overflow-hidden rounded-[2rem] bg-brand-600 p-8 text-white shadow-[0_18px_40px_rgba(237,85,24,0.18)] sm:p-10">
+          <div className="absolute -right-20 -top-20 h-56 w-56 rounded-full bg-accent-500/35 blur-3xl" />
+          <p className="relative text-xs font-extrabold tracking-[0.14em] text-white/70 uppercase">Welcome to Parcel Yatra</p>
+          <h1 className="relative mt-4 text-3xl font-extrabold tracking-[-0.05em] sm:text-4xl">Delivery that moves with you.</h1>
           <p className="mt-3 text-sm text-white/75">
-            Signing in with Google is enough to post and carry parcels — we use the address Google has
-            already verified for you. A phone number is optional, and useful if you want the masked
-            number shown to the other side of a handover.
+            Sign in once to send parcels, publish journeys and keep every handover in one place.
           </p>
 
           <ul className="mt-6 space-y-3 text-sm">
@@ -153,7 +152,7 @@ export function Login() {
         ) : stage === 'phone' ? (
           <div className="space-y-5">
             <div>
-              <h1 className="text-2xl font-bold tracking-tight text-ink-900">Sign in or create an account</h1>
+        <h1 className="text-2xl font-extrabold tracking-tight text-ink-900">Sign in or create an account</h1>
               <p className="mt-1 text-sm text-ink-500">
                 No password. Use Google, or a six-digit code sent to your phone.
               </p>
