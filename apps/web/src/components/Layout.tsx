@@ -269,7 +269,7 @@ export function Layout() {
                 over.
               </p>
               <div className="flex flex-wrap items-center gap-3 pt-1">
-                <DownloadButton size="sm" />
+                <DownloadButton tone="inverse" size="sm" />
                 {!user && pathname !== "/login" ? (
                   <Link
                     to="/login"

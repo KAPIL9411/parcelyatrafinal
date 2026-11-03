@@ -3,8 +3,8 @@
 /*
  * Parcel Yatra web theme.
  *
- * A warm, editorial courier system inspired by the simplicity of Borzo: orange for action,
- * charcoal for trust, generous whitespace and soft editorial surfaces.
+ * A quiet editorial courier system: warm paper, ink-black structure and one high-contrast
+ * signal colour. The interface is intentionally confident, restrained and easy to scan.
  *
  * Contrast, computed from these values against --color-surface (#FFFFFF):
  *   ink-900  15.9:1  AAA
@@ -16,10 +16,10 @@
  */
 @theme {
   --font-sans:
-    "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    "Titillium Web", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
     sans-serif;
 
-  /* Borzo-inspired professional delivery service colors */
+  /* Parcel Yatra editorial palette */
   --color-ink-900: #111312;
   --color-ink-700: #3e4540;
   --color-ink-500: #727a73;
@@ -30,7 +30,7 @@
   --color-surface: #FFFFFF;
   --color-canvas: #f5f6f1;
 
-  /* Orange-led courier brand */
+  /* Signal colour for actions and key moments */
   --color-brand-50: #eef3e9;
   --color-brand-100: #dce8d3;
   --color-brand-200: #bdd0b0;
@@ -113,10 +113,7 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /*
-   * The landing hero. Professional gradient background inspired by Borzo's delivery service
-   * aesthetic. Subtle brand colors with trust-building visual hierarchy.
-   */
+  /* Landing-page primitives */
   .site-hero {
     background-color: var(--color-canvas);
     background-image:

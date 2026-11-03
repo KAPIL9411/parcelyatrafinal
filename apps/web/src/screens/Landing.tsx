@@ -10,7 +10,6 @@ import {
   CheckCircleIcon,
   ChevronDownIcon,
   ClockIcon,
-  CoinsIcon,
   LockIcon,
   ParcelIcon,
   RouteIcon,
