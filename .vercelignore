@@ -1,11 +1,13 @@
+# Uploaded to Vercel for every project in this repo.
+#
+# The iOS PWA project (root directory: ios) exports apps/mobile, so apps/mobile,
+# packages and ios itself must be uploaded. Only genuinely unused trees are
+# excluded here - a bare `ios` or `scripts` pattern also matches ios/scripts and
+# broke the PWA build (Cannot find module '/vercel/path0/ios/scripts/build.mjs').
 node_modules
 .git
 *.log
 .DS_Store
-apps/api
-apps/mobile
-ios
-packages
-scripts
-docs
-parcel-yatra-startup-pack
+
+/docs
+/parcel-yatra-startup-pack
