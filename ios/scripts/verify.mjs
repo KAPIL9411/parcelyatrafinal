@@ -93,6 +93,19 @@ check('the document does not flash white before the app paints', () => {
   assert(new RegExp(`background-color:${config.backgroundColor}`).test(html), 'no brand background on html/body/#root');
 });
 
+check('the shell fills the physical screen in a home-screen app', () => {
+  // iOS reports the standalone viewport as the screen minus the status-bar inset, so a 100%-tall
+  // shell stops short of the bottom and the body background shows as a band under the tab bar.
+  assert(/html\.py-standalone[^{]*\{[^}]*height:100vh[^}]*height:100lvh/.test(html), 'the standalone shell is still the short viewport');
+  assert(/display-mode: standalone/.test(html), 'a platform where standalone matches gets no fallback');
+  assert(/navigator\.standalone === true/.test(html), 'the standalone class is never set from navigator.standalone');
+  const bootstrap = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+    .map((m) => m[1])
+    .find((s) => s.includes('py-standalone'));
+  assert(bootstrap, 'no bootstrap sets the standalone class');
+  assert(/defineProperty\(w, 'innerHeight'/.test(bootstrap), 'innerHeight is left short, so safe-area insets double-count the status bar');
+});
+
 check('the launch screen shows the wordmark before React mounts', () => {
   const splash = /<div id="py-splash"[^>]*>\s*<img src="data:image\/png;base64,([A-Za-z0-9+/=]+)"/.exec(html);
   assert(splash, 'no inlined #py-splash wordmark — the PWA shows a blank blue screen until React mounts');

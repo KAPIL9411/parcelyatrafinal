@@ -314,6 +314,41 @@ function injectHead() {
       #py-splash[data-hidden="true"]{opacity:0;pointer-events:none}
       @media (prefers-reduced-motion: reduce){#py-splash{transition:none}}
     </style>`,
+    // A home-screen app on iOS reports its viewport as the screen minus the status-bar inset:
+    // `100%`, `100dvh` and `innerHeight` all stop one status bar short of the bottom edge, so
+    // the shell ends above the home indicator and the body background shows through as a band.
+    // `100vh`/`100lvh` is the real screen there. In a Safari tab those units reach behind the
+    // toolbars, which is why the override is scoped to standalone.
+    `<style>
+      html.py-standalone, html.py-standalone body, html.py-standalone #root{height:100vh;height:100lvh}
+      @media all and (display-mode: standalone){html,body,#root{height:100vh;height:100lvh}}
+    </style>`,
+    // Runs while the head is parsed, so the shell already has the right height before the first
+    // paint and before Metro's deferred bundle measures anything. iOS does not reliably match
+    // `(display-mode: standalone)` even when launched from the home screen, so the authoritative
+    // `navigator.standalone` flag sets the class the stylesheet needs.
+    `<script>
+      (function () {
+        var w = window;
+        var root = document.documentElement;
+        var standalone =
+          w.navigator.standalone === true ||
+          (w.matchMedia && w.matchMedia('(display-mode: standalone)').matches);
+        if (!standalone) return;
+        root.className += ' py-standalone';
+        // react-native-safe-area-context discounts the window insets against innerHeight. In
+        // this same mode innerHeight is the short value, so a shell that is 100lvh tall would
+        // have the status-bar inset added to every bottom inset a second time - the floating tab
+        // bar would ride a status bar too high. Report the shell's real height instead.
+        function shellHeight() { return Math.round(root.getBoundingClientRect().height); }
+        if (shellHeight() <= w.innerHeight + 1) return;
+        try {
+          Object.defineProperty(w, 'innerHeight', { configurable: true, get: shellHeight });
+        } catch (e) {
+          // Not overridable: the shell still fills the screen, only the insets stay one bar off.
+        }
+      })();
+    </script>`,
   ].join('\n    ');
 
   if (!html.includes('</head>')) fail('the exported index.html has no </head> to inject into.');
