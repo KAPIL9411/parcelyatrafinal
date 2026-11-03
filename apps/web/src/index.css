@@ -1,0 +1,271 @@
+@import "tailwindcss";
+
+/*
+ * Parcel Yatra web theme.
+ *
+ * A quiet editorial courier system: warm paper, ink-black structure and one high-contrast
+ * signal colour. The interface is intentionally confident, restrained and easy to scan.
+ *
+ * Contrast, computed from these values against --color-surface (#FFFFFF):
+ *   ink-900  15.9:1  AAA
+ *   ink-500   5.6:1  AA
+ *   brand-700 9.2:1  AAA   (used for link text)
+ *   brand-600 5.4:1  AA    (used for filled buttons with white text)
+ *   danger-600 6.4:1 AA
+ * Colour is never the only signal: every status also carries an icon and a word.
+ */
+@theme {
+  --font-sans:
+    "Titillium Web", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    sans-serif;
+
+  /* Parcel Yatra editorial palette */
+  --color-ink-900: #09152f;
+  --color-ink-700: #263653;
+  --color-ink-500: #68758b;
+  --color-ink-300: #a7b1c1;
+
+  --color-line: #e1e7ef;
+  --color-line-strong: #bdc8d8;
+  --color-surface: #FFFFFF;
+  --color-canvas: #f6f8fb;
+
+  /* Signal colour for actions and key moments */
+  --color-brand-50: #eef4ff;
+  --color-brand-100: #dce8ff;
+  --color-brand-200: #b6cbff;
+  --color-brand-500: #1456e8;
+  --color-brand-600: #0a43c2;
+  --color-brand-700: #08328f;
+  --color-brand-900: #071a3a;
+
+  --color-accent-500: #d8ff54;
+  --color-accent-600: #b4d936;
+  --color-violet-500: #8957e5;
+
+  /* Delivery status colors */
+  --color-success-600: #2DA44E;
+  --color-success-50: #DAFBE1;
+  --color-warn-600: #D29922;
+  --color-warn-50: #FFF8C5;
+  --color-danger-600: #DA3633;
+  --color-danger-50: #FFEBE6;
+  --color-info-600: #0969DA;
+  --color-info-50: #DDF4FF;
+
+  --radius-input: 8px;
+  --radius-card: 14px;
+  --radius-sheet: 22px;
+
+  --shadow-card: 0 10px 28px rgba(9, 21, 47, 0.07);
+  --shadow-bar: 0 -4px 22px rgba(9, 21, 47, 0.12);
+  --shadow-float: 0 24px 70px rgba(9, 21, 47, 0.22);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    /* Full-bleed hero breakouts use viewport units, which include the scrollbar in Chrome. */
+    overflow-x: clip;
+  }
+
+  body {
+    @apply bg-canvas text-ink-900 font-sans antialiased;
+    font-size: 16px;
+    line-height: 1.5;
+  }
+
+  body {
+    letter-spacing: -0.015em;
+    font-feature-settings: "kern" 1, "liga" 1;
+  }
+
+  /* Visible focus everywhere, and never removed without a replacement. */
+  :focus-visible {
+    outline: 2px solid var(--color-brand-600);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: var(--color-brand-100);
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+    letter-spacing: -0.035em;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* Money, timestamps and OTPs align column-wise. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Landing-page primitives */
+  .site-hero {
+    background-color: var(--color-canvas);
+    background-image:
+      radial-gradient(
+        42rem 30rem at 96% 0%,
+        #e7f7ae 0%,
+        transparent 64%
+      ),
+      radial-gradient(
+        28rem 20rem at 0% 100%,
+        #e4edff 0%,
+        transparent 68%
+      ),
+      linear-gradient(180deg, #fbfcff 0%, #f6f8fb 100%);
+  }
+
+  .hero-stage {
+    background:
+      radial-gradient(circle at 78% 28%, color-mix(in srgb, var(--color-brand-500) 80%, transparent) 0, transparent 28rem),
+      linear-gradient(135deg, #07112a 0%, #09152f 48%, #06102a 100%);
+  }
+
+  .hero-orbit {
+    transform: rotate(-18deg);
+  }
+
+  .hero-orbit-delay {
+    transform: rotate(24deg);
+  }
+
+  .hero-media img {
+    transition: transform 700ms cubic-bezier(0.22, 1, 0.36, 1), filter 700ms ease;
+  }
+
+  .hero-media:hover img {
+    transform: scale(1.035);
+    filter: saturate(1.08) contrast(1.04);
+  }
+
+  .hero-ticket {
+    animation: py-ticket-in 700ms 250ms both cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .hero-grid {
+    background-image: linear-gradient(to right, rgba(9, 21, 47, 0.08) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(9, 21, 47, 0.08) 1px, transparent 1px);
+    background-size: 34px 34px;
+    mask-image: linear-gradient(to bottom, black, transparent 82%);
+  }
+
+  .eyebrow {
+    letter-spacing: 0.14em;
+    font-size: 0.7rem;
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .display-title {
+    letter-spacing: -0.085em;
+    line-height: 0.9;
+  }
+
+  .route-line {
+    background-image: linear-gradient(90deg, var(--color-ink-900) 50%, transparent 50%);
+    background-size: 8px 1px;
+    background-repeat: repeat-x;
+  }
+
+  .paper-grid {
+    background-image: linear-gradient(to right, rgba(9, 21, 47, 0.06) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(9, 21, 47, 0.06) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+}
+
+/* The one looping animation in the system: a skeleton shimmer, disabled by reduced motion. It is
+   used for content that is still loading, never as decoration. */
+@keyframes py-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-line) 0%,
+    #f3f5f9 50%,
+    var(--color-line) 100%
+  );
+  background-size: 200% 100%;
+  animation: py-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes py-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.sheet-in {
+  animation: py-sheet-in 250ms ease-out;
+}
+
+@keyframes py-float {
+  0%, 100% { transform: translateY(0) rotate(1deg); }
+  50% { transform: translateY(-8px) rotate(-1deg); }
+}
+
+@keyframes py-ticket-in {
+  from { opacity: 0; transform: translateY(18px) rotate(-2deg); }
+  to { opacity: 1; transform: translateY(0) rotate(-2deg); }
+}
+
+.hero-float {
+  animation: py-float 5s ease-in-out infinite;
+}
+
+@keyframes py-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-4px);
+  }
+  75% {
+    transform: translateX(4px);
+  }
+}
+
+.shake {
+  animation: py-shake 180ms ease-in-out 2;
+}

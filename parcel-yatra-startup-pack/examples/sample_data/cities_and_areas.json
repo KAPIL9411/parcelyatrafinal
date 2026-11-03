@@ -1,0 +1,166 @@
+{
+  "_comment": "Pilot city and locality seed data. Synthetic. IDs are fixed UUIDs so fixtures are reproducible across environments. Localities are coarse areas only — never street addresses. Coordinate-free by design: PostGIS is deferred (ADR-004), matching uses city pair + area string, not distance.",
+  "_source": "Pilot corridors defined in docs/MVP_SCOPE_AND_NON_GOALS.md. Area names are illustrative placeholders for the seed set, not a survey of real localities.",
+  "formula_version": "seed-2026-10-24",
+  "cities": [
+    {
+      "id": "0c1a0000-0000-4000-8000-000000000001",
+      "name": "Bareilly",
+      "state": "Uttar Pradesh",
+      "slug": "bareilly",
+      "is_pilot_origin": true,
+      "active": true
+    },
+    {
+      "id": "0c1a0000-0000-4000-8000-000000000002",
+      "name": "Delhi",
+      "state": "Delhi",
+      "slug": "delhi",
+      "is_pilot_origin": false,
+      "active": true
+    },
+    {
+      "id": "0c1a0000-0000-4000-8000-000000000003",
+      "name": "Lucknow",
+      "state": "Uttar Pradesh",
+      "slug": "lucknow",
+      "is_pilot_origin": false,
+      "active": true
+    },
+    {
+      "id": "0c1a0000-0000-4000-8000-000000000004",
+      "name": "Noida",
+      "state": "Uttar Pradesh",
+      "slug": "noida",
+      "is_pilot_origin": false,
+      "active": true,
+      "_note": "Part of the Delhi NCR destination cluster. Listed separately so a sender can pick a specific NCR destination without inventing a free-text city."
+    },
+    {
+      "id": "0c1a0000-0000-4000-8000-000000000005",
+      "name": "Ghaziabad",
+      "state": "Uttar Pradesh",
+      "slug": "ghaziabad",
+      "is_pilot_origin": false,
+      "active": true,
+      "_note": "NCR cluster."
+    }
+  ],
+  "localities": [
+    {
+      "id": "0c2a0000-0000-4000-8000-000000000001",
+      "city_id": "0c1a0000-0000-4000-8000-000000000001",
+      "name": "Civil Lines",
+      "active": true
+    },
+    {
+      "id": "0c2a0000-0000-4000-8000-000000000002",
+      "city_id": "0c1a0000-0000-4000-8000-000000000001",
+      "name": "Rajendra Nagar",
+      "active": true
+    },
+    {
+      "id": "0c2a0000-0000-4000-8000-000000000003",
+      "city_id": "0c1a0000-0000-4000-8000-000000000001",
+      "name": "Izatnagar",
+      "active": true
+    },
+    {
+      "id": "0c2a0000-0000-4000-8000-000000000004",
+      "city_id": "0c1a0000-0000-4000-8000-000000000001",
+      "name": "Subhash Nagar",
+      "active": true
+    },
+    {
+      "id": "0c2a0000-0000-4000-8000-000000000005",
+      "city_id": "0c1a0000-0000-4000-8000-000000000002",
+      "name": "Karol Bagh",
+      "active": true
+    },
+    {
+      "id": "0c2a0000-0000-4000-8000-000000000006",
+      "city_id": "0c1a0000-0000-4000-8000-000000000002",
+      "name": "Lajpat Nagar",
+      "active": true
+    },
+    {
+      "id": "0c2a0000-0000-4000-8000-000000000007",
+      "city_id": "0c1a0000-0000-4000-8000-000000000002",
+      "name": "Dwarka",
+      "active": true
+    },
+    {
+      "id": "0c2a0000-0000-4000-8000-000000000008",
+      "city_id": "0c1a0000-0000-4000-8000-000000000003",
+      "name": "Hazratganj",
+      "active": true
+    },
+    {
+      "id": "0c2a0000-0000-4000-8000-000000000009",
+      "city_id": "0c1a0000-0000-4000-8000-000000000003",
+      "name": "Gomti Nagar",
+      "active": true
+    },
+    {
+      "id": "0c2a0000-0000-4000-8000-000000000010",
+      "city_id": "0c1a0000-0000-4000-8000-000000000004",
+      "name": "Sector 18",
+      "active": true
+    },
+    {
+      "id": "0c2a0000-0000-4000-8000-000000000011",
+      "city_id": "0c1a0000-0000-4000-8000-000000000004",
+      "name": "Sector 62",
+      "active": true
+    },
+    {
+      "id": "0c2a0000-0000-4000-8000-000000000012",
+      "city_id": "0c1a0000-0000-4000-8000-000000000005",
+      "name": "Indirapuram",
+      "active": true
+    }
+  ],
+  "corridors": [
+    {
+      "origin_city_id": "0c1a0000-0000-4000-8000-000000000001",
+      "dest_city_id": "0c1a0000-0000-4000-8000-000000000002",
+      "enabled": true,
+      "modes": ["car"]
+    },
+    {
+      "origin_city_id": "0c1a0000-0000-4000-8000-000000000002",
+      "dest_city_id": "0c1a0000-0000-4000-8000-000000000001",
+      "enabled": true,
+      "modes": ["car"]
+    },
+    {
+      "origin_city_id": "0c1a0000-0000-4000-8000-000000000001",
+      "dest_city_id": "0c1a0000-0000-4000-8000-000000000003",
+      "enabled": true,
+      "modes": ["car"]
+    },
+    {
+      "origin_city_id": "0c1a0000-0000-4000-8000-000000000003",
+      "dest_city_id": "0c1a0000-0000-4000-8000-000000000001",
+      "enabled": true,
+      "modes": ["car"]
+    },
+    {
+      "origin_city_id": "0c1a0000-0000-4000-8000-000000000001",
+      "dest_city_id": "0c1a0000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "modes": ["car"]
+    },
+    {
+      "origin_city_id": "0c1a0000-0000-4000-8000-000000000001",
+      "dest_city_id": "0c1a0000-0000-4000-8000-000000000005",
+      "enabled": true,
+      "modes": ["car"]
+    }
+  ],
+  "notes": [
+    "Noida and Ghaziabad are NCR-cluster destinations, not a separate corridor concept.",
+    "No coordinate data is stored. Distance bands come from a static corridor table, not from geocoding.",
+    "Modes other than car are absent, not disabled-and-visible. The UI must not imply they are coming."
+  ]
+}

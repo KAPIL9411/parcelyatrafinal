@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+apps/web/dist/
+
+# Cloudflare Workers: local dev state and dry-run bundle
+.wrangler/
+apps/api/dist-worker/
+
+# Local database (PGlite data directory) and uploads
+data/
+apps/api/data/
+
+# Environment: never commit a filled-in copy
+.env
+.env.local
+.env.*.local
+.env.production
+.env.cloudflare
+
+# Logs and editor noise
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Smoke-test token cache (local only)
+.smoke-tokens.json
+
+# OpenCode session-local attachments and metadata
+.opencode/
+
+# Emulator UI run artefacts (screenshots, dumps)
+.e2e-shots/

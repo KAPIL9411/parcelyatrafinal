@@ -1,0 +1,15 @@
+{
+  "name": "@py/ios-pwa",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Parcel Yatra for iPhone — an installable Progressive Web App built from apps/mobile",
+  "scripts": {
+    "dev": "node scripts/build.mjs --dev-server",
+    "build": "node scripts/build.mjs",
+    "verify": "node scripts/verify.mjs",
+    "serve": "node scripts/serve.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
