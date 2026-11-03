@@ -13,6 +13,7 @@
  */
 
 import http from 'node:http';
+import https from 'node:https';
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -68,6 +69,10 @@ function cacheHeaders(pathname) {
  * stripped, because no browser sends a Secure cookie to http://localhost:8080 and the whole point is to
  * test the cookie path.
  */
+function upstreamTransport(target) {
+  return target.startsWith('https://') ? https : http;
+}
+
 function proxyTo(target, req, res) {
   const upstream = new URL(req.url, target);
   const headers = { ...req.headers };
@@ -75,7 +80,7 @@ function proxyTo(target, req, res) {
   delete headers.connection;
   if (target.startsWith('https://')) delete headers['accept-encoding'];
 
-  const upstreamRequest = http.request(
+  const upstreamRequest = upstreamTransport(target).request(
     upstream,
     {
       method: req.method,
@@ -170,7 +175,12 @@ export function startServer({ dist = DEFAULT_DIST, api = process.env.PY_PROXY_AP
   if (api) {
     server.on('upgrade', (req, clientSocket) => {
       const upstream = new URL(req.url, api);
-      const target = http.request({ hostname: upstream.hostname, port: upstream.port || 80, path: upstream.pathname + upstream.search, headers: { ...req.headers, host: upstream.host } });
+      const target = upstreamTransport(api).request({
+        hostname: upstream.hostname,
+        port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80),
+        path: upstream.pathname + upstream.search,
+        headers: { ...req.headers, host: upstream.host },
+      });
       target.on('upgrade', (response, upstreamSocket) => {
         clientSocket.write(
           `HTTP/1.1 101 Switching Protocols\r\nUpgrade: ${response.headers.upgrade}\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${response.headers['sec-websocket-accept'] || ''}\r\n\r\n`,

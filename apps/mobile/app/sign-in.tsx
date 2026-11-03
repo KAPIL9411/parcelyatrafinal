@@ -334,6 +334,7 @@ export default function SignInScreen() {
                   {GOOGLE_PLATFORM_CLIENT_ID ? (
                     <GoogleSignInButton
                       busy={busy === 'google'}
+                      next={typeof next === 'string' ? next : undefined}
                       onToken={google}
                       onError={setError}
                     />

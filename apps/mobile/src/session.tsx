@@ -15,6 +15,7 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import {
   bootstrapSession,
+  completeGoogleCallback as apiGoogleCallback,
   me,
   requestOtp,
   signInWithGoogle as apiGoogleSignIn,
@@ -44,6 +45,7 @@ interface SessionValue {
   sendOtp: (phone: string) => Promise<OtpChallenge & { phone_masked: string }>;
   verifyOtp: (challengeId: string, code: string) => Promise<AuthResponse>;
   googleSignIn: (idToken: string) => Promise<AuthResponse>;
+  googleCallback: (code: string, state: string, binding?: string | null) => Promise<AuthResponse>;
   refreshProfile: () => Promise<Profile | null>;
   signOut: (everywhere?: boolean) => Promise<void>;
 }
@@ -175,6 +177,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [adopter],
   );
 
+  const googleCallback = useCallback(
+    async (code: string, state: string, binding?: string | null) =>
+      adopter(await apiGoogleCallback(code, state, binding)),
+    [adopter],
+  );
+
   const refreshProfile = useCallback(async () => {
     try {
       const profile = await me();
@@ -207,8 +215,28 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<SessionValue>(
-    () => ({ status, user, offline, sendOtp, verifyOtp, googleSignIn, refreshProfile, signOut }),
-    [status, user, offline, sendOtp, verifyOtp, googleSignIn, refreshProfile, signOut],
+    () => ({
+      status,
+      user,
+      offline,
+      sendOtp,
+      verifyOtp,
+      googleSignIn,
+      googleCallback,
+      refreshProfile,
+      signOut,
+    }),
+    [
+      status,
+      user,
+      offline,
+      sendOtp,
+      verifyOtp,
+      googleSignIn,
+      googleCallback,
+      refreshProfile,
+      signOut,
+    ],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

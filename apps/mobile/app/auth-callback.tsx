@@ -1,18 +1,29 @@
 /**
- * Google OAuth callback handler for web.
- * 
- * After Google redirects back with a code, this page:
- * 1. Extracts the code from URL
- * 2. POSTs to backend /auth/google/callback with the code
- * 3. Backend sets session cookie
- * 4. Redirects to home screen
+ * Google OAuth callback handler for the web/PWA build.
+ *
+ * Google redirects here with `?code=…&state=…`. This screen exchanges the code for a Parcel Yatra
+ * session, then continues to the screen the user originally asked for.
+ *
+ * It is a full page — not a popup — because iOS Safari blocks popups, and an installed PWA's
+ * popup has separate storage, so neither the handshake binding nor the session would survive.
  */
 
-import { useEffect, useState } from 'react';
-import { View, ActivityIndicator } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
-import { AppText } from '../src/components/ui';
-import { colors } from '../src/theme';
+
+import { ApiError } from '../src/api/http.ts';
+import { AppText, Button, Screen } from '../src/components/ui.tsx';
+import {
+  OAUTH_BINDING_KEY,
+  OAUTH_NEXT_KEY,
+  readOAuthValue,
+  safeOAuthNext,
+  writeOAuthValue,
+} from '../src/lib/google.ts';
+import { useSession } from '../src/session.tsx';
+import { needsProfileSetup } from '../src/lib/profile-setup.ts';
+import { colors, spacing } from '../src/theme.ts';
 
 export default function AuthCallbackScreen() {
   const { code, state, error, error_description } = useLocalSearchParams<{
@@ -21,90 +32,96 @@ export default function AuthCallbackScreen() {
     error?: string;
     error_description?: string;
   }>();
-  const [processing, setProcessing] = useState(true);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const { googleCallback } = useSession();
+
+  // A response Google itself rejected, or one with no code/state, is known before the effect runs.
+  // Keeping it in initial state means the effect never has to set state synchronously.
+  const paramError: string | null = error
+    ? error === 'access_denied'
+      ? 'Sign-in was cancelled.'
+      : error_description || String(error)
+    : !code || !state
+      ? 'The sign-in response was incomplete. Please try again.'
+      : null;
+  const [errorMsg, setErrorMsg] = useState<string | null>(paramError);
+
+  // React StrictMode runs effects twice in development; an authorization code is single-use, so a
+  // second POST would always fail and replace a successful sign-in with an error.
+  const started = useRef(false);
 
   useEffect(() => {
-    const handleCallback = async () => {
-      // Handle error response from Google
-      if (error) {
-        setErrorMsg(error_description || error);
-        setProcessing(false);
-        // Redirect to sign-in after 2 seconds
-        setTimeout(() => router.replace('/sign-in'), 2000);
-        return;
-      }
+    if (started.current) return;
+    started.current = true;
 
-      // Validate we have the authorization code
-      if (!code) {
-        setErrorMsg('No authorization code received from Google');
-        setProcessing(false);
-        setTimeout(() => router.replace('/sign-in'), 2000);
-        return;
-      }
+    const storedNext = readOAuthValue(OAUTH_NEXT_KEY);
+    const binding = readOAuthValue(OAUTH_BINDING_KEY);
+    writeOAuthValue(OAUTH_NEXT_KEY, null);
+    writeOAuthValue(OAUTH_BINDING_KEY, null);
 
-      try {
-        // POST the code to backend /auth/google/callback
-        // Note: Must use full URL since it's cross-origin
-        const apiBase = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://parcel-yatra-api.parcelyatra.workers.dev/v1';
-        const response = await fetch(`${apiBase}/auth/google/callback`, {
-          method: 'POST',
-          credentials: 'include', // Send/receive cookies
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            code,
-            state,
-            // binding will be read from cookie by backend if available
-          }),
-        });
+    if (paramError || !code || !state) return;
 
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(
-            errorData.error?.message || errorData.message || `Backend returned ${response.status}`
-          );
+    void googleCallback(code, state, binding)
+      .then((session) => {
+        const target = safeOAuthNext(storedNext);
+        if (needsProfileSetup(session.user)) {
+          router.replace({ pathname: '/setup-profile', params: { next: target } });
+        } else {
+          router.replace(target);
         }
-
-        // Callback succeeded - backend set session cookie
-        // Redirect to home, which will boot the session
-        router.replace('/(tabs)');
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Unknown error processing OAuth callback';
-        console.error('[OAuth Callback]', msg);
-        setErrorMsg(msg);
-        setProcessing(false);
-        // Redirect to sign-in after 2 seconds
-        setTimeout(() => router.replace('/sign-in'), 2000);
-      }
-    };
-
-    void handleCallback();
-  }, [code, state, error, error_description]);
-
-  if (processing && !errorMsg) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' }}>
-        <ActivityIndicator size="large" color={colors.brand} />
-        <AppText style={{ marginTop: 16, textAlign: 'center' }}>Signing you in...</AppText>
-      </View>
-    );
-  }
+      })
+      .catch((err: unknown) => {
+        setErrorMsg(
+          err instanceof ApiError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : 'Google sign-in did not complete.',
+        );
+      });
+  }, [code, state, paramError, googleCallback]);
 
   if (errorMsg) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff', padding: 16 }}>
-        <AppText style={{ color: colors.warn, textAlign: 'center', marginBottom: 8 }}>
-          Sign-in error
-        </AppText>
-        <AppText style={{ textAlign: 'center', color: '#666' }}>
-          {errorMsg}
-        </AppText>
-        <AppText style={{ marginTop: 16, color: '#999', fontSize: 12, textAlign: 'center' }}>
-          Redirecting...
-        </AppText>
-      </View>
+      <Screen scroll={false}>
+        <View style={styles.center}>
+          <AppText variant="heading" style={styles.title}>
+            Sign-in failed
+          </AppText>
+          <AppText tone="muted" style={styles.body}>
+            {errorMsg}
+          </AppText>
+          <Button label="Back to sign in" onPress={() => router.replace('/sign-in')} style={styles.button} />
+        </View>
+      </Screen>
     );
   }
 
-  return null;
+  return (
+    <Screen scroll={false}>
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={colors.brand} />
+        <AppText style={styles.body}>Signing you in…</AppText>
+      </View>
+    </Screen>
+  );
 }
+
+const styles = StyleSheet.create({
+  center: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.xl,
+  },
+  title: {
+    textAlign: 'center',
+  },
+  body: {
+    marginTop: spacing.md,
+    textAlign: 'center',
+  },
+  button: {
+    marginTop: spacing.lg,
+    alignSelf: 'stretch',
+  },
+});

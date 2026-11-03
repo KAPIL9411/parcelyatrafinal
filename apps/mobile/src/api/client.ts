@@ -264,6 +264,37 @@ export async function signInWithGoogle(idToken: string): Promise<AuthResponse> {
 }
 
 /**
+ * The browser/PWA half of Google sign-in: exchange the one-time code Google put on
+ * `/auth-callback` for a session.
+ *
+ * The API verifies the sealed `state` (PKCE verifier + nonce), checks the `binding` the browser
+ * kept while Google was away, and answers with an access token and the HttpOnly refresh cookie.
+ * This is the same session the native app gets from `POST /auth/google/token`; only the way the
+ * identity is obtained differs.
+ */
+export async function completeGoogleCallback(
+  code: string,
+  state: string,
+  binding?: string | null,
+): Promise<AuthResponse> {
+  const session = await http.post<AuthResponse>(
+    '/auth/google/callback',
+    {
+      code,
+      state,
+      ...(binding ? { binding } : {}),
+      device_id: await deviceId(),
+    },
+    { auth: false, headers: clientMarkerHeaders },
+  );
+  if (refreshTokenMustBeInBody && !session.refresh_token) {
+    accessToken = session.access_token;
+    throw new ApiError('SESSION_NOT_TRANSPORTED', 'The server did not issue a renewable session.', 500);
+  }
+  return adopt(session);
+}
+
+/**
  * Restore a stored session at launch. `offline` is deliberately distinct from `signed_out`: a
  * revoked token and an unreachable server must not both send the user back to the sign-in screen.
  */

@@ -1,16 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Animated,
-  Easing,
-  Image,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-  useWindowDimensions,
-  AppState,
-} from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { AppState, Pressable, Text, View } from 'react-native';
 import { Stack, usePathname, useRouter, type ErrorBoundaryProps } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
@@ -136,41 +125,33 @@ function Shell() {
   const { status } = useSession();
   const router = useRouter();
   const pathname = usePathname();
-  const [initialNavigationDone, setInitialNavigationDone] = useState(false);
 
-  // Perform initial navigation once when session is ready
+  // The boot redirect is a one-shot decision. Keeping it in a ref (rather than state) means the
+  // effect never sets state synchronously, and an in-app sign-in that has its own destination is
+  // not raced by a second redirect to the home tab.
+  const bootRedirected = useRef(false);
+
+  // Routes reachable without a session. The Google callback must be one of them: it arrives
+  // signed out and only becomes signed in after exchanging the code, so redirecting it to
+  // /sign-in would throw the one-time code away before it was used.
+  const isPublicRoute =
+    pathname === '/sign-in' ||
+    pathname === '/auth-callback' ||
+    pathname.startsWith('/info/') ||
+    pathname === '/help';
+
   useEffect(() => {
-    if (status === 'booting') return;
-    if (initialNavigationDone) return;
+    if (status === 'booting' || bootRedirected.current) return;
+    bootRedirected.current = true;
 
-    setInitialNavigationDone(true);
-
-    // Check if current route is public (accessible without login)
-    const isPublicRoute = 
-      pathname === '/sign-in' || 
-      pathname.startsWith('/info/') || 
-      pathname === '/help';
-
-    if (status === 'signed_out') {
-      // User is signed out - always redirect to sign-in unless already there
-      if (!isPublicRoute) {
-        router.replace('/sign-in');
-      }
-    } else if (status === 'signed_in') {
-      // User is signed in - if on sign-in page, redirect to home
-      if (pathname === '/sign-in') {
-        router.replace('/(tabs)');
-      }
+    if (status === 'signed_out' && !isPublicRoute) {
+      router.replace('/sign-in');
+    } else if (status === 'signed_in' && pathname === '/sign-in') {
+      router.replace('/(tabs)');
     }
-  }, [status, pathname, initialNavigationDone, router]);
+  }, [status, isPublicRoute, pathname, router]);
 
-  // Only block rendering while booting
   if (status === 'booting') {
-    return null;
-  }
-
-  // Block one frame after boot to prevent flash
-  if (!initialNavigationDone) {
     return null;
   }
 
@@ -189,6 +170,7 @@ function Shell() {
       >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="sign-in" options={{ headerShown: false }} />
+        <Stack.Screen name="auth-callback" options={{ headerShown: false }} />
         <Stack.Screen name="setup-profile" options={{ headerShown: false }} />
         <Stack.Screen name="send" options={{ title: 'Send a parcel' }} />
         <Stack.Screen name="parcels/[id]" options={{ title: 'Parcel' }} />
