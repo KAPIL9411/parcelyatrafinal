@@ -1,13 +1,15 @@
 /**
  * The one place the public Android download link lives.
  *
- * Paste the public EAS artifact / Drive / hosted APK URL here. While this is empty every download
- * control on the site shows an honest "soon" state instead of a dead link — the app is the product,
- * so a broken store link would be the worst possible first impression.
+ * The APK is served from the web app's public assets so every download control uses the same
+ * first-party file and works without an external store or redirect.
  */
-const CONFIGURED_URL = '';
+const CONFIGURED_URL = '/ParcelYatra.apk';
 
-/** Only HTTPS destinations are accepted; anything else is treated as not configured yet. */
-export const APP_DOWNLOAD_URL = CONFIGURED_URL.startsWith('https://') ? CONFIGURED_URL : '';
+/** Only a first-party path or HTTPS destination is accepted. */
+export const APP_DOWNLOAD_URL =
+  CONFIGURED_URL.startsWith('/') || CONFIGURED_URL.startsWith('https://')
+    ? CONFIGURED_URL
+    : '';
 
 export const APP_DOWNLOAD_READY = APP_DOWNLOAD_URL.length > 0;

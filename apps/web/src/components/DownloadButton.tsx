@@ -41,8 +41,7 @@ export function DownloadButton({
     return (
       <a
         href={APP_DOWNLOAD_URL}
-        target="_blank"
-        rel="noopener noreferrer"
+        download="ParcelYatra.apk"
         className={cn(base, TONE[tone])}
       >
         <DownloadIcon size={18} />
