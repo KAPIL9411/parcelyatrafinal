@@ -76,15 +76,15 @@ export function Landing() {
 
           <div className="relative min-h-[460px] sm:min-h-[590px]">
             <div className="paper-grid absolute -right-5 -top-5 h-40 w-40 opacity-60 sm:-right-12 sm:-top-10" />
-            <div className="absolute inset-0 overflow-hidden rounded-[4px] bg-ink-900 shadow-float">
-              <img src="/hero-background.webp" alt="A delivery route across India" className="h-full w-full object-cover opacity-85 mix-blend-screen" />
-              <div className="absolute inset-0 bg-ink-900/35" />
-              <div className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-ink-900/90 to-transparent" />
+            <div className="absolute inset-0 overflow-hidden rounded-[4px] bg-[#050b1d] shadow-float ring-1 ring-ink-900/10">
+              <img src="/delivery-scooter.webp" alt="Parcel Yatra delivery scooter with branded delivery bag" className="h-full w-full object-cover object-center" />
+              <div className="absolute inset-0 bg-gradient-to-t from-[#050b1d]/95 via-[#050b1d]/10 to-transparent" />
+              <div className="absolute left-5 top-5 flex items-center gap-2 bg-accent-500 px-3 py-2 text-[10px] font-black tracking-[0.12em] text-ink-900 uppercase sm:left-7 sm:top-7"><span className="h-1.5 w-1.5 rounded-full bg-ink-900" /> Built for the journey</div>
               <div className="absolute bottom-7 left-7 right-7 text-white sm:bottom-10 sm:left-10 sm:right-10">
                 <p className="eyebrow text-white/60">One open seat</p>
                 <div className="mt-3 flex items-end justify-between gap-4"><p className="text-3xl font-black tracking-[-0.06em] sm:text-5xl">Bareilly<br /><span className="text-accent-500">→ Delhi NCR</span></p><span className="mb-1 grid h-12 w-12 shrink-0 place-items-center rounded-full bg-accent-500 text-ink-900"><ArrowRightIcon size={22} /></span></div>
                 <div className="route-line mt-8 h-px opacity-60" />
-                <p className="mt-3 text-xs font-semibold text-white/60">Next departure · tomorrow · 08:30</p>
+                <div className="mt-3 flex items-center justify-between gap-4 text-xs font-semibold text-white/60"><span>Next departure · tomorrow · 08:30</span><span className="text-accent-500">from ₹45</span></div>
               </div>
             </div>
             <div className="absolute -bottom-8 -left-4 w-56 border border-line bg-surface p-5 shadow-float sm:-left-8 sm:w-64">
