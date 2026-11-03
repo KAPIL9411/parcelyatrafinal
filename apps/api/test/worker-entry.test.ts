@@ -68,6 +68,27 @@ test('an authenticated route is refused without a token', async () => {
   assert.equal(body.error.code, 'AUTH_REQUIRED');
 });
 
+test('a bodyless POST is not rejected for having no content-type', async () => {
+  // Browsers send `content-length: 0` on POST /parcels/:id/quote even though no body is sent.
+  const res = await call('/v1/parcels/00000000-0000-0000-0000-000000000000/quote', {
+    method: 'POST',
+    headers: { 'content-length': '0' },
+  });
+  assert.equal(res.status, 401, 'the body parser must let an empty POST reach auth');
+  const body = (await res.json()) as { error: { code: string } };
+  assert.equal(body.error.code, 'AUTH_REQUIRED');
+});
+
+test('a POST with bytes but no content-type is still a media-type error', async () => {
+  const res = await call('/v1/parcels/00000000-0000-0000-0000-000000000000/quote', {
+    method: 'POST',
+    // A Uint8Array body leaves undici from adding its own text/plain content-type.
+    body: new Uint8Array([123, 125]),
+    headers: { 'content-length': '2' },
+  });
+  assert.equal(res.status, 415);
+});
+
 test('a CORS preflight is answered before routing', async () => {
   const res = await call('/v1/me', {
     method: 'OPTIONS',

@@ -616,11 +616,14 @@ export class CompatApp {
     const declaredLength = raw.headers.get('content-length');
 
     // No declared type and no declared body: nothing to parse. Clients only set content-type when
-    // they send a body.
+    // they send a body - but browsers still send `content-length: 0` for a bodyless POST, and that
+    // is not a body. A positive or unparseable length, or chunked encoding, is.
     if (!contentType) {
-      if (declaredLength !== null || raw.headers.has('transfer-encoding')) {
-        throw httpError(415, 'a request body needs a content-type');
-      }
+      const declared = declaredLength === null ? null : Number(declaredLength);
+      const hasBody =
+        (declared !== null && (!Number.isFinite(declared) || declared > 0)) ||
+        raw.headers.has('transfer-encoding');
+      if (hasBody) throw httpError(415, 'a request body needs a content-type');
       return;
     }
 
