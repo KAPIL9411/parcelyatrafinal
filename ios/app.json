@@ -78,6 +78,6 @@
       "A value starting with '/' is same-origin: recommended, because the HttpOnly session cookie is",
       "then first-party and survives iOS Safari's tracking prevention. See README.md section 5."
     ],
-    "defaultBaseUrl": "https://parcelyatrafinal.onrender.com/v1"
+    "defaultBaseUrl": "/v1"
   }
 }
